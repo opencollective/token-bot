@@ -1,0 +1,30 @@
+{
+  "tasks": {
+    "dryrun": "ENV=dryrun PORT=8081 deno run --env-file=.env --allow-read=./chains.json --allow-net=api.monerium.app,discord.com,gateway.discord.gg,gateway-us-east1-a.discord.gg,gateway-us-east1-b.discord.gg,gateway-us-east1-c.discord.gg,gateway-us-east1-d.discord.gg,gateway-us-east1-e.discord.gg,0.0.0.0 --no-prompt --allow-env  src/main.ts",
+    "verify-channel": "deno run --env-file=.env --allow-read=./cache --allow-write=./cache --allow-write=./missing-txs.json --allow-net --no-prompt --allow-env  src/commands/verify-channel.ts",
+    "cron": "deno run --env-file=.env --allow-read=./cache --allow-write=./cache --allow-net --no-prompt --allow-env  src/commands/cron.ts",
+    "process-missing-txs": "deno run --env-file=.env --allow-read=./missing-txs.json --allow-write=./missing-txs.json --allow-net --no-prompt --allow-env  src/commands/process-missing-txs.ts",
+    "hh:node": "cd hardhat && npx hardhat node",
+    "hh:deploy": "deno run --allow-run --cwd=hardhat npm:hardhat run scripts/deploy.ts --network localhost",
+    "test:mint": "deno test --allow-run --allow-net --allow-env --env-file=.env.test --allow-read --allow-write tests/lib.blockchain.mint.test.ts",
+    "test:cron": "deno test --allow-read --allow-write --allow-net --allow-env --env-file=.env.test tests/cron.test.ts",
+    "start": "deno run --env-file=.env --allow-read=./chains.json --allow-net=api.monerium.app,discord.com,gateway.discord.gg,gateway-us-east1-a.discord.gg,gateway-us-east1-b.discord.gg,gateway-us-east1-c.discord.gg,gateway-us-east1-d.discord.gg,gateway-us-east1-e.discord.gg,0.0.0.0 --no-prompt --allow-env  src/main.ts"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "useTabs": false,
+    "semiColons": true,
+    "singleQuote": false
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1",
+    "@std/path": "jsr:@std/path@^1.1.2",
+    "@wevm/viem": "jsr:@wevm/viem@^2.37.4",
+    "discord.js": "npm:discord.js@^14.22.1",
+    "@std/expect/expect": "jsr:@std/expect@1/expect",
+    "@std/testing/bdd": "jsr:@std/testing@1/bdd",
+    "ethers": "npm:ethers@^6.13.5",
+    "nostr-tools": "npm:nostr-tools@^2.11.0"
+  }
+}

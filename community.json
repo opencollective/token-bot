@@ -1,0 +1,84 @@
+{
+  "community": {
+    "name": "Commons Hub Brussels",
+    "description": "Community Token for the Commons Hub Brussels community",
+    "url": "https://commonshub.brussels",
+    "alias": "wallet.commonshub.brussels",
+    "custom_domain": "wallet.commonshub.brussels",
+    "logo": "https://wallet.commonshub.brussels/uploads/logo.svg",
+    "theme": {
+      "primary": "#ff4c02"
+    },
+    "profile": {
+      "address": "0xc06bE1BbbeEAF2f34F3d5b76069D2560aee184Ae",
+      "chain_id": 42220
+    },
+    "primary_token": {
+      "address": "0x65DD32834927de9E57E72a3E2130a19f81C6371D",
+      "chain_id": 42220,
+      "decimals": 6,
+      "symbol": "CHT"
+    },
+    "primary_account_factory": {
+      "address": "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2",
+      "chain_id": 42220
+    },
+    "primary_card_manager": {
+      "address": "0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28",
+      "chain_id": 42220
+    }
+  },
+  "tokens": {
+    "42220:0x65DD32834927de9E57E72a3E2130a19f81C6371D": {
+      "standard": "erc20",
+      "name": "Commons Hub Token",
+      "address": "0x65DD32834927de9E57E72a3E2130a19f81C6371D",
+      "symbol": "CHT",
+      "decimals": 6,
+      "chain_id": 42220
+    }
+  },
+  "scan": {
+    "url": "https://celoscan.io",
+    "name": "CELO Explorer"
+  },
+  "accounts": {
+    "42220:0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2": {
+      "chain_id": 42220,
+      "entrypoint_address": "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6",
+      "paymaster_address": "0xe5Eb4fB0F3312649Eb7b62fba66C9E26579D7208",
+      "account_factory_address": "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2",
+      "paymaster_type": "cw-safe"
+    }
+  },
+  "cards": {
+    "42220:0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28": {
+      "chain_id": 42220,
+      "instance_id": "cw-discord-1",
+      "address": "0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28",
+      "type": "safe"
+    }
+  },
+  "chains": {
+    "42220": {
+      "id": 42220,
+      "node": {
+        "url": "https://42220.engine.citizenwallet.xyz",
+        "ws_url": "wss://42220.engine.citizenwallet.xyz"
+      }
+    }
+  },
+  "ipfs": {
+    "url": "https://ipfs.internal.citizenwallet.xyz"
+  },
+  "plugins": [
+    {
+      "name": "Market",
+      "icon": "https://marketplace.citizenwallet.xyz/marketplace.svg",
+      "url": "https://marketplace.citizenwallet.xyz/wallet.commonshub.brussels",
+      "launch_mode": "webview"
+    }
+  ],
+  "config_location": "https://config.internal.citizenwallet.xyz/v4/wallet.commonshub.brussels.json",
+  "version": 4
+}
