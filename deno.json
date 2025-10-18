@@ -3,6 +3,7 @@
     "dryrun": "ENV=dryrun PORT=8081 deno run --env-file=.env --allow-read=./chains.json --allow-net=api.monerium.app,discord.com,gateway.discord.gg,gateway-us-east1-a.discord.gg,gateway-us-east1-b.discord.gg,gateway-us-east1-c.discord.gg,gateway-us-east1-d.discord.gg,gateway-us-east1-e.discord.gg,0.0.0.0 --no-prompt --allow-env  src/main.ts",
     "verify-channel": "deno run --env-file=.env --allow-read=./cache --allow-write=./cache --allow-write=./missing-txs.json --allow-net --no-prompt --allow-env  src/commands/verify-channel.ts",
     "cron": "deno run --env-file=.env --allow-read=./cache --allow-write=./cache --allow-net --no-prompt --allow-env  src/commands/cron.ts",
+    "reminder": "deno run --env-file=.env --allow-read=./cache --allow-write=./cache --allow-net --no-prompt --allow-env  src/commands/reminder.ts",
     "process-missing-txs": "deno run --env-file=.env --allow-read=./missing-txs.json --allow-write=./missing-txs.json --allow-net --no-prompt --allow-env  src/commands/process-missing-txs.ts",
     "hh:node": "cd hardhat && npx hardhat node",
     "hh:deploy": "deno run --allow-run --cwd=hardhat npm:hardhat run scripts/deploy.ts --network localhost",

@@ -1,10 +1,4 @@
-import {
-  EventTemplate,
-  SimplePool,
-  finalizeEvent,
-  getPublicKey,
-  nip19,
-} from "npm:nostr-tools";
+import { EventTemplate, finalizeEvent, getPublicKey, nip19, SimplePool } from "npm:nostr-tools";
 import { getEnv } from "./utils.ts";
 
 const DRY_RUN = getEnv("DRY_RUN") === "true";
@@ -78,7 +72,7 @@ export class Nostr {
 
   private constructor(
     private readonly nsec?: string,
-    readonly relays?: string[]
+    readonly relays?: string[],
   ) {
     this.nsec = nsec || process.env.NOSTR_NSEC;
     this.relays = relays || [
@@ -105,7 +99,7 @@ export class Nostr {
   static getInstance(nsec?: string, relays?: string[]): Nostr {
     if (!nsec && !Deno.env.get("NOSTR_NSEC")) {
       throw new Error(
-        "Nostr: No nsec provided to Nostr.getInstance() or as an environment variable"
+        "Nostr: No nsec provided to Nostr.getInstance() or as an environment variable",
       );
     }
     if (!Nostr.instance) {
@@ -129,11 +123,10 @@ export class Nostr {
 
   async publishMetadata(
     uri: URI,
-    { content, tags }: { content: string; tags: string[][] }
+    { content, tags }: { content: string; tags: string[][] },
   ) {
     if (tags.length === 0) {
-      const { tags: tagsFromContent, cleanDescription } =
-        extractHashtags(content);
+      const { tags: tagsFromContent, cleanDescription } = extractHashtags(content);
       content = cleanDescription;
       tags = tagsFromContent;
     }
@@ -157,7 +150,7 @@ export class Nostr {
 
     // if env is test, just log the event
     if (DRY_RUN) {
-      console.log(">>> DRY RUN: Nostr publish:", event);
+      console.log(">>> DRY RUN: Nostr publish:", event.content);
       return;
     }
 

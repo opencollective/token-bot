@@ -21,9 +21,9 @@ import { Nostr, URI } from "../lib/nostr.ts";
 
 const IGNORE_USERS: string[] = [];
 
-const ONLY_USERS: string[] = [];
+const ONLY_USERS: string[] = ["Margherita"];
 const ONLY_ROLES: string[] = [];
-const IGNORE_ROLES: string[] = [];
+const IGNORE_ROLES: string[] = ["1414581689581310052"];
 
 const LIMIT = Number(Deno.env.get("LIMIT")) || null;
 const DRY_RUN = Deno.env.get("DRY_RUN") === "true";
@@ -67,6 +67,19 @@ const main = async () => {
     ),
   );
 
+  const since = new Date();
+  since.setDate(since.getDate() - 8);
+  const activeUsers = await discord.getActiveUsers(
+    Deno.env.get("DISCORD_CONTRIBUTIONS_CHANNEL_ID") as string,
+    since,
+  );
+  console.log(
+    `>>> ${activeUsers.length} active members`,
+    activeUsers.map((member) => member.globalName || member.displayName),
+  );
+
+  const activeUserIds = activeUsers.map((member) => member.id);
+
   for (const role of roles) {
     if (IGNORE_ROLES.includes(role.id)) {
       console.log(`Ignoring role ${role.name}`);
@@ -81,7 +94,7 @@ const main = async () => {
     if (users.length === 0) {
       if (role.mintAmount) {
         const rolesToNotify = roles.filter((r) => r.notifications?.includes("vacancies"));
-        if (rolesToNotify.length > 0) {
+        if (rolesToNotify.length > 0 && ONLY_USERS.length === 0) {
           const rolesMentions = rolesToNotify.map((r) => `<@&${r.id}>`).join(", ");
           await discord.postToDiscordChannel(
             `Nobody has the ${role.name} role (${role.mintAmount} ${community.primary_token.symbol} ${role.frequency}), ${rolesMentions} anyone who wants to take it?`,
@@ -162,6 +175,17 @@ const main = async () => {
         discordMessage =
           `Burned ${role.burnAmount.toString()} CHT for <@${user.user.id}> for ${role.name} role ([tx](<${communityJSON.scan.url}/tx/${hash}>)), new balance: ${newBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
       } else if (role.mintAmount) {
+        if (!activeUserIds.includes(user.id)) {
+          console.log(
+            `>>> ${role.name}: user ${user.displayName} hasn't posted a contribution, skipping`,
+          );
+          const message =
+            `${role.frequency} issuance of ${role.mintAmount} ${community.primary_token.symbol} for ${role.name} role: <@${user.user.id}> hasn't posted an update in the <#${
+              Deno.env.get("DISCORD_CONTRIBUTIONS_CHANNEL_ID")
+            }> channel, skipping`;
+          await discord.postToDiscordChannel(message);
+          continue;
+        }
         console.log(`>>> ${role.name}: minting ${role.mintAmount} tokens for ${user.displayName}`);
         hash = await mintTokens(
           "celo",

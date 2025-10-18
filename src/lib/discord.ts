@@ -6,6 +6,7 @@ import {
   Message,
   PermissionsBitField,
   TextChannel,
+  User,
 } from "discord.js";
 
 export type DiscordRoleSettings = {
@@ -60,7 +61,7 @@ export class Discord {
 
     const discordBotToken = Deno.env.get("DISCORD_BOT_TOKEN");
     const guildId = Deno.env.get("DISCORD_GUILD_ID") || undefined;
-    const channelId = Deno.env.get("DISCORD_CHANNEL_ID") || undefined;
+    const channelId = Deno.env.get("DISCORD_TRANSACTIONS_CHANNEL_ID") || undefined;
 
     // If no discordBotToken, consider it disabled (return null) to avoid side effects in test/dev
     if (!discordBotToken) return null;
@@ -138,7 +139,7 @@ export class Discord {
     if (!this.client) return;
 
     const id = channelId || this.defaultChannelId;
-    if (!id) throw new Error("DISCORD_CHANNEL_ID is not set");
+    if (!id) throw new Error("DISCORD_TRANSACTIONS_CHANNEL_ID is not set");
 
     const channel = await this.client.channels.fetch(id);
     if (!channel || !(channel instanceof TextChannel)) {
@@ -156,7 +157,6 @@ export class Discord {
     sinceMessageId?: string,
     limit: number = 10,
   ): Promise<Message[]> {
-    if (isDisabled()) return [];
     await this.ensureReady();
     if (!this.client) return [];
 
@@ -214,6 +214,23 @@ export class Discord {
       1,
     );
     return messages[0] || null;
+  }
+
+  async getActiveUsers(channelId: string, since: Date): Promise<User[]> {
+    const messages = await this.fetchLatestMessagesFromChannel(
+      channelId,
+      undefined,
+      30,
+    );
+    const authors = new Map<string, User>();
+    for (
+      const message of messages.filter((message) =>
+        since ? message.createdTimestamp > since.getTime() : true
+      )
+    ) {
+      authors.set(message.author.id as string, message.author as unknown as User);
+    }
+    return Array.from(authors.values());
   }
 
   async removeMessagesFromChannel(channelId: string, messageIds: string[]) {

@@ -6,7 +6,7 @@
 import { getBlockchainTxInfo } from "../lib/blockchain.ts";
 import { fetchLatestMessagesFromChannel } from "../lib/discord.ts";
 import { parseMessageContent } from "../lib/utils.ts";
-import { ethers } from "npm:ethers";
+import { ethers } from "ethers";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 
 const usage = `
@@ -14,7 +14,7 @@ Usage: deno run verify-channel --since-message-id <message-id>
 `;
 
 async function main() {
-  const channelId = Deno.env.get("DISCORD_CHANNEL_ID");
+  const channelId = Deno.env.get("DISCORD_TRANSACTIONS_CHANNEL_ID");
   const sinceMessageId = Deno.args[1];
 
   const provider = new ethers.JsonRpcProvider("https://forno.celo.org");
@@ -34,7 +34,7 @@ async function main() {
   const messages = await fetchLatestMessagesFromChannel(
     channelId,
     sinceMessageId,
-    2000
+    2000,
   );
 
   const missingTxHashes: {
@@ -53,22 +53,21 @@ async function main() {
       }
 
       if (!messageAction.accountAddress) {
-        messageAction.accountAddress =
-          (await getAccountAddressFromDiscordUserId(
-            messageAction.discordUserId
-          )) || "";
+        messageAction.accountAddress = (await getAccountAddressFromDiscordUserId(
+          messageAction.discordUserId,
+        )) || "";
       }
 
       const txReceipt = await getBlockchainTxInfo(
         "celo",
         messageAction.txHash,
-        provider
+        provider,
       );
       if (!txReceipt) {
         console.log(
           `❌`,
           message.createdAt.toISOString().slice(0, 10),
-          `https://celoscan.io/tx/${messageAction?.txHash}`
+          `https://celoscan.io/tx/${messageAction?.txHash}`,
         );
         missingTxHashes.push({
           ...messageAction,
@@ -89,7 +88,7 @@ async function main() {
         //   `https://celoscan.io/tx/${messageAction?.txHash}`
         // );
       }
-    })
+    }),
   );
 
   // console.log(
@@ -110,13 +109,13 @@ async function main() {
     messages.length,
     "messages",
     missingTxHashes.length,
-    "missing txs"
+    "missing txs",
   );
   console.log(missingTxHashes);
   missingTxHashes.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   Deno.writeTextFileSync(
     "missing-txs.json",
-    JSON.stringify(missingTxHashes, null, 2)
+    JSON.stringify(missingTxHashes, null, 2),
   );
   Deno.exit(0);
 }

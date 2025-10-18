@@ -24,7 +24,7 @@ async function main() {
     missingTxHashes[i] = await processMissingTx(missingTxHashes[i]);
     Deno.writeTextFileSync(
       "missing-txs.json",
-      JSON.stringify(missingTxHashes, null, 2)
+      JSON.stringify(missingTxHashes, null, 2),
     );
   }
 
@@ -32,9 +32,9 @@ async function main() {
   Deno.exit(0);
 }
 
-const channelId = Deno.env.get("DISCORD_CHANNEL_ID");
+const channelId = Deno.env.get("DISCORD_TRANSACTIONS_CHANNEL_ID");
 if (!channelId) {
-  console.log("DISCORD_CHANNEL_ID env missing");
+  console.log("DISCORD_TRANSACTIONS_CHANNEL_ID env missing");
   Deno.exit(1);
 }
 
@@ -55,7 +55,7 @@ async function processMissingTx(missingTx: any) {
       "celo",
       tokenAddress,
       missingTx.accountAddress,
-      missingTx.amount
+      missingTx.amount,
     );
   }
   if (missingTx.type === "burn") {
@@ -63,7 +63,7 @@ async function processMissingTx(missingTx: any) {
       "celo",
       tokenAddress as string,
       missingTx.accountAddress,
-      missingTx.amount
+      missingTx.amount,
     );
   }
 
@@ -71,18 +71,17 @@ async function processMissingTx(missingTx: any) {
     if (!DRY_RUN) {
       missingTx.newTxHash = hash;
     }
-    replyContent = `Replaying missing transaction from ${missingTx.createdAt.slice(
-      0,
-      10
-    )}: ${missingTx.amount} ${missingTx.currency} to <@${
-      missingTx.discordUserId
-    }> ([tx](https://celoscan.io/tx/${hash}))`;
+    replyContent = `Replaying missing transaction from ${
+      missingTx.createdAt.slice(
+        0,
+        10,
+      )
+    }: ${missingTx.amount} ${missingTx.currency} to <@${missingTx.discordUserId}> ([tx](https://celoscan.io/tx/${hash}))`;
   } else {
-    replyContent = `Failed to replay ${missingTx.type} ${missingTx.amount} ${
-      missingTx.currency
-    } to ${missingTx.accountAddress} ... https://celoscan.io/tx/${
-      missingTx.txHash
-    } from ${missingTx.createdAt.slice(0, 10)}`;
+    replyContent =
+      `Failed to replay ${missingTx.type} ${missingTx.amount} ${missingTx.currency} to ${missingTx.accountAddress} ... https://celoscan.io/tx/${missingTx.txHash} from ${
+        missingTx.createdAt.slice(0, 10)
+      }`;
   }
 
   let message = `Missing tx from ${missingTx.createdAt.slice(0, 10)}`;
