@@ -1,0 +1,94 @@
+[
+  {
+    "name": "setup-token",
+    "description": "Configure the token for your server (admin only)",
+    "default_member_permissions": "8"
+  },
+  {
+    "name": "setup-channels",
+    "description": "Configure the channels for your server (admin only)",
+    "default_member_permissions": "8"
+  },
+  {
+    "name": "mint",
+    "description": "Mint tokens for users (admin only)",
+    "default_member_permissions": "8",
+    "options": [
+      {
+        "name": "user",
+        "description": "The user to mint tokens for",
+        "required": true,
+        "type": 6
+      },
+      {
+        "name": "amount",
+        "description": "Number of tokens to mint",
+        "type": 10,
+        "required": true,
+        "min_value": 0.01
+      }
+    ]
+  },
+  {
+    "name": "edit-rewards",
+    "description": "Configure token rewards for a role (admin only)",
+    "default_member_permissions": "8",
+    "options": [
+      {
+        "name": "role",
+        "description": "The role to configure rewards for",
+        "type": 8,
+        "required": true
+      },
+      {
+        "name": "amount",
+        "description": "Number of tokens to mint",
+        "type": 10,
+        "required": true,
+        "min_value": 1
+      },
+      {
+        "name": "frequency",
+        "description": "How often to mint tokens",
+        "type": 3,
+        "required": true,
+        "choices": [
+          { "name": "Daily", "value": "daily" },
+          { "name": "Weekly", "value": "weekly" },
+          { "name": "Monthly", "value": "monthly" }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "edit-costs",
+    "description": "Configure token costs for a role (admin only)",
+    "default_member_permissions": "8",
+    "options": [
+      {
+        "name": "role",
+        "description": "The role to configure costs for",
+        "type": 8,
+        "required": true
+      },
+      {
+        "name": "amount",
+        "description": "Number of tokens to burn",
+        "type": 10,
+        "required": true,
+        "min_value": 1
+      },
+      {
+        "name": "frequency",
+        "description": "How often to burn tokens",
+        "type": 3,
+        "required": true,
+        "choices": [
+          { "name": "Daily", "value": "daily" },
+          { "name": "Weekly", "value": "weekly" },
+          { "name": "Monthly", "value": "monthly" }
+        ]
+      }
+    ]
+  }
+]

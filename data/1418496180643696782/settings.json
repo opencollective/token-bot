@@ -1,0 +1,25 @@
+{
+  "contributionToken": {
+    "name": "Open Source Village Token",
+    "symbol": "OSVT",
+    "decimals": 6,
+    "chain": "base_sepolia",
+    "address": "0x7050e56d04e0965a0f840179fc0d25bce9b5dec4"
+  },
+  "guild": {
+    "id": "1418496180643696782",
+    "name": "Open Source Village",
+    "icon": "b5dada4f0699cc36d110d5c8db0f1c9f"
+  },
+  "creator": {
+    "id": "689614876515237925",
+    "username": "xdamman",
+    "globalName": "Xavier",
+    "avatar": "cd58639b8f01b8b58960bd8a7171b0a7"
+  },
+  "channels": {
+    "transactions": "1429134375043203072",
+    "contributions": "1429134312715980980",
+    "logs": "1429134429066100816"
+  }
+}

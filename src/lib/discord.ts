@@ -18,6 +18,7 @@ export type DiscordRoleSettings = {
   gracePeriod?: number;
   ignoreUsers?: string[];
   notifications?: string[];
+  rolesToPingIfEmpty?: string[];
 };
 
 function isDisabled(): boolean {
@@ -283,10 +284,15 @@ export class Discord {
     }
 
     const guild = await this.client.guilds.fetch(guildId);
-    const members = await guild.members.fetch();
-    if (!members) return [];
-    const users = members.filter((member) => member.roles.cache.has(roleId));
-    return Array.from(users.values());
+    try {
+      const members = await guild.members.fetch({ query: "", limit: 1000, time: 30_000 });
+      if (!members) return [];
+      const users = members.filter((member) => member.roles.cache.has(roleId));
+      return Array.from(users.values());
+    } catch (error) {
+      console.error("❌ Failed to fetch members:", error);
+      return [];
+    }
   }
 
   async removeRole(userId: string, roleId: string) {

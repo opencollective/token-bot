@@ -1,4 +1,11 @@
-import { createPublicClient, createWalletClient, formatUnits, http, parseUnits } from "@wevm/viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  defineChain,
+  formatUnits,
+  http,
+  parseUnits,
+} from "@wevm/viem";
 import type {
   Abi,
   Account,
@@ -9,6 +16,8 @@ import type {
   WalletClient,
   WriteContractParameters,
 } from "@wevm/viem";
+
+import { base, baseSepolia, celo, gnosis, localhost, polygon } from "@wevm/viem/chains";
 import { privateKeyToAccount } from "@wevm/viem/accounts";
 import { SimulateContractParameters } from "@wevm/viem/actions";
 import ERC20_BURNABLE_ABI from "../abis/erc20-burnable.abi.json" with { type: "json" };
@@ -22,22 +31,45 @@ export const PROFILE_ADMIN_ROLE =
   "0x224b562a599bb6f57441f98a50de513dff0de3d9b620f342c27a4e4a898ce8e2";
 
 // Hard-coded RPC URLs for supported chains
-const RPC_URLS = {
+export const RPC_URLS = {
   celo: "https://celo-json-rpc.stakely.io",
   gnosis: "https://rpc.gnosischain.com",
+  base_sepolia: "https://base-sepolia-rpc.publicnode.com",
+  base: "https://base.llamarpc.com",
+  polygon: "https://polygon.llamarpc.com",
   localhost: "http://127.0.0.1:8545",
 } as const;
 
 export type SupportedChain = keyof typeof RPC_URLS;
+export const ChainConfig = {
+  "base_sepolia": baseSepolia,
+  "base": base,
+  "celo": celo,
+  "gnosis": gnosis,
+  "polygon": polygon,
+  "localhost": defineChain({
+    id: 31337,
+    name: "Localhost",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: {
+      default: { http: ["http://127.0.0.1:8545"] },
+      public: { http: ["http://127.0.0.1:8545"] },
+    },
+    blockExplorers: { default: { name: "Localhost", url: "http://127.0.0.1:8545" } },
+    testnet: true,
+  }),
+};
 
 export async function deployContract(
   chainSlug: SupportedChain,
   contractName: string,
-  accountAddress: Address,
   args: unknown[],
 ): Promise<Address> {
   const client = getWalletClient(chainSlug);
-  const publicClient = createPublicClient({ transport: http(RPC_URLS[chainSlug]) });
+  const publicClient = createPublicClient({
+    chain: ChainConfig[chainSlug],
+    transport: http(RPC_URLS[chainSlug]),
+  });
   let contractJSON;
   const contractFilepath = `hardhat/artifacts/contracts/${contractName}.sol/${contractName}.json`;
   try {
@@ -48,15 +80,35 @@ export async function deployContract(
   }
   const contractAbi = contractJSON.abi;
   const contractBytecode = contractJSON.bytecode;
-  const hash = await client.deployContract({
-    abi: contractAbi,
-    account: accountAddress,
-    chain: null,
-    args: args,
-    bytecode: contractBytecode as `0x${string}`,
-  });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  return receipt.contractAddress as Address;
+  try {
+    console.log(
+      ">>> Deploying contract on chain",
+      chainSlug,
+      "with address",
+      client.account?.address,
+      "balance:",
+      await publicClient.getBalance({ address: client.account?.address as Address }),
+    );
+    const hash = await client.deployContract({
+      abi: contractAbi,
+      chain: ChainConfig[chainSlug],
+      args: args,
+      bytecode: contractBytecode as `0x${string}`,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return receipt.contractAddress as Address;
+  } catch (e) {
+    if (e.details === "insufficient funds for transfer") {
+      throw new Error(
+        "Insufficient funds to deploy this token. Please send some ETH to " +
+          client.account?.address + " on " + chainSlug,
+      );
+    }
+    throw new Error(
+      `Failed to deploy contract: ${contractName} on ${chainSlug}`,
+      { cause: JSON.stringify(e) },
+    );
+  }
 }
 
 export async function getBlockchainTxInfo(
@@ -83,7 +135,7 @@ export async function getBlockchainTxInfo(
   const chain = chainSlug as SupportedChain;
   const rpcUrl = RPC_URLS[chain];
 
-  const client = createPublicClient({ transport: http(rpcUrl) });
+  const client = createPublicClient({ transport: http(rpcUrl), chain: ChainConfig[chainSlug] });
 
   try {
     const receipt = await client.getTransactionReceipt({ hash: txHash as Hash });
@@ -100,7 +152,8 @@ export type Clients = { publicClient: PublicClient; walletClient: WalletClient; 
 
 export async function getBaseFee(chainSlug: string): Promise<bigint | undefined> {
   const rpcUrl = RPC_URLS[chainSlug as SupportedChain];
-  const client = createPublicClient({ transport: http(rpcUrl) });
+  console.log(">>> ChainConfig[chainSlug]", ChainConfig[chainSlug]);
+  const client = createPublicClient({ transport: http(rpcUrl), chain: ChainConfig[chainSlug] });
   const fees = await getInitialGasParams(client);
   return fees.maxFeePerGas;
 }
@@ -172,7 +225,10 @@ export async function submitTransaction(
 
   const DRY_RUN = getEnv("DRY_RUN") === "true";
 
-  const publicClient = createPublicClient({ transport: http(RPC_URLS[params.chainSlug]) });
+  const publicClient = createPublicClient({
+    transport: http(RPC_URLS[params.chainSlug]),
+    chain: ChainConfig[params.chainSlug],
+  });
   let gasParams = await getInitialGasParams(publicClient);
   const clientAddress = client.account?.address as Address;
   const nonce = options?.nonce ?? await publicClient.getTransactionCount({
@@ -270,13 +326,28 @@ export async function submitTransaction(
   return null;
 }
 
+export async function deployTokenContract(
+  chainSlug: SupportedChain,
+  name: string,
+  symbol: string,
+): Promise<Address> {
+  return await deployContract(chainSlug, "BurnableToken", [
+    name,
+    symbol,
+  ]);
+}
+
 export function getWalletClient(chainSlug: SupportedChain): WalletClient {
   const pk = getEnv("PRIVATE_KEY") as `0x${string}` | undefined;
   if (!pk) {
     throw new Error("PRIVATE_KEY environment variable is not set");
   }
   const account = privateKeyToAccount(pk);
-  return createWalletClient({ account, transport: http(RPC_URLS[chainSlug]) });
+  return createWalletClient({
+    account,
+    chain: ChainConfig[chainSlug],
+    transport: http(RPC_URLS[chainSlug]),
+  });
 }
 
 export async function getBalance(
@@ -284,7 +355,10 @@ export async function getBalance(
   tokenAddress: string,
   address: string,
 ): Promise<bigint> {
-  const client = createPublicClient({ transport: http(RPC_URLS[chainSlug]) });
+  const client = createPublicClient({
+    transport: http(RPC_URLS[chainSlug]),
+    chain: ChainConfig[chainSlug],
+  });
   const res = await client.readContract({
     address: tokenAddress as Address,
     abi: ERC20_BURNABLE_ABI as Abi,
@@ -298,7 +372,10 @@ export async function getNativeBalance(
   chainSlug: SupportedChain,
   address: string,
 ): Promise<bigint> {
-  const client = createPublicClient({ transport: http(RPC_URLS[chainSlug]) });
+  const client = createPublicClient({
+    transport: http(RPC_URLS[chainSlug]),
+    chain: ChainConfig[chainSlug],
+  });
   return await client.getBalance({ address: address as Address });
 }
 
@@ -390,7 +467,10 @@ export async function hasRole(
   role: string,
   account: string,
 ) {
-  const client = createPublicClient({ transport: http(RPC_URLS[chainSlug]) });
+  const client = createPublicClient({
+    transport: http(RPC_URLS[chainSlug]),
+    chain: ChainConfig[chainSlug],
+  });
   if (role === "minter") {
     role = MINTER_ROLE;
   } else if (role === "profile_admin") {

@@ -1,10 +1,5 @@
 import { expect } from "@std/expect/expect";
-import {
-  mintTokens,
-  getBalance,
-  deployContract,
-  burnTokensFrom,
-} from "../src/lib/blockchain.ts";
+import { burnTokensFrom, deployContract, getBalance, mintTokens } from "../src/lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
 import { privateKeyToAccount } from "@wevm/viem/accounts";
 import { beforeAll } from "@std/testing/bdd";
@@ -23,9 +18,8 @@ Deno.test(
   async () => {
     const tokenAddress = await deployContract(
       "localhost",
-      "TestToken",
-      "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
-      ["Test Token", "TT"]
+      "BurnableToken",
+      ["Test Token", "TT"],
     );
 
     const account = privateKeyToAccount(privateKey);
@@ -36,41 +30,41 @@ Deno.test(
     const before = await getBalance(
       "localhost",
       tokenAddress!,
-      account.address
+      account.address,
     );
 
     // 4) Mint 1.5 tokens
     const mintAmount = "1.5";
     const txHash = await mintTokens(
-      "celo",
+      "localhost",
       tokenAddress!,
       account.address,
-      mintAmount
+      mintAmount,
     );
     expect(txHash).not.toBeNull();
 
     const afterMint = await getBalance(
       "localhost",
       tokenAddress!,
-      account.address
+      account.address,
     );
-    expect(afterMint).toEqual(before + parseUnits(mintAmount, 18));
+    expect(afterMint).toEqual(before + parseUnits(mintAmount, 6));
 
     // 5) Burn 0.5 tokens
     const burnAmount = "0.5";
     const txBurn = await burnTokensFrom(
-      "celo",
+      "localhost",
       tokenAddress!,
       account.address,
-      burnAmount
+      burnAmount,
     );
     expect(txBurn).not.toBeNull();
 
     const afterBurn = await getBalance(
       "localhost",
       tokenAddress!,
-      account.address
+      account.address,
     );
-    expect(afterBurn).toEqual(afterMint - parseUnits(burnAmount, 18));
-  }
+    expect(afterBurn).toEqual(afterMint - parseUnits(burnAmount, 6));
+  },
 );

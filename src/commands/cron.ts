@@ -14,16 +14,19 @@ import {
   mintTokens,
 } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
-import rolesJSON from "../../discord-roles-rewards.json" with { type: "json" };
 import communityJSON from "../../community.json" with { type: "json" };
 import { formatUnits } from "@wevm/viem";
 import { Nostr, URI } from "../lib/nostr.ts";
+import { RoleSetting } from "../types.ts";
+import { loadGuildSettings, loadRoles } from "../lib/utils.ts";
 
 const IGNORE_USERS: string[] = [];
 
-const ONLY_USERS: string[] = ["Margherita"];
+const ONLY_USERS: string[] = [];
 const ONLY_ROLES: string[] = [];
-const IGNORE_ROLES: string[] = ["1414581689581310052"];
+const IGNORE_ROLES: string[] = [
+  "1414581689581310052",
+]; // tech steward role
 
 const LIMIT = Number(Deno.env.get("LIMIT")) || null;
 const DRY_RUN = Deno.env.get("DRY_RUN") === "true";
@@ -43,34 +46,26 @@ if (!nostr) {
 console.log(`LIMIT: ${LIMIT}`);
 console.log(`DRY_RUN: ${DRY_RUN}`);
 
-const roles = rolesJSON as unknown as DiscordRoleSettings[];
-
 let txCount = 0;
 
-const main = async () => {
+const processCommunity = async (guildId: string) => {
+  const roles: RoleSetting[] = await loadRoles(guildId);
+  const guildSettings = await loadGuildSettings(guildId);
+  if (!guildSettings) {
+    console.error(`Guild settings not found for guild ${guildId}`);
+    Deno.exit(1);
+  }
+  const contributionsChannelId = guildSettings.channels.contributions;
+
+  console.log(">>> processing community", guildId, "with", roles.length, "roles configured");
   const date = new Date();
   const day = date.getDate();
   const dayOfWeek = date.getDay();
 
-  console.log(`Running on ${day} of the month and ${dayOfWeek} of the week`);
-
-  const botWallet = getWalletClient("celo");
-  const nativeBalance = await getNativeBalance("celo", botWallet.account?.address as string);
-  console.log(">>> nativeBalance", formatUnits(nativeBalance, 18));
-  console.log(
-    ">>> has minter role",
-    await hasRole(
-      "celo",
-      community.primary_token.address,
-      "minter",
-      botWallet.account?.address as string,
-    ),
-  );
-
   const since = new Date();
-  since.setDate(since.getDate() - 8);
+  since.setDate(since.getDate() - 10);
   const activeUsers = await discord.getActiveUsers(
-    Deno.env.get("DISCORD_CONTRIBUTIONS_CHANNEL_ID") as string,
+    contributionsChannelId,
     since,
   );
   console.log(
@@ -78,7 +73,10 @@ const main = async () => {
     activeUsers.map((member) => member.globalName || member.displayName),
   );
 
+  let sendReminder = false;
   const activeUserIds = activeUsers.map((member) => member.id);
+
+  const vacancies: RoleSetting[] = [];
 
   for (const role of roles) {
     if (IGNORE_ROLES.includes(role.id)) {
@@ -89,17 +87,23 @@ const main = async () => {
       console.log(`ONLY_ROLES set: Ignoring role ${role.name}`);
       continue;
     }
+    if (role.frequency === "monthly") {
+      if (day !== 1) {
+        continue;
+      }
+    } else if (role.frequency === "weekly") {
+      if (dayOfWeek === 5) {
+        sendReminder = true;
+      } else if (dayOfWeek !== 1) {
+        continue;
+      }
+    }
+
     const users = await discord.getMembers(role.id);
     console.log(`>>> ${role.name}: ${users.length} users`);
     if (users.length === 0) {
-      if (role.mintAmount) {
-        const rolesToNotify = roles.filter((r) => r.notifications?.includes("vacancies"));
-        if (rolesToNotify.length > 0 && ONLY_USERS.length === 0) {
-          const rolesMentions = rolesToNotify.map((r) => `<@&${r.id}>`).join(", ");
-          await discord.postToDiscordChannel(
-            `Nobody has the ${role.name} role (${role.mintAmount} ${community.primary_token.symbol} ${role.frequency}), ${rolesMentions} anyone who wants to take it?`,
-          );
-        }
+      if (role.amountToMint) {
+        vacancies.push(role);
       }
       continue;
     }
@@ -109,7 +113,7 @@ const main = async () => {
           continue;
         }
       } else if (role.frequency === "weekly") {
-        if (dayOfWeek !== 1) {
+        if (dayOfWeek !== 1 && !sendReminder) {
           continue;
         }
       }
@@ -143,14 +147,16 @@ const main = async () => {
       let nostrMessage: string | null = null;
       let discordMessage: string | null = null;
 
-      if (role.burnAmount) {
-        console.log(`>>> ${role.name}: burning ${role.burnAmount} tokens from ${user.displayName}`);
+      if (role.amountToBurn) {
+        console.log(
+          `>>> ${role.name}: burning ${role.amountToBurn} tokens from ${user.displayName}`,
+        );
         try {
           hash = await burnTokensFrom(
             "celo",
             community.primary_token.address,
             userAddress,
-            role.burnAmount.toString(),
+            role.amountToBurn.toString(),
           );
         } catch (error) {
           if (error instanceof Error && error.message.includes("Insufficient balance")) {
@@ -168,40 +174,63 @@ const main = async () => {
         txUri = `ethereum:${community.primary_token.chain_id}:tx:${hash}` as URI;
 
         const newBalance = Number(formatUnits(currentBalance, community.primary_token.decimals)) -
-          role.burnAmount;
+          role.amountToBurn;
 
         nostrMessage = `${role.frequency} cost for ${role.name} role`;
 
         discordMessage =
-          `Burned ${role.burnAmount.toString()} CHT for <@${user.user.id}> for ${role.name} role ([tx](<${communityJSON.scan.url}/tx/${hash}>)), new balance: ${newBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
-      } else if (role.mintAmount) {
+          `Burned ${role.amountToBurn.toString()} CHT for <@${user.user.id}> for ${role.name} role ([tx](<${communityJSON.scan.url}/tx/${hash}>)), new balance: ${newBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
+      } else if (role.amountToMint) {
         if (!activeUserIds.includes(user.id)) {
-          console.log(
-            `>>> ${role.name}: user ${user.displayName} hasn't posted a contribution, skipping`,
-          );
-          const message =
-            `${role.frequency} issuance of ${role.mintAmount} ${community.primary_token.symbol} for ${role.name} role: <@${user.user.id}> hasn't posted an update in the <#${
-              Deno.env.get("DISCORD_CONTRIBUTIONS_CHANNEL_ID")
-            }> channel, skipping`;
-          await discord.postToDiscordChannel(message);
+          if (sendReminder) {
+            const formattedBalance = Number(
+              formatUnits(currentBalance, community.primary_token.decimals),
+            );
+
+            console.log(
+              `>>> ${role.name}: reminding ${user.displayName} about their ${role.name} role`,
+            );
+            const discordMessage =
+              `<@${user.user.id}> don't forget to post an update for your ${role.name} role to receive the weekly allowance (${role.mintAmount} ${community.primary_token.symbol}). Your currently have ${formattedBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
+
+            await discord.postToDiscordChannel(
+              discordMessage as string,
+              contributionsChannelId,
+            );
+          } else {
+            console.log(
+              `>>> ${role.name}: user ${user.displayName} hasn't posted a contribution, skipping`,
+            );
+            const message =
+              `${role.frequency} issuance of ${role.amountToMint} ${community.primary_token.symbol} for ${role.name} role: <@${user.user.id}> hasn't posted an update in the <#${contributionsChannelId}> channel, skipping`;
+            await discord.postToDiscordChannel(message);
+            continue;
+          }
+        }
+
+        // Don't issue tokens if we're sending a reminder
+        if (sendReminder) {
           continue;
         }
-        console.log(`>>> ${role.name}: minting ${role.mintAmount} tokens for ${user.displayName}`);
+
+        console.log(
+          `>>> ${role.name}: minting ${role.amountToMint} tokens for ${user.displayName}`,
+        );
         hash = await mintTokens(
           "celo",
           community.primary_token.address,
           userAddress,
-          role.mintAmount.toString(),
+          role.amountToMint.toString(),
         );
 
         txUri = `ethereum:${community.primary_token.chain_id}:tx:${hash}` as URI;
 
         const newBalance = Number(formatUnits(currentBalance, community.primary_token.decimals)) +
-          role.mintAmount;
+          role.amountToMint;
 
         nostrMessage = `${role.frequency} issuance for ${role.name} role`;
         discordMessage =
-          `Minted ${role.mintAmount.toString()} CHT for <@${user.user.id}> for ${role.name} role ([tx](<${communityJSON.scan.url}/tx/${hash}>)), new balance: ${newBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
+          `Minted ${role.amountToMint.toString()} CHT for <@${user.user.id}> for ${role.name} role ([tx](<${communityJSON.scan.url}/tx/${hash}>)), new balance: ${newBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
 
         txCount++;
       }
@@ -216,6 +245,52 @@ const main = async () => {
       );
     }
   }
+
+  if (vacancies.length > 0) {
+    const roleIdsToPing: string[] = [];
+    roles.forEach((r) => {
+      if (r.rolesToPingIfEmpty) {
+        roleIdsToPing.push(...r.rolesToPingIfEmpty);
+      }
+    });
+
+    const uniqueRoleIdsToPing = [...new Set(roleIdsToPing)];
+
+    if (uniqueRoleIdsToPing.length > 0 && ONLY_USERS.length === 0) {
+      const rolesMentions = uniqueRoleIdsToPing.map((r) => `<@&${r}>`).join(", ");
+      await discord.postToDiscordChannel(
+        `There are ${vacancies.length} vacancies for the following roles:\n${
+          vacancies.map((r) =>
+            `- ${r.name} (${r.amountToMint} ${community.primary_token.symbol} ${r.frequency})`
+          ).join("\n")
+        }\nAnyone up to take on one of those roles? ${rolesMentions}`,
+      );
+    }
+  }
+};
+
+const main = async () => {
+  const date = new Date();
+  const day = date.getDate();
+  const dayOfWeek = date.getDay();
+
+  console.log(`Running on ${day} of the month and ${dayOfWeek} of the week`);
+
+  const botWallet = getWalletClient("celo");
+  const nativeBalance = await getNativeBalance("celo", botWallet.account?.address as string);
+  console.log(">>> nativeBalance", formatUnits(nativeBalance, 18));
+  console.log(
+    ">>> has minter role",
+    await hasRole(
+      "celo",
+      community.primary_token.address,
+      "minter",
+      botWallet.account?.address as string,
+    ),
+  );
+
+  await processCommunity("1418496180643696782");
+
   console.log(">>> done");
   Deno.exit(0);
 };

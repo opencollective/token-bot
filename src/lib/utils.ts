@@ -1,3 +1,7 @@
+import { join } from "@std/path";
+import { GuildSettings, RoleSetting } from "../types.ts";
+import { ensureDir } from "@std/fs/ensure-dir";
+
 type MessageAction = {
   type: "burn" | "mint";
   amount: string;
@@ -8,7 +12,7 @@ type MessageAction = {
   accountAddress: string;
 };
 export function parseMessageContent(
-  messageContent: string
+  messageContent: string,
 ): MessageAction | null {
   const result: MessageAction = {
     type: "burn",
@@ -21,7 +25,7 @@ export function parseMessageContent(
   };
 
   const matches = messageContent.match(
-    /(Burned|Minted) ([0-9]+) ([A-Z]{2,5}) [a-z]+.*<@([0-9]+)>(?: for (.*))?.*\(\[.*\/tx\/(0x.{64})(?:.*\/address\/(0x.{40})*)?/im
+    /(Burned|Minted) ([0-9]+) ([A-Z]{2,5}) [a-z]+.*<@([0-9]+)>(?: for (.*))?.*\(\[.*\/tx\/(0x.{64})(?:.*\/address\/(0x.{40})*)?/im,
   );
   if (matches) {
     result.type = matches[1] === "Burned" ? "burn" : "mint";
@@ -45,4 +49,43 @@ export function getEnv(key: string): string | undefined {
   }
   if (typeof process !== "undefined") return process.env[key];
   return undefined;
+}
+
+export async function loadGuildSettings(guildId: string): Promise<GuildSettings | null> {
+  try {
+    const path = join(Deno.cwd(), "data", guildId, "settings.json");
+    const content = await Deno.readTextFile(path);
+    return JSON.parse(content);
+  } catch (error) {
+    console.error(`Error loading guild settings for guild ${guildId}:`, error);
+    return null;
+  }
+}
+
+// File system helpers
+async function getDataPath(guildId: string, filename: string): Promise<string> {
+  const dirPath = `./data/${guildId}`;
+  await ensureDir(dirPath);
+  return `${dirPath}/${filename}`;
+}
+
+export async function saveGuildSettings(guildId: string, settings: GuildSettings): Promise<void> {
+  const path = await getDataPath(guildId, "settings.json");
+  await Deno.writeTextFile(path, JSON.stringify(settings, null, 2));
+}
+
+export async function loadRoles(guildId: string): Promise<RoleSetting[]> {
+  try {
+    const path = await getDataPath(guildId, "roles.json");
+    const content = await Deno.readTextFile(path);
+    return JSON.parse(content);
+  } catch (error) {
+    console.error(`Error loading roles for guild ${guildId}:`, error);
+    return [];
+  }
+}
+
+export async function saveRoles(guildId: string, roles: RoleSetting[]): Promise<void> {
+  const path = await getDataPath(guildId, "roles.json");
+  await Deno.writeTextFile(path, JSON.stringify(roles, null, 2));
 }
