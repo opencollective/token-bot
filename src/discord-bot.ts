@@ -904,6 +904,23 @@ client.on(Events.Error, (error) => {
 // Start bot
 client.login(BOT_TOKEN);
 
+// Health check HTTP server
+const PORT = parseInt(Deno.env.get("PORT") || "8080");
+Deno.serve({ port: PORT }, (req) => {
+  const url = new URL(req.url);
+
+  if (url.pathname === "/health") {
+    return new Response("OK", {
+      status: 200,
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  return new Response("Not Found", { status: 404 });
+});
+
+console.log(`🏥 Health check server running on http://localhost:${PORT}/health`);
+
 // Graceful shutdown
 Deno.addSignalListener("SIGINT", async () => {
   console.log("\n🛑 Shutting down bot...");

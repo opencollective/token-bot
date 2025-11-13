@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "bot": "deno run --env-file=.env --allow-net --allow-env --allow-read --allow-write --no-prompt src/discord-bot.ts",
+    "start": "deno run --env-file=.env --allow-net --allow-env --allow-read --allow-write --no-prompt src/discord-bot.ts",
     "dryrun": "ENV=dryrun PORT=8081 deno run --env-file=.env --allow-read=./chains.json --allow-net=api.monerium.app,discord.com,gateway.discord.gg,gateway-us-east1-a.discord.gg,gateway-us-east1-b.discord.gg,gateway-us-east1-c.discord.gg,gateway-us-east1-d.discord.gg,gateway-us-east1-e.discord.gg,0.0.0.0 --no-prompt --allow-env  src/main.ts",
     "verify-channel": "deno run --env-file=.env --allow-read=./cache --allow-write=./cache --allow-write=./missing-txs.json --allow-net --no-prompt --allow-env  src/commands/verify-channel.ts",
     "cron": "deno run --env-file=.env --allow-read=./cache --allow-read=./data --allow-write=./cache --allow-net --no-prompt --allow-env  src/commands/cron.ts",
@@ -10,8 +10,7 @@
     "hh:deploy": "deno run --allow-run --cwd=hardhat npm:hardhat run scripts/deploy.ts --network localhost",
     "test:mint": "deno test --allow-run --allow-net --allow-env --env-file=.env.test --allow-read --allow-write tests/lib.blockchain.mint.test.ts",
     "test:safe": "deno test --allow-net --allow-env --env-file=.env.test --allow-read --allow-write tests/lib.safe.test.ts",
-    "test:cron": "deno test --allow-read --allow-write --allow-net --allow-env --env-file=.env.test tests/cron.test.ts",
-    "start": "deno run --env-file=.env --allow-read=./chains.json --allow-net=api.monerium.app,discord.com,gateway.discord.gg,gateway-us-east1-a.discord.gg,gateway-us-east1-b.discord.gg,gateway-us-east1-c.discord.gg,gateway-us-east1-d.discord.gg,gateway-us-east1-e.discord.gg,0.0.0.0 --no-prompt --allow-env  src/main.ts"
+    "test:cron": "deno test --allow-read --allow-write --allow-net --allow-env --env-file=.env.test tests/cron.test.ts"
   },
   "fmt": {
     "lineWidth": 100,
