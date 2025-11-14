@@ -1,0 +1,25 @@
+{
+  "contributionToken": {
+    "name": "Commons Hub Token",
+    "symbol": "CHT",
+    "decimals": 6,
+    "chain": "celo",
+    "address": "0x65dd32834927de9e57e72a3e2130a19f81c6371d"
+  },
+  "guild": {
+    "id": "1280532848604086365",
+    "name": "Commons Hub Brussels",
+    "icon": ""
+  },
+  "creator": {
+    "id": "689614876515237925",
+    "username": "xdamman",
+    "globalName": "Xavier",
+    "avatar": "cd58639b8f01b8b58960bd8a7171b0a7"
+  },
+  "channels": {
+    "transactions": "1354115945718878269",
+    "contributions": "1297965144579637248",
+    "logs": "1280558583347548162"
+  }
+}

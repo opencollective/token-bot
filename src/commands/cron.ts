@@ -56,7 +56,7 @@ const processCommunity = async (guildId: string) => {
     console.error(`Guild settings not found for guild ${guildId}`);
     Deno.exit(1);
   }
-  const monitors = await loadGuildFile<Monitor[]>("1418496180643696782", "monitors.json");
+  const monitors = await loadGuildFile<Monitor[]>(guildId, "monitors.json");
 
   const contributionsChannelId = guildSettings.channels.contributions;
 
@@ -210,7 +210,7 @@ const processCommunity = async (guildId: string) => {
               `>>> ${role.name}: reminding ${user.displayName} about their ${role.name} role`,
             );
             const discordMessage =
-              `<@${user.user.id}> don't forget to post an update for your ${role.name} role to receive the weekly allowance (${role.mintAmount} ${community.primary_token.symbol}). Your currently have ${formattedBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
+              `<@${user.user.id}> don't forget to post an update for your ${role.name} role to receive the weekly allowance (${role.amountToMint} ${community.primary_token.symbol}). Your currently have ${formattedBalance} ${community.primary_token.symbol} ([View account](<https://txinfo.xyz/celo/address/${userAddress}>))`;
 
             await discord.postToDiscordChannel(
               discordMessage as string,
@@ -308,7 +308,7 @@ const main = async () => {
     ),
   );
 
-  await processCommunity("1418496180643696782");
+  await processCommunity("1280532848604086365");
 
   console.log(">>> done");
   Deno.exit(0);
