@@ -283,6 +283,7 @@ const processCommunity = async (guildId: string) => {
             `- ${r.name} (${r.amountToMint} ${community.primary_token.symbol} ${r.frequency})`
           ).join("\n")
         }\nAnyone up to take on one of those roles? ${rolesMentions}`,
+        contributionsChannelId,
       );
     }
   }
