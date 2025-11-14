@@ -51,15 +51,21 @@ export function getEnv(key: string): string | undefined {
   return undefined;
 }
 
-export async function loadGuildSettings(guildId: string): Promise<GuildSettings | null> {
+export async function loadGuildFile(
+  guildId: string,
+  filename: string,
+): Promise<GuildSettings | null> {
   try {
-    const path = join(Deno.cwd(), "data", guildId, "settings.json");
+    const path = join(Deno.cwd(), "data", guildId, filename);
     const content = await Deno.readTextFile(path);
     return JSON.parse(content);
   } catch (error) {
     console.error(`Error loading guild settings for guild ${guildId}:`, error);
     return null;
   }
+}
+export async function loadGuildSettings(guildId: string): Promise<GuildSettings | null> {
+  return await loadGuildFile(guildId, "settings.json");
 }
 
 // File system helpers
@@ -75,14 +81,7 @@ export async function saveGuildSettings(guildId: string, settings: GuildSettings
 }
 
 export async function loadRoles(guildId: string): Promise<RoleSetting[]> {
-  try {
-    const path = await getDataPath(guildId, "roles.json");
-    const content = await Deno.readTextFile(path);
-    return JSON.parse(content);
-  } catch (error) {
-    console.error(`Error loading roles for guild ${guildId}:`, error);
-    return [];
-  }
+  return await loadGuildFile(guildId, "roles.json") as RoleSetting[] || [];
 }
 
 export async function saveRoles(guildId: string, roles: RoleSetting[]): Promise<void> {

@@ -4,7 +4,7 @@
  * and burn the number of tokens that this role requires.
  * If the balance is not enough, we revoke the role.
  */
-import { Discord, DiscordRoleSettings } from "../lib/discord.ts";
+import { Discord } from "../lib/discord.ts";
 import {
   burnTokensFrom,
   getBalance,
@@ -18,7 +18,8 @@ import communityJSON from "../../community.json" with { type: "json" };
 import { formatUnits } from "@wevm/viem";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { RoleSetting } from "../types.ts";
-import { loadGuildSettings, loadRoles } from "../lib/utils.ts";
+import { loadGuildFile, loadGuildSettings, loadRoles } from "../lib/utils.ts";
+import { getYesterdayTransfersSummary, Monitor } from "../lib/etherscan.ts";
 
 const IGNORE_USERS: string[] = [];
 
@@ -55,9 +56,27 @@ const processCommunity = async (guildId: string) => {
     console.error(`Guild settings not found for guild ${guildId}`);
     Deno.exit(1);
   }
+  const monitors = await loadGuildFile<Monitor[]>("1418496180643696782", "monitors.json");
+
   const contributionsChannelId = guildSettings.channels.contributions;
 
-  console.log(">>> processing community", guildId, "with", roles.length, "roles configured");
+  console.log(
+    ">>> processing community",
+    guildId,
+    "with",
+    roles.length,
+    "roles and",
+    monitors?.length,
+    "monitors configured",
+  );
+
+  for (const monitor of monitors) {
+    const message = await getYesterdayTransfersSummary(monitor);
+    if (message) {
+      await discord?.postToDiscordChannel(message as string, monitor.channelId);
+    }
+  }
+
   const date = new Date();
   const day = date.getDate();
   const dayOfWeek = date.getDay();

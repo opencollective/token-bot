@@ -32,6 +32,7 @@
     "nostr-tools": "npm:nostr-tools@^2.11.0",
     "@safe-global/api-kit": "npm:@safe-global/api-kit@^4.0.0",
     "@safe-global/protocol-kit": "npm:@safe-global/protocol-kit@^6.1.1",
-    "@safe-global/types-kit": "npm:@safe-global/types-kit@3.0.0"
+    "@safe-global/types-kit": "npm:@safe-global/types-kit@3.0.0",
+    "viem": "npm:viem@^2.39.0"
   }
 }
