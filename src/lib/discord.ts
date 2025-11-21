@@ -65,7 +65,10 @@ export class Discord {
     const channelId = Deno.env.get("DISCORD_TRANSACTIONS_CHANNEL_ID") || undefined;
 
     // If no discordBotToken, consider it disabled (return null) to avoid side effects in test/dev
-    if (!discordBotToken) return null;
+    if (!discordBotToken) {
+      console.error("!!! no DISCORD_BOT_TOKEN defined, failed to instantiate Discord Instance")
+      return null;
+    }
 
     this.instance = new Discord(discordBotToken, guildId, channelId);
     return this.instance;
@@ -131,9 +134,7 @@ export class Discord {
 
   async postToDiscordChannel(message: string, channelId?: string) {
     if (isDisabled()) {
-      console.log(
-        `\nDRYRUN/DISABLED: Would have posted to Discord:\n${message}\n`,
-      );
+      console.log(`\nDRYRUN: Would have posted to Discord (channel: ${channelId}):\n${message}\n`);
       return;
     }
     await this.ensureReady();
@@ -147,7 +148,7 @@ export class Discord {
       throw new Error("Channel not found or is not a text channel");
     }
     if ((Deno.env.get("ENV") || "") === "dryrun") {
-      console.log(`\nDRYRUN: Would have posted to Discord:\n${message}\n`);
+      console.log(`\nDRYRUN: Would have posted to Discord (channel: ${id}):\n${message}\n`);
       return;
     }
     await channel.send(message);
