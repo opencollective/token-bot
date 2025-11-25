@@ -1,6 +1,50 @@
 [
   {
-    "name": "fridge",
+    "name": "🏦 monerium savings account",
+    "provider": "etherscan",
+    "chain": "gnosis",
+    "address": "0x6fDF0AaE33E313d9C98D2Aa19Bcd8EF777912CBf",
+    "token": {
+      "address": "0x420CA0f9B9b604cE0fd9C18EF134C705e5Fa3430",
+      "name": "EURe",
+      "symbol": "EURe",
+      "decimals": 18
+    },
+    "frequency": ["weekly", "monthly"],
+    "channelId": "1372518467323826259"
+  },
+  {
+    "name": "💶 monerium checking account",
+    "provider": "etherscan",
+    "chain": "gnosis",
+    "address": "0xD578e7cd845e1ecD979b04784e77068D5eBd8716",
+    "token": {
+      "address": "0x420CA0f9B9b604cE0fd9C18EF134C705e5Fa3430",
+      "name": "EURe",
+      "symbol": "EURe",
+      "decimals": 18
+    },
+    "frequency": ["weekly", "monthly"],
+    "channelId": "1372518467323826259"
+  },
+  {
+    "name": "💳 stripe account",
+    "provider": "stripe",
+    "frequency": ["daily", "weekly", "monthly"],
+    "currency": "EUR",
+    "channelId": "1372518467323826259"
+  },
+  {
+    "name": "📝 openletter account",
+    "provider": "opencollective",
+    "collectiveSlug": "openletter",
+    "frequency": ["monthly"],
+    "currency": "EUR",
+    "channelId": "1372518467323826259"
+  },
+  {
+    "name": "🍻 fridge",
+    "provider": "etherscan",
     "chain": "gnosis",
     "address": "0x0492b5c6bd2564826ead6eeec9e1a9756603825e",
     "token": {
@@ -9,11 +53,12 @@
       "symbol": "EURb",
       "decimals": 6
     },
-    "frequency": "daily",
+    "frequency": ["daily", "weekly", "monthly"],
     "channelId": "1372518467323826259"
   },
   {
-    "name": "coffee",
+    "name": "☕️ coffee",
+    "provider": "etherscan",
     "chain": "gnosis",
     "address": "0xab33f1bc3a9d35fe6dad14dd2947e774cf58bc78",
     "token": {
@@ -22,7 +67,7 @@
       "symbol": "EURb",
       "decimals": 6
     },
-    "frequency": "daily",
+    "frequency": ["daily", "weekly", "monthly"],
     "channelId": "1372518467323826259"
   }
 ]

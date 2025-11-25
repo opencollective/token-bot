@@ -342,6 +342,7 @@ export class EtherscanClient {
 
 export type Monitor = {
   name: string;
+  provider: "etherscan";
   chain: string;
   token: {
     address: string;
@@ -366,52 +367,167 @@ function pluralize(word: string, count: number) {
   return count === 1 ? word : `${word}s`;
 }
 
-export async function getYesterdayTransfersSummary(monitor: Monitor) {
+function formatDate(date: Date): string {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}`;
+}
+
+function getWeekNumber(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+/**
+ * Generic function to get transfers summary for a specific time range
+ * @param monitor - Monitor configuration
+ * @param startDate - Start date for the range
+ * @param endDate - End date for the range
+ * @param periodLabel - Label to use in the message (e.g., "yesterday", "last month")
+ * @returns Summary message or null if no transactions
+ */
+export async function getTransfersSummary(
+  monitor: Monitor,
+  startDate: Date,
+  endDate: Date,
+  periodLabel: string,
+) {
   const etherscan = new EtherscanClient(
     chainIdByChain[monitor.chain as keyof typeof chainIdByChain],
   );
 
-  const d = new Date();
-  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
-  const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const startOfDayTimestamp = Math.floor(startOfDay.getTime() / 1000);
-  const endOfDayTimestamp = Math.floor(endOfDay.getTime() / 1000);
+  const startTimestamp = Math.floor(startDate.getTime() / 1000);
+  const endTimestamp = Math.floor(endDate.getTime() / 1000);
 
-  const transfers = await etherscan.getTokenTransfers(monitor.address, monitor.token.address);
-  const yesterdayTransfers = transfers.filter((transfer) =>
-    transfer.timeStamp >= startOfDayTimestamp && transfer.timeStamp <= endOfDayTimestamp
+  const transfers = await etherscan.getTokenTransfers(
+    monitor.address as Address,
+    monitor.token.address as Address,
+  );
+  const filteredTransfers = transfers.filter((transfer) =>
+    Number(transfer.timeStamp) >= startTimestamp && Number(transfer.timeStamp) <= endTimestamp
   );
 
-  console.log(`Yesterday transfers: ${yesterdayTransfers.length}`, startOfDay, endOfDay);
-
   const totalAmountIn =
-    yesterdayTransfers.filter((t) => t.to.toLowerCase() === monitor.address.toLowerCase()).reduce(
+    filteredTransfers.filter((t) => t.to.toLowerCase() === monitor.address.toLowerCase()).reduce(
       (acc, transfer) => acc + Number(transfer.value),
       0,
     ) / 10 ** monitor.token.decimals;
 
   const totalAmountOut =
-    yesterdayTransfers.filter((t) => t.from.toLowerCase() === monitor.address.toLowerCase()).reduce(
+    filteredTransfers.filter((t) => t.from.toLowerCase() === monitor.address.toLowerCase()).reduce(
       (acc, transfer) => acc + Number(transfer.value),
       0,
     ) / 10 ** monitor.token.decimals;
 
   if (totalAmountIn === 0 && totalAmountOut === 0) {
-    console.log(`No transactions found for ${monitor.name} on ${startOfDay.toLocaleDateString()}`);
+    console.log(`No transactions found for ${monitor.name} in ${periodLabel}`);
     return null;
   }
 
-  // console.log(yesterdayTransfers);
-  let message =
-    `${monitor.name} transactions on ${startOfDay.toLocaleDateString()}: ${yesterdayTransfers.length} ${
-      pluralize("transaction", yesterdayTransfers.length)
-    } for a total of ${totalAmountIn} ${monitor.token.symbol} in`;
-  if (totalAmountOut > 0) {
-    message += ` and ${totalAmountOut} ${monitor.token.symbol} out`;
+  // Format message based on period type
+  const isMoreThanOneDay = (endDate.getTime() - startDate.getTime()) > 86400000;
+  const isMonthly = periodLabel.startsWith("in ");
+  const isWeekly = periodLabel === "last week";
+  const isDaily = periodLabel === "yesterday";
+
+  let message = "";
+
+  const txLink = `https://txinfo.xyz/gnosis/token/${monitor.token.address}?a=${monitor.address}`;
+
+  if (isWeekly) {
+    // Weekly report format
+    const weekNum = getWeekNumber(startDate);
+    message = `${monitor.name} weekly report:\n`;
+    message += `- 🗓️ Week ${weekNum} (${formatDate(startDate)}-${
+      formatDate(endDate)
+    }): [${filteredTransfers.length} ${
+      pluralize("transaction", filteredTransfers.length)
+    }](<${txLink}>)\n`;
+    message += `- ↘️ ${totalAmountIn.toFixed(2)} ${monitor.token.symbol} (credit)\n`;
+    message += `- ↗️ ${totalAmountOut.toFixed(2)} ${monitor.token.symbol} (debit)`;
+  } else if (isMonthly) {
+    // Monthly report format
+    message = `${monitor.name} monthly report:\n`;
+    message += `- 📅 ${periodLabel.replace("in ", "")}: [${filteredTransfers.length} ${
+      pluralize("transaction", filteredTransfers.length)
+    }](<${txLink}>)\n`;
+    message += `- ↘️ ${totalAmountIn.toFixed(2)} ${monitor.token.symbol} (credit)\n`;
+    message += `- ↗️ ${totalAmountOut.toFixed(2)} ${monitor.token.symbol} (debit)`;
+  } else if (isDaily) {
+    // Daily report format
+    message = `${monitor.name} daily report:\n`;
+    message += `- 📆 ${formatDate(startDate)}: [${filteredTransfers.length} ${
+      pluralize("transaction", filteredTransfers.length)
+    }](<${txLink}>)\n`;
+    message += `- ↘️ ${totalAmountIn.toFixed(2)} ${monitor.token.symbol} (credit)\n`;
+    message += `- ↗️ ${totalAmountOut.toFixed(2)} ${monitor.token.symbol} (debit)`;
+  } else {
+    // Fallback to old format for custom periods
+    const dateDisplay = isMonthly
+      ? ""
+      : ` (${startDate.toLocaleDateString()}${
+        isMoreThanOneDay ? ` - ${endDate.toLocaleDateString()}` : ""
+      })`;
+    message =
+      `${monitor.name} transactions ${periodLabel}${dateDisplay}: ${filteredTransfers.length} ${
+        pluralize("transaction", filteredTransfers.length)
+      } for a total of ${totalAmountIn.toFixed(2)} ${monitor.token.symbol} in`;
+    if (totalAmountOut > 0) {
+      message += ` and ${totalAmountOut.toFixed(2)} ${monitor.token.symbol} out`;
+    }
+    message += `\n\n[View transactions](<${txLink}>)`;
   }
-  message +=
-    ` ([View](https://txinfo.xyz/gnosis/token/${monitor.token.address}?a=${monitor.address}))`;
+
   return message;
+}
+
+/**
+ * Get transfers summary for yesterday
+ * @param monitor - Monitor configuration
+ * @returns Summary message or null if no transactions
+ */
+export function getYesterdayTransfersSummary(monitor: Monitor) {
+  const d = new Date(Deno.env.get("TODAY") || new Date());
+  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+  const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  return getTransfersSummary(monitor, startOfDay, endOfDay, "yesterday");
+}
+
+/**
+ * Get transfers summary for the last month
+ * @param monitor - Monitor configuration
+ * @returns Summary message or null if no transactions
+ */
+export function getLastMonthTransfersSummary(monitor: Monitor) {
+  const d = new Date(Deno.env.get("TODAY") || new Date());
+  // Get first day of last month
+  // Note: Both getMonth() and Date constructor use 0-indexed months (0=Jan, 11=Dec)
+  // If today is November (month 10), last month October is month 9, so we use getMonth() - 1
+  const startOfLastMonth = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+  // Get first day of current month (which is the end boundary for last month's range)
+  const endOfLastMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+
+  // Get the month name (e.g., "October")
+  const monthName = startOfLastMonth.toLocaleString("en-US", { month: "long" });
+
+  return getTransfersSummary(monitor, startOfLastMonth, endOfLastMonth, `in ${monthName}`);
+}
+
+/**
+ * Get transfers summary for the last week
+ * @param monitor - Monitor configuration
+ * @returns Summary message or null if no transactions
+ */
+export function getLastWeekTransfersSummary(monitor: Monitor) {
+  const d = new Date(Deno.env.get("TODAY") || new Date());
+  const startOfWeek = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 7);
+  const endOfWeek = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  return getTransfersSummary(monitor, startOfWeek, endOfWeek, "last week");
 }
 
 /**

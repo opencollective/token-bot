@@ -19,7 +19,12 @@ import { formatUnits } from "@wevm/viem";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { RoleSetting } from "../types.ts";
 import { loadGuildFile, loadGuildSettings, loadRoles } from "../lib/utils.ts";
-import { getYesterdayTransfersSummary, Monitor } from "../lib/etherscan.ts";
+import {
+  getLastMonthTransfersSummary,
+  getLastWeekTransfersSummary,
+  getYesterdayTransfersSummary,
+  type Monitor,
+} from "../lib/monitors.ts";
 
 const IGNORE_USERS: string[] = [];
 
@@ -49,6 +54,20 @@ console.log(`DRY_RUN: ${DRY_RUN}`);
 
 let txCount = 0;
 
+const date = Deno.env.get("TODAY") ? new Date(Deno.env.get("TODAY") as string) : new Date();
+const month = date.getMonth();
+const day = date.getDate();
+const dayOfWeek = date.getDay();
+const hour = date.getHours();
+const minutes = date.getMinutes();
+
+console.log(`date: ${date}`);
+console.log(`month: ${month + 1}`);
+console.log(`day: ${day}`);
+console.log(`dayOfWeek: ${dayOfWeek}`);
+console.log(`hour: ${hour}`);
+console.log(`minutes: ${minutes}`);
+
 const processCommunity = async (guildId: string) => {
   const roles: RoleSetting[] = await loadRoles(guildId);
   const guildSettings = await loadGuildSettings(guildId);
@@ -66,22 +85,38 @@ const processCommunity = async (guildId: string) => {
     "with",
     roles.length,
     "roles and",
-    monitors?.length,
+    monitors?.length || 0,
     "monitors configured",
   );
 
-  for (const monitor of monitors) {
-    const message = await getYesterdayTransfersSummary(monitor);
-    if (message) {
-      await discord?.postToDiscordChannel(message as string, monitor.channelId);
+  if (monitors) {
+    for (const monitor of monitors) {
+      if (monitor.frequency.includes("daily")) {
+        const message = await getYesterdayTransfersSummary(monitor);
+        if (message) {
+          await discord?.postToDiscordChannel(message as string, monitor.channelId);
+        }
+      }
+      if (monitor.frequency.includes("weekly")) {
+        if (dayOfWeek === 1) {
+          const message = await getLastWeekTransfersSummary(monitor);
+          if (message) {
+            await discord?.postToDiscordChannel(message as string, monitor.channelId);
+          }
+        }
+      }
+      if (monitor.frequency.includes("monthly")) {
+        if (day === 1) {
+          const message = await getLastMonthTransfersSummary(monitor);
+          if (message) {
+            await discord?.postToDiscordChannel(message as string, monitor.channelId);
+          }
+        }
+      }
     }
   }
 
-  const date = new Date();
-  const day = date.getDate();
-  const dayOfWeek = date.getDay();
-
-  const since = new Date();
+  const since = new Date(date.getTime());
   since.setDate(since.getDate() - 10);
   const activeUsers = await discord.getActiveUsers(
     contributionsChannelId,
@@ -290,10 +325,6 @@ const processCommunity = async (guildId: string) => {
 };
 
 const main = async () => {
-  const date = new Date();
-  const day = date.getDate();
-  const dayOfWeek = date.getDay();
-
   console.log(`Running on ${day} of the month and ${dayOfWeek} of the week`);
 
   const botWallet = getWalletClient("celo");
