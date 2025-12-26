@@ -7,6 +7,13 @@
     "cron:local": "deno run --env-file=.env.test --allow-read=./cache --allow-read=./data --allow-write=./cache --allow-net --no-prompt --allow-env  src/commands/cron.ts",
     "reminder": "deno run --env-file=.env --allow-read=./cache --allow-write=./cache --allow-net --no-prompt --allow-env src/commands/reminder.ts",
     "process-missing-txs": "deno run --env-file=.env --allow-read=./missing-txs.json --allow-write=./missing-txs.json --allow-net --no-prompt --allow-env  src/commands/process-missing-txs.ts",
+    "list-calendars": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/list-calendars.ts",
+    "list-calendars:debug": "DEBUG=1 deno run --allow-read --allow-net --allow-env --no-prompt src/commands/list-calendars.ts",
+    "create-test-calendar": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/create-test-calendar.ts",
+    "test-calendar-full": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/test-calendar-full.ts",
+    "test-calendar-access": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/test-calendar-access.ts",
+    "sync-calendars": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/sync-shared-calendars.ts",
+    "cli": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/cli.ts",
     "hh:node": "cd hardhat && npx hardhat node",
     "hh:deploy": "deno run --allow-run --cwd=hardhat npm:hardhat run scripts/deploy.ts --network localhost",
     "test:mint": "deno test --allow-run --allow-net --allow-env --env-file=.env.test --allow-read --allow-write tests/lib.blockchain.mint.test.ts",
@@ -35,6 +42,9 @@
     "@safe-global/api-kit": "npm:@safe-global/api-kit@^4.0.0",
     "@safe-global/protocol-kit": "npm:@safe-global/protocol-kit@^6.1.1",
     "@safe-global/types-kit": "npm:@safe-global/types-kit@3.0.0",
-    "viem": "npm:viem@^2.39.0"
+    "viem": "npm:viem@^2.39.0",
+    "googleapis": "npm:googleapis@^144.0.0",
+    "@cliffy/prompt": "jsr:@cliffy/prompt@^1.0.0-rc.7",
+    "chrono-node": "npm:chrono-node@^2.7.8"
   }
 }

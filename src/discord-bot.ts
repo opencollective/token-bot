@@ -22,7 +22,13 @@ import commands from "./commands.json" with { type: "json" };
 import { createPublicClient, createWalletClient, erc20Abi, formatUnits, http } from "@wevm/viem";
 import { base, celo, gnosis, polygon } from "@wevm/viem/chains";
 import { privateKeyToAccount } from "@wevm/viem/accounts";
-import { loadGuildSettings, loadRoles, saveGuildSettings, saveRoles } from "./lib/utils.ts";
+import {
+  loadGuildFile,
+  loadGuildSettings,
+  loadRoles,
+  saveGuildSettings,
+  saveRoles,
+} from "./lib/utils.ts";
 
 import type {
   BlockchainAddress,
@@ -30,6 +36,7 @@ import type {
   ChannelSetupState,
   CostEditState,
   GuildSettings,
+  Product,
   RewardEditState,
   RoleSetting,
   TokenSetupState,
@@ -38,7 +45,10 @@ import { deployTokenContract } from "./lib/blockchain.ts";
 
 const BOT_TOKEN = Deno.env.get("DISCORD_BOT_TOKEN")!;
 const CLIENT_ID = Deno.env.get("DISCORD_CLIENT_ID")!;
-const GUILD_ID = "1418496180643696782"; // open source village discord server
+// Set a GUILD_ID to test the bot in a specific server
+// const GUILD_ID = "1418496180643696782"; // open source village discord server
+const GUILD_ID = Deno.env.get("DISCORD_GUILD_ID")!;
+
 const PRIVATE_KEY = Deno.env.get("PRIVATE_KEY") as `0x${string}`;
 const CHAIN = Deno.env.get("CHAIN") as SupportedChain || "base_sepolia";
 
@@ -49,6 +59,8 @@ const costEditStates = new Map<string, CostEditState>();
 
 import { getNativeBalance, getWalletClient, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand from "./commands/mint.ts";
+import { handleBookButton, handleBookCommand } from "./commands/book.ts";
+import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 
 const botWallet = getWalletClient(CHAIN);
 const nativeBalance = await getNativeBalance(CHAIN, botWallet.account?.address as string);
@@ -159,6 +171,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // Handle autocomplete
+    if (interaction.isAutocomplete()) {
+      if (interaction.commandName === "book") {
+        const focusedValue = interaction.options.getFocused().toLowerCase();
+        const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+        const rooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
+
+        const filtered = rooms
+          .filter((room) =>
+            room.name.toLowerCase().includes(focusedValue) ||
+            room.slug.toLowerCase().includes(focusedValue)
+          )
+          .slice(0, 25) // Discord limit
+          .map((room) => ({
+            name: `${room.name} - ${
+              room.price.map((p) => `${p.amount} ${p.token}`).join(" or ")
+            }/${room.unit}`,
+            value: room.slug,
+          }));
+
+        await interaction.respond(filtered);
+        return;
+      }
+    }
+
     // Handle slash commands
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setup-token") {
@@ -176,16 +213,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "edit-costs") {
         return handleEditCostsCommand(interaction, userId, guildId);
       }
+      if (interaction.commandName === "book") {
+        return handleBookCommand(interaction, userId, guildId);
+      }
+      if (interaction.commandName === "cancel") {
+        return handleCancelCommand(interaction, userId, guildId);
+      }
     }
 
     // Handle component interactions
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith("book_")) {
+        return handleBookButton(interaction, userId, guildId);
+      }
+      if (
+        interaction.customId.startsWith("cancel_confirm_") ||
+        interaction.customId === "cancel_abort"
+      ) {
+        return handleCancelButton(interaction, userId);
+      }
       return handleButton(interaction, userId, guildId);
     }
     if (interaction.isChannelSelectMenu()) {
       return handleChannelSelect(interaction, userId, guildId);
     }
     if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === "cancel_select_event") {
+        return handleCancelSelect(interaction, userId);
+      }
       return handleStringSelect(interaction, userId, guildId);
     }
     if (interaction.isRoleSelectMenu()) {
@@ -274,7 +329,7 @@ async function handleEditRewardsCommand(
 ) {
   if (!interaction.isChatInputCommand()) return;
 
-  const settings = await loadSettings(guildId);
+  const settings = await loadGuildSettings(guildId);
   if (!settings) {
     await interaction.reply({
       content: "⚠️ Please run `/setup-token` and `/setup-channels` first.",
@@ -353,7 +408,7 @@ async function handleEditCostsCommand(
 ) {
   if (!interaction.isChatInputCommand()) return;
 
-  const settings = await loadSettings(guildId);
+  const settings = await loadGuildSettings(guildId);
   if (!settings) {
     await interaction.reply({
       content: "⚠️ Please run `/setup-token` and `/setup-channels` first.",
@@ -600,14 +655,14 @@ async function handleStringSelect(
   // Reward active contributors
   if (customId === "reward_active") {
     const state = rewardEditStates.get(userId);
-    if (!state || !state.roleId) return;
+    if (!state || !state.id) return;
 
     state.onlyToActiveContributors = interaction.values[0] === "yes";
     rewardEditStates.set(userId, state);
 
     // Update saved settings
     const roles = await loadRoles(guildId);
-    const roleIndex = roles.findIndex((r) => r.roleId === state.roleId);
+    const roleIndex = roles.findIndex((r) => r.id === state.id);
     if (roleIndex >= 0) {
       roles[roleIndex].onlyToActiveContributors = state.onlyToActiveContributors;
       await saveRoles(guildId, roles);

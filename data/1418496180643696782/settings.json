@@ -4,7 +4,8 @@
     "symbol": "OSVT",
     "decimals": 6,
     "chain": "base_sepolia",
-    "address": "0x7050e56d04e0965a0f840179fc0d25bce9b5dec4"
+    "address": "0x7050e56d04e0965a0f840179fc0d25bce9b5dec4",
+    "mintInstructions": "To earn tokens, contribute to the Open Source Village community and join one of our weekly heartbeat call (every Tuesday 10am CET)."
   },
   "guild": {
     "id": "1418496180643696782",

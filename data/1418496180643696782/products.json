@@ -1,0 +1,88 @@
+[
+  {
+    "type": "room",
+    "unit": "hour",
+    "slug": "satoshiroom",
+    "name": "Satoshi Room",
+    "availabilities": "anytime",
+    "price": [
+      {
+        "token": "CHT",
+        "amount": 2
+      },
+      {
+        "token": "EURb",
+        "amount": 50
+      }
+    ]
+  },
+  {
+    "type": "room",
+    "unit": "hour",
+    "slug": "phonebooth",
+    "name": "Phone booth",
+    "availabilities": "anytime",
+    "calendarId": "c_d85b07cd944c033724c8b4adbea66840619181e445e2e6c8062cc0f761f15218@group.calendar.google.com",
+    "price": [
+      {
+        "token": "CHT",
+        "amount": 0.5
+      },
+      {
+        "token": "EURb",
+        "amount": 10
+      }
+    ]
+  },
+  {
+    "type": "room",
+    "unit": "hour",
+    "slug": "mushroom",
+    "name": "Mush Room",
+    "availabilities": "anytime",
+    "price": [
+      {
+        "token": "CHT",
+        "amount": 1
+      },
+      {
+        "token": "EURb",
+        "amount": 35
+      }
+    ]
+  },
+  {
+    "type": "room",
+    "unit": "hour",
+    "name": "Angel Room",
+    "slug": "angelroom",
+    "availabilities": "anytime",
+    "price": [
+      {
+        "token": "CHT",
+        "amount": 1
+      },
+      {
+        "token": "EURb",
+        "amount": 35
+      }
+    ]
+  },
+  {
+    "type": "room",
+    "unit": "hour",
+    "name": "Ostrom Room",
+    "slug": "ostromroom",
+    "availabilities": "anytime",
+    "price": [
+      {
+        "token": "CHT",
+        "amount": 3
+      },
+      {
+        "token": "EURb",
+        "amount": 100
+      }
+    ]
+  }
+]

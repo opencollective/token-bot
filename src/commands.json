@@ -90,5 +90,40 @@
         ]
       }
     ]
+  },
+  {
+    "name": "book",
+    "description": "Book a meeting room",
+    "options": [
+      {
+        "name": "room",
+        "description": "The meeting room to book",
+        "type": 3,
+        "required": true,
+        "autocomplete": true
+      },
+      {
+        "name": "when",
+        "description": "When to book (e.g., 'tomorrow 2pm', 'next Monday 10am', '14:00')",
+        "type": 3,
+        "required": true
+      },
+      {
+        "name": "duration",
+        "description": "Duration (e.g., '1h', '30m', '2h') - default: 1h",
+        "type": 3,
+        "required": false
+      },
+      {
+        "name": "name",
+        "description": "Event name (optional, e.g., 'Team Sync', 'Client Meeting')",
+        "type": 3,
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "cancel",
+    "description": "Cancel one of your upcoming room bookings"
   }
 ]

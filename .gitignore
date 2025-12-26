@@ -81,6 +81,7 @@ web_modules/
 .env.production.local
 .env.local
 !.env.example
+google-account-key.json
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

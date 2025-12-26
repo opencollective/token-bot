@@ -8,6 +8,7 @@ export type GuildSettings = {
     decimals: number;
     chain: Chain;
     address: BlockchainAddress;
+    mintInstructions?: string;
   };
   guild: {
     id: string;
@@ -68,4 +69,25 @@ export type CostEditState = {
   frequency?: "daily" | "weekly" | "monthly";
   rolesToPingIfEmpty: string[];
   onlyToActiveContributors?: boolean;
+};
+
+export type Product = {
+  type: "room";
+  unit: "hour";
+  slug: string;
+  name: string;
+  availabilities: string;
+  calendarId?: string;
+  price: {
+    token: string;
+    amount: number;
+  }[];
+};
+
+export type BookState = {
+  productSlug?: string;
+  startTime?: Date;
+  endTime?: Date;
+  duration?: number;
+  name?: string;
 };
