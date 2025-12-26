@@ -14,6 +14,7 @@ export type GuildSettings = {
     id: string;
     name: string;
     icon: string | null;
+    timezone?: string;
   };
   creator: {
     id: string;
@@ -78,6 +79,7 @@ export type Product = {
   name: string;
   availabilities: string;
   calendarId?: string;
+  channelId?: string;
   price: {
     token: string;
     amount: number;

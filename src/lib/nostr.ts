@@ -74,10 +74,9 @@ export class Nostr {
     private readonly nsec?: string,
     readonly relays?: string[],
   ) {
-    this.nsec = nsec || process.env.NOSTR_NSEC;
+    this.nsec = nsec || Deno.env.get("NOSTR_NSEC");
     this.relays = relays || [
       "wss://nostr-pub.wellorder.net",
-      "wss://relay.nostr.band",
       "wss://relay.damus.io",
     ];
     this.pool = new SimplePool();

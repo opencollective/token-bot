@@ -10,7 +10,8 @@
   "guild": {
     "id": "1418496180643696782",
     "name": "Open Source Village",
-    "icon": "b5dada4f0699cc36d110d5c8db0f1c9f"
+    "icon": "b5dada4f0699cc36d110d5c8db0f1c9f",
+    "timezone": "Europe/Brussels"
   },
   "creator": {
     "id": "689614876515237925",

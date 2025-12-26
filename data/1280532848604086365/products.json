@@ -6,6 +6,7 @@
     "name": "Satoshi Room",
     "availabilities": "anytime",
     "calendarId": "c_fce54b1bddc311791897f8a8723d0b10d7e3b69ea520baee0d267ce9d3266068@group.calendar.google.com",
+    "channelId": "1443322243949137971",
     "price": [
       {
         "token": "CHT",
@@ -24,6 +25,7 @@
     "name": "Phone booth",
     "availabilities": "anytime",
     "calendarId": "c_d85b07cd944c033724c8b4adbea66840619181e445e2e6c8062cc0f761f15218@group.calendar.google.com",
+    "channelId": "1454246273522598050",
     "price": [
       {
         "token": "CHT",
@@ -42,6 +44,7 @@
     "name": "Mush Room",
     "availabilities": "anytime",
     "calendarId": "c_928d7621e14426ed508df906a7881dafc079757b44cea074d2434b405f86df7a@group.calendar.google.com",
+    "channelId": "1443322284160057455",
     "price": [
       {
         "token": "CHT",
@@ -60,6 +63,7 @@
     "slug": "angelroom",
     "availabilities": "anytime",
     "calendarId": "c_3950a43f7dcd7c13415ca8d85ec6f96daffa9baf952ea653a063d03f22a5a6fe@group.calendar.google.com",
+    "channelId": "1443322374396051660",
     "price": [
       {
         "token": "CHT",
@@ -78,6 +82,7 @@
     "slug": "ostromroom",
     "availabilities": "anytime",
     "calendarId": "c_72861dcac23416de3fe708f857f5c74f2e2578fe7da94dcee0a55922734417ef@group.calendar.google.com",
+    "channelId": "1443322327159803945",
     "price": [
       {
         "token": "CHT",

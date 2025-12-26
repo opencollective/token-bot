@@ -28,6 +28,37 @@ async function getCachedAddress(discordUserId: string): Promise<string> {
   return address;
 }
 
+// Helper function to format date for Discord messages
+function formatDiscordDate(date: Date): string {
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const months = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  return `${days[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()}`;
+}
+
+// Helper function to format time for Discord messages (2:30pm)
+function formatDiscordTime(date: Date): string {
+  let hours = date.getHours();
+  const minutes = date.getMinutes();
+  const ampm = hours >= 12 ? "pm" : "am";
+  hours = hours % 12;
+  hours = hours ? hours : 12; // 0 should be 12
+  const minutesStr = minutes < 10 ? `0${minutes}` : minutes.toString();
+  return `${hours}:${minutesStr}${ampm}`;
+}
+
 export const cancelStates = new Map<string, {
   userEvents: Array<{
     event: CalendarEvent;
@@ -333,8 +364,18 @@ export async function handleCancelButton(
           ) as TextChannel;
 
           if (transactionsChannel) {
+            const calendarUrl = `https://calendar.google.com/calendar/embed?src=${
+              encodeURIComponent(selectedItem.calendarId)
+            }&ctz=${encodeURIComponent(guildSettings.guild.timezone || "Europe/Brussels")}`;
+
+            const dateStr = formatDiscordDate(startDate);
+            const startTimeStr = formatDiscordTime(startDate);
+            const endTimeStr = formatDiscordTime(endDate);
+
             await transactionsChannel.send(
-              `<@${userId}> cancelled booking for ${selectedItem.productName} (${refundPercentage}% refund: ${refundAmount.toFixed(2)} ${tokenSymbol}) [<tx>](<${txUrl}>)`,
+              `❌ <@${userId}> cancelled booking for ${selectedItem.productName} on ${dateStr} from ${startTimeStr} till ${endTimeStr} (${refundPercentage}% refund: ${
+                refundAmount.toFixed(2)
+              } ${tokenSymbol}) [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
             );
           }
         } catch (error) {
@@ -357,6 +398,36 @@ export async function handleCancelButton(
         });
       } catch (error) {
         console.error("Error sending Nostr annotation:", error);
+      }
+
+      // Send message to room-specific channel if configured
+      try {
+        const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+        const product = products?.find((p) => p.slug === selectedItem.productSlug);
+
+        if (product?.channelId && interaction.guild) {
+          const roomChannel = await interaction.guild.channels.fetch(
+            product.channelId,
+          ) as TextChannel;
+
+          if (roomChannel) {
+            const calendarUrl = `https://calendar.google.com/calendar/embed?src=${
+              encodeURIComponent(selectedItem.calendarId)
+            }&ctz=${encodeURIComponent(guildSettings.guild.timezone || "Europe/Brussels")}`;
+
+            const dateStr = formatDiscordDate(startDate);
+            const startTimeStr = formatDiscordTime(startDate);
+            const endTimeStr = formatDiscordTime(endDate);
+
+            await roomChannel.send(
+              `❌ <@${userId}> cancelled booking for ${selectedItem.productName} on ${dateStr} from ${startTimeStr} till ${endTimeStr} (${refundPercentage}% refund: ${
+                refundAmount.toFixed(2)
+              } ${tokenSymbol}) [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Error sending message to room channel:", error);
       }
 
       cancelStates.delete(userId);

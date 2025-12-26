@@ -131,7 +131,8 @@ export async function handleBookCommand(
   const parsedDates = chrono.parse(whenInput);
   if (parsedDates.length === 0) {
     await interaction.reply({
-      content: `⚠️ Could not parse time: "${whenInput}"\n\nTry formats like:\n- "tomorrow 2pm"\n- "next Monday at 10am"\n- "14:00"\n- "in 2 hours"`,
+      content:
+        `⚠️ Could not parse time: "${whenInput}"\n\nTry formats like:\n- "tomorrow 2pm"\n- "next Monday at 10am"\n- "14:00"\n- "in 2 hours"`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -143,7 +144,8 @@ export async function handleBookCommand(
   const durationMatch = durationInput.match(/^(\d+(?:\.\d+)?)\s*(h|hours?|m|minutes?)?$/i);
   if (!durationMatch) {
     await interaction.reply({
-      content: `⚠️ Invalid duration format: "${durationInput}"\n\nTry formats like: "1h", "30m", "2h", "90m"`,
+      content:
+        `⚠️ Invalid duration format: "${durationInput}"\n\nTry formats like: "1h", "30m", "2h", "90m"`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -151,9 +153,7 @@ export async function handleBookCommand(
 
   const durationValue = parseFloat(durationMatch[1]);
   const durationUnit = durationMatch[2]?.toLowerCase() || "h";
-  const durationMinutes = durationUnit.startsWith("h")
-    ? durationValue * 60
-    : durationValue;
+  const durationMinutes = durationUnit.startsWith("h") ? durationValue * 60 : durationValue;
 
   if (durationMinutes <= 0) {
     await interaction.reply({
@@ -168,7 +168,10 @@ export async function handleBookCommand(
   // Check if start time is in the past
   if (startTime < new Date()) {
     await interaction.reply({
-      content: `⚠️ Start time is in the past.\n\nParsed time: ${startTime.toLocaleString()}\nCurrent time: ${new Date().toLocaleString()}`,
+      content:
+        `⚠️ Start time is in the past.\n\nParsed time: ${startTime.toLocaleString()}\nCurrent time: ${
+          new Date().toLocaleString()
+        }`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -249,7 +252,9 @@ ${"=".repeat(60)}
 
   if (!hasEnoughBalance) {
     const mintInstructions = guildSettings.contributionToken.mintInstructions || "";
-    content += `\n\n⚠️ **Insufficient balance**\nYou need ${priceAmount.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.\n\n${mintInstructions}`;
+    content += `\n\n⚠️ **Insufficient balance**\nYou need ${
+      priceAmount.toFixed(2)
+    } ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.\n\n${mintInstructions}`;
   }
 
   await interaction.reply({
@@ -309,6 +314,10 @@ export async function handleBookButton(
       });
       return;
     }
+
+    const calendarUrl = `https://calendar.google.com/calendar/embed?src=${
+      encodeURIComponent(product.calendarId!)
+    }&ctz=${encodeURIComponent(guildSettings.guild.timezone || "Europe/Brussels")}`;
 
     // Calculate price
     const hours = (state.duration || 60) / 60;
@@ -397,7 +406,9 @@ ${mintInstructions}`,
               const endTimeStr = formatDiscordTime(state.endTime);
 
               const message = await transactionsChannel.send(
-                `<@${userId}> booked ${product.name} on ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol} [<tx>](<${txUrl}>)`,
+                `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
+                  priceAmount.toFixed(2)
+                } ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
               );
 
               // Create Discord message link
@@ -410,11 +421,16 @@ ${mintInstructions}`,
         }
 
         // Create detailed calendar event description
-        let eventDescription = `Booked by ${interaction.user.displayName} (@${interaction.user.username}) on ${bookingDateStr} at ${bookingTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol}`;
+        let eventDescription =
+          `Booked by ${interaction.user.displayName} (@${interaction.user.username}) on ${bookingDateStr} at ${bookingTimeStr} for ${
+            priceAmount.toFixed(2)
+          } ${tokenSymbol}`;
         if (transactionMessageLink) {
           eventDescription += `\n${transactionMessageLink}`;
         }
-        eventDescription += `\n\nUser ID: ${interaction.user.id}\nRoom: ${product.name}`;
+        eventDescription +=
+          `\n\nPlease reach out to @${interaction.user.username} on Discord for questions about this booking.
+          \n\nTo cancel, ${interaction.user.displayName} needs to run the /cancel command in Discord.`;
 
         await calendarClient.createEvent(product.calendarId, {
           summary: state.name || "Room Booking",
@@ -446,11 +462,30 @@ ${mintInstructions}`,
           console.error("Error sending Nostr annotation:", error);
         }
 
-        bookStates.delete(userId);
+        // Send message to room-specific channel if configured
+        if (product.channelId && interaction.guild) {
+          try {
+            const roomChannel = await interaction.guild.channels.fetch(
+              product.channelId,
+            ) as TextChannel;
 
-        const calendarUrl = `https://calendar.google.com/calendar/embed?src=${
-          encodeURIComponent(product.calendarId!)
-        }`;
+            if (roomChannel) {
+              const dateStr = formatDiscordDate(state.startTime);
+              const startTimeStr = formatDiscordTime(state.startTime);
+              const endTimeStr = formatDiscordTime(state.endTime);
+
+              await roomChannel.send(
+                `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
+                  priceAmount.toFixed(2)
+                } ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
+              );
+            }
+          } catch (error) {
+            console.error("Error sending message to room channel:", error);
+          }
+        }
+
+        bookStates.delete(userId);
 
         await interaction.editReply({
           content: `✅ **Booking Confirmed!**
@@ -461,7 +496,7 @@ ${mintInstructions}`,
 **End:** ${state.endTime.toLocaleString()}
 **Paid:** ${priceAmount.toFixed(2)} ${tokenSymbol}
 
-[View transaction](${txUrl})
+[View transaction](<${txUrl}>)
 
 You can view the calendar of all bookings for the ${product.name} room on its [public calendar](<${calendarUrl}>).`,
         });

@@ -16,7 +16,8 @@
   "guild": {
     "id": "1280532848604086365",
     "name": "Commons Hub Brussels",
-    "icon": ""
+    "icon": "",
+    "timezone": "Europe/Brussels"
   },
   "creator": {
     "id": "689614876515237925",
