@@ -61,6 +61,7 @@ import { getNativeBalance, getWalletClient, SupportedChain } from "./lib/blockch
 import handleMintCommand from "./commands/mint.ts";
 import { handleBookButton, handleBookCommand } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
+import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 
 const botWallet = getWalletClient(CHAIN);
 const nativeBalance = await getNativeBalance(CHAIN, botWallet.account?.address as string);
@@ -70,6 +71,22 @@ console.log(">>> nativeBalance", formatUnits(nativeBalance, 18));
 if (nativeBalance < BigInt(0.001 * 10 ** 18)) {
   console.error("❌ Bot wallet has less than 0.001 ETH");
   Deno.exit(1);
+}
+
+// Check Google Calendar credentials
+let calendarEnabled = false;
+try {
+  const keyFilePath = Deno.env.get("GOOGLE_ACCOUNT_KEY_FILEPATH") || "./google-account-key.json";
+  await Deno.stat(keyFilePath);
+
+  // Try to instantiate the client to verify credentials are valid
+  const testClient = new GoogleCalendarClient();
+  calendarEnabled = true;
+  console.log("✅ Google Calendar credentials found and loaded");
+} catch (error) {
+  console.warn("⚠️  Google Calendar credentials not found or invalid");
+  console.warn("⚠️  /book and /cancel commands will be disabled");
+  console.warn(`⚠️  Set GOOGLE_ACCOUNT_KEY_FILEPATH or place credentials at ./google-account-key.json`);
 }
 
 const client = new Client({
@@ -138,10 +155,17 @@ async function registerCommands() {
 
     console.log("🔄 Registering application (/) commands...");
 
+    // Filter out calendar commands if credentials are not available
+    let commandsToRegister = commands;
+    if (!calendarEnabled) {
+      commandsToRegister = commands.filter(cmd => cmd.name !== "book" && cmd.name !== "cancel");
+      console.log("⚠️  Skipping registration of /book and /cancel commands (no calendar credentials)");
+    }
+
     if (GUILD_ID) {
-      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandsToRegister });
     } else {
-      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commandsToRegister });
     }
 
     console.log("✅ Successfully registered application (/) commands.");
@@ -174,6 +198,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // Handle autocomplete
     if (interaction.isAutocomplete()) {
       if (interaction.commandName === "book") {
+        if (!calendarEnabled) {
+          await interaction.respond([]);
+          return;
+        }
+
         const focusedValue = interaction.options.getFocused().toLowerCase();
         const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
         const rooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
@@ -214,9 +243,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return handleEditCostsCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "book") {
+        if (!calendarEnabled) {
+          await interaction.reply({
+            content: "⚠️ Calendar features are disabled. Google Calendar credentials not found.",
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
         return handleBookCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "cancel") {
+        if (!calendarEnabled) {
+          await interaction.reply({
+            content: "⚠️ Calendar features are disabled. Google Calendar credentials not found.",
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
         return handleCancelCommand(interaction, userId, guildId);
       }
     }
