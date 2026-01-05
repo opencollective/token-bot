@@ -7,7 +7,7 @@ import {
   StringSelectMenuBuilder,
   TextChannel,
 } from "discord.js";
-import { GoogleCalendarClient, CalendarEvent } from "../lib/googlecalendar.ts";
+import { CalendarEvent, GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { Product } from "../types.ts";
 import { mintTokens, SupportedChain } from "../lib/blockchain.ts";
@@ -172,7 +172,8 @@ export async function handleCancelCommand(
     );
 
     await interaction.editReply({
-      content: `📅 **Your Upcoming Bookings**\n\nYou have ${userEvents.length} upcoming booking(s). Select one to cancel:`,
+      content:
+        `📅 **Your Upcoming Bookings**\n\nYou have ${userEvents.length} upcoming booking(s). Select one to cancel:`,
       components: [selectMenu],
     });
   } catch (error) {
@@ -389,7 +390,8 @@ export async function handleCancelButton(
         const txUri = `ethereum:${chainId}:tx:${txHash}` as URI;
 
         await nostr.publishMetadata(txUri, {
-          content: `Cancelled booking for ${selectedItem.productName} room (${refundPercentage}% refund)`,
+          content:
+            `Cancelled booking for ${selectedItem.productName} room (${refundPercentage}% refund)`,
           tags: [
             ["t", "booking"],
             ["t", "cancellation"],
@@ -435,11 +437,13 @@ export async function handleCancelButton(
       await interaction.editReply({
         content: `✅ **Booking Cancelled!**
 
-Your booking for "${selectedItem.event.summary || "Room Booking"}" in ${selectedItem.productName} has been cancelled.
+Your booking for "${
+          selectedItem.event.summary || "Room Booking"
+        }" in ${selectedItem.productName} has been cancelled.
 
 **Refund:** ${refundAmount.toFixed(2)} ${tokenSymbol} (${refundPercentage}%)
 
-[View refund transaction](${txUrl})`,
+[View refund transaction](<${txUrl}>)`,
       });
     } catch (error) {
       console.error("Error cancelling booking:", error);

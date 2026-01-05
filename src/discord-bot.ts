@@ -63,6 +63,20 @@ import { handleBookButton, handleBookCommand } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 
+// Display server startup time and timezone
+const now = new Date();
+const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const dateTimeStr = now.toLocaleString('en-GB', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+  timeZone: timezone
+});
+console.log(`🚀 Server starting at ${dateTimeStr} (${timezone})`);
+
 const botWallet = getWalletClient(CHAIN);
 const nativeBalance = await getNativeBalance(CHAIN, botWallet.account?.address as string);
 console.log(">>> botWallet address", botWallet.account?.address, "on", CHAIN);
