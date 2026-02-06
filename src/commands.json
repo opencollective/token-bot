@@ -26,6 +26,12 @@
         "type": 10,
         "required": true,
         "min_value": 0.01
+      },
+      {
+        "name": "message",
+        "description": "Optional message for the notification (e.g., reason for minting)",
+        "type": 3,
+        "required": false
       }
     ]
   },
