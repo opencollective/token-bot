@@ -36,6 +36,18 @@
     ]
   },
   {
+    "name": "balance",
+    "description": "Check your token balance (or another user's balance)",
+    "options": [
+      {
+        "name": "user",
+        "description": "User to check balance for (optional, defaults to yourself)",
+        "required": false,
+        "type": 6
+      }
+    ]
+  },
+  {
     "name": "send",
     "description": "Send tokens to another user",
     "options": [
