@@ -36,6 +36,31 @@
     ]
   },
   {
+    "name": "send",
+    "description": "Send tokens to another user",
+    "options": [
+      {
+        "name": "user",
+        "description": "The user to send tokens to",
+        "required": true,
+        "type": 6
+      },
+      {
+        "name": "amount",
+        "description": "Number of tokens to send",
+        "type": 10,
+        "required": true,
+        "min_value": 0.01
+      },
+      {
+        "name": "message",
+        "description": "Optional message (e.g., reason for sending)",
+        "type": 3,
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "edit-rewards",
     "description": "Configure token rewards for a role (admin only)",
     "default_member_permissions": "8",

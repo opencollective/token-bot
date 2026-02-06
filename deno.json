@@ -45,6 +45,7 @@
     "viem": "npm:viem@^2.39.0",
     "googleapis": "npm:googleapis@^144.0.0",
     "@cliffy/prompt": "jsr:@cliffy/prompt@^1.0.0-rc.7",
-    "chrono-node": "npm:chrono-node@^2.7.8"
+    "chrono-node": "npm:chrono-node@^2.7.8",
+    "@citizenwallet/sdk": "npm:@citizenwallet/sdk@^2.0.106"
   }
 }

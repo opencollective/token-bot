@@ -59,6 +59,7 @@ const costEditStates = new Map<string, CostEditState>();
 
 import { getNativeBalance, getWalletClient, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand from "./commands/mint.ts";
+import handleSendCommand from "./commands/send.ts";
 import { handleBookButton, handleBookCommand } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
@@ -249,6 +250,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "mint") {
         return handleMintCommand(interaction, userId, guildId);
+      }
+      if (interaction.commandName === "send") {
+        return handleSendCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "edit-rewards") {
         return handleEditRewardsCommand(interaction, userId, guildId);
