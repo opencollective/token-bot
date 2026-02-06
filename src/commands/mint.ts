@@ -2,6 +2,7 @@ import { Interaction, TextChannel } from "discord.js";
 import { mintTokens, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
+import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 
 // Parse user mentions from a string, returns array of user IDs
 function parseUserMentions(input: string): string[] {
@@ -69,10 +70,13 @@ export default async function handleMintCommand(
   // Mint for each user
   for (const recipientUserId of recipientUserIds) {
     try {
+      // Convert Discord user ID to blockchain address
+      const recipientAddress = await getAccountAddressFromDiscordUserId(recipientUserId);
+      
       const hash = await mintTokens(
         chain,
         guildSettings.contributionToken.address,
-        recipientUserId,
+        recipientAddress,
         amount.toString(),
       );
 
