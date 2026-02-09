@@ -87,7 +87,7 @@ export type Product = {
 };
 
 export type BookState = {
-  step?: "date" | "hour" | "minute" | "duration" | "confirm";
+  step?: "room" | "date" | "time" | "duration" | "name" | "confirm";
   productSlug?: string;
   guildId?: string;
   name?: string;
