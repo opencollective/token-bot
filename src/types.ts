@@ -77,6 +77,7 @@ export type Product = {
   unit: "hour";
   slug: string;
   name: string;
+  capacity?: number;
   availabilities: string;
   calendarId?: string;
   channelId?: string;

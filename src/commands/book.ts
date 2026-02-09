@@ -271,6 +271,14 @@ export async function handleBookCommand(
     guildId,
   });
 
+  // Build room list with details
+  let roomList = "";
+  for (const room of bookableRooms) {
+    const capacityStr = room.capacity ? `👥 ${room.capacity}` : "";
+    const priceStr = room.price[0] ? `${room.price[0].amount} ${room.price[0].token}/h` : "";
+    roomList += `• **${room.name}** — ${capacityStr} · ${priceStr}\n`;
+  }
+
   // Build room selection buttons
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   
@@ -303,7 +311,7 @@ export async function handleBookCommand(
   rows.push(cancelRow);
 
   await interaction.reply({
-    content: `🗓️ **Book a Room**\n\n🏠 **Select a room:**`,
+    content: `🗓️ **Book a Room**\n\n${roomList}\n🏠 **Select a room:**`,
     components: rows,
     flags: MessageFlags.Ephemeral,
   });
@@ -616,6 +624,14 @@ export async function handleBookButton(
     const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
     const bookableRooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
 
+    // Build room list with details
+    let roomList = "";
+    for (const room of bookableRooms) {
+      const capacityStr = room.capacity ? `👥 ${room.capacity}` : "";
+      const priceStr = room.price[0] ? `${room.price[0].amount} ${room.price[0].token}/h` : "";
+      roomList += `• **${room.name}** — ${capacityStr} · ${priceStr}\n`;
+    }
+
     const rows: ActionRowBuilder<ButtonBuilder>[] = [];
     
     for (let i = 0; i < bookableRooms.length; i += 3) {
@@ -644,7 +660,7 @@ export async function handleBookButton(
     rows.push(cancelRow);
 
     await interaction.update({
-      content: `🗓️ **Book a Room**\n\n🏠 **Select a room:**`,
+      content: `🗓️ **Book a Room**\n\n${roomList}\n🏠 **Select a room:**`,
       components: rows,
     });
     return;
