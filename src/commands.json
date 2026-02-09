@@ -144,12 +144,6 @@
         "type": 3,
         "required": true,
         "autocomplete": true
-      },
-      {
-        "name": "name",
-        "description": "Event name (optional, e.g., 'Team Sync', 'Client Meeting')",
-        "type": 3,
-        "required": false
       }
     ]
   },
