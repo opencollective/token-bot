@@ -61,7 +61,7 @@ import { getNativeBalance, getWalletClient, SupportedChain } from "./lib/blockch
 import handleMintCommand from "./commands/mint.ts";
 import handleSendCommand from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
-import { handleBookButton, handleBookCommand } from "./commands/book.ts";
+import { handleBookButton, handleBookCommand, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 
@@ -305,6 +305,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId === "cancel_select_event") {
         return handleCancelSelect(interaction, userId);
+      }
+      if (interaction.customId === "book_date_select") {
+        return handleBookSelect(interaction, userId, guildId);
       }
       return handleStringSelect(interaction, userId, guildId);
     }
