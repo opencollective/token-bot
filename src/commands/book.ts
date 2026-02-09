@@ -253,31 +253,13 @@ export async function handleBookCommand(
 ) {
   if (!interaction.isChatInputCommand()) return;
 
-  const productSlug = interaction.options.getString("room");
-
-  if (!productSlug) {
-    await interaction.reply({
-      content: "⚠️ Please select a room.",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  // Load products to verify slug
+  // Load products (rooms) for selection
   const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
-  const product = products?.find((p) => p.slug === productSlug);
+  const bookableRooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
 
-  if (!product) {
+  if (bookableRooms.length === 0) {
     await interaction.reply({
-      content: `⚠️ Meeting room "${productSlug}" not found.`,
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  if (!product.calendarId) {
-    await interaction.reply({
-      content: "⚠️ This room doesn't have a calendar configured.",
+      content: "⚠️ No bookable rooms configured.",
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -285,10 +267,61 @@ export async function handleBookCommand(
 
   // Initialize booking state
   bookStates.set(userId, {
-    step: "date",
-    productSlug,
+    step: "room",
     guildId,
   });
+
+  // Build room selection buttons
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  
+  // Split rooms into rows of 3
+  for (let i = 0; i < bookableRooms.length; i += 3) {
+    const row = new ActionRowBuilder<ButtonBuilder>();
+    const chunk = bookableRooms.slice(i, i + 3);
+    
+    for (const room of chunk) {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`book_room_${room.slug}`)
+          .setLabel(room.name)
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+    rows.push(row);
+    
+    // Discord allows max 5 rows
+    if (rows.length >= 4) break;
+  }
+  
+  // Add cancel button
+  const cancelRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("book_cancel")
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Danger),
+  );
+  rows.push(cancelRow);
+
+  await interaction.reply({
+    content: `🗓️ **Book a Room**\n\n🏠 **Select a room:**`,
+    components: rows,
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+// Show date selection UI
+async function showDateSelection(
+  interaction: Interaction,
+  userId: string,
+  guildId: string,
+) {
+  if (!interaction.isButton()) return;
+
+  const state = bookStates.get(userId);
+  if (!state || !state.productSlug) return;
+
+  const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+  const product = products?.find((p) => p.slug === state.productSlug);
 
   // Build date selection buttons
   const dateOptions = getDateOptions();
@@ -334,20 +367,27 @@ export async function handleBookCommand(
       .setCustomId("book_date_other")
       .setLabel("Other date...")
       .setStyle(ButtonStyle.Secondary),
+  );
+  rows.push(row3);
+  
+  // Navigation row
+  const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("book_back_room")
+      .setLabel("← Back")
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("book_cancel")
       .setLabel("Cancel")
       .setStyle(ButtonStyle.Danger),
   );
-  rows.push(row3);
+  rows.push(navRow);
 
-  const state = bookStates.get(userId)!;
   const header = buildSelectionHeader(state, product);
 
-  await interaction.reply({
+  await interaction.update({
     content: `${header}\n📅 **Select a date:**`,
     components: rows,
-    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -368,6 +408,38 @@ export async function handleBookButton(
       content: "❌ Booking cancelled.",
       components: [],
     });
+    return;
+  }
+
+  // Room selection
+  if (customId.startsWith("book_room_")) {
+    if (!state) {
+      await interaction.update({
+        content: "⚠️ Session expired. Please run /book again.",
+        components: [],
+      });
+      return;
+    }
+
+    const roomSlug = customId.replace("book_room_", "");
+    
+    // Verify room exists
+    const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+    const product = products?.find((p) => p.slug === roomSlug);
+
+    if (!product || !product.calendarId) {
+      await interaction.update({
+        content: "⚠️ This room is not available for booking.",
+        components: [],
+      });
+      return;
+    }
+
+    state.productSlug = roomSlug;
+    state.step = "date";
+    bookStates.set(userId, state);
+
+    await showDateSelection(interaction, userId, guildId);
     return;
   }
 
@@ -496,12 +568,21 @@ export async function handleBookButton(
         .setCustomId("book_date_other")
         .setLabel("Other date...")
         .setStyle(ButtonStyle.Secondary),
+    );
+    rows.push(row3);
+    
+    // Navigation row
+    const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("book_back_room")
+        .setLabel("← Back")
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId("book_cancel")
         .setLabel("Cancel")
         .setStyle(ButtonStyle.Danger),
     );
-    rows.push(row3);
+    rows.push(navRow);
 
     const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
     const product = products?.find((p) => p.slug === state.productSlug);
@@ -509,6 +590,61 @@ export async function handleBookButton(
 
     await interaction.update({
       content: `${header}\n📅 **Select a date:**`,
+      components: rows,
+    });
+    return;
+  }
+
+  // Back to room selection
+  if (customId === "book_back_room") {
+    if (!state) {
+      await interaction.update({
+        content: "⚠️ Session expired. Please run /book again.",
+        components: [],
+      });
+      return;
+    }
+
+    state.step = "room";
+    state.productSlug = undefined;
+    state.selectedDate = undefined;
+    state.selectedHour = undefined;
+    state.selectedMinute = undefined;
+    bookStates.set(userId, state);
+
+    // Rebuild room selection
+    const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+    const bookableRooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
+
+    const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+    
+    for (let i = 0; i < bookableRooms.length; i += 3) {
+      const row = new ActionRowBuilder<ButtonBuilder>();
+      const chunk = bookableRooms.slice(i, i + 3);
+      
+      for (const room of chunk) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`book_room_${room.slug}`)
+            .setLabel(room.name)
+            .setStyle(ButtonStyle.Secondary),
+        );
+      }
+      rows.push(row);
+      
+      if (rows.length >= 4) break;
+    }
+    
+    const cancelRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("book_cancel")
+        .setLabel("Cancel")
+        .setStyle(ButtonStyle.Danger),
+    );
+    rows.push(cancelRow);
+
+    await interaction.update({
+      content: `🗓️ **Book a Room**\n\n🏠 **Select a room:**`,
       components: rows,
     });
     return;

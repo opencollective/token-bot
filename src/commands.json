@@ -136,16 +136,7 @@
   },
   {
     "name": "book",
-    "description": "Book a meeting room",
-    "options": [
-      {
-        "name": "room",
-        "description": "The meeting room to book",
-        "type": 3,
-        "required": true,
-        "autocomplete": true
-      }
-    ]
+    "description": "Book a meeting room"
   },
   {
     "name": "cancel",

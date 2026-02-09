@@ -211,36 +211,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // Handle autocomplete
-    if (interaction.isAutocomplete()) {
-      if (interaction.commandName === "book") {
-        if (!calendarEnabled) {
-          await interaction.respond([]);
-          return;
-        }
-
-        const focusedValue = interaction.options.getFocused().toLowerCase();
-        const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
-        const rooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
-
-        const filtered = rooms
-          .filter((room) =>
-            room.name.toLowerCase().includes(focusedValue) ||
-            room.slug.toLowerCase().includes(focusedValue)
-          )
-          .slice(0, 25) // Discord limit
-          .map((room) => ({
-            name: `${room.name} - ${
-              room.price.map((p) => `${p.amount} ${p.token}`).join(" or ")
-            }/${room.unit}`,
-            value: room.slug,
-          }));
-
-        await interaction.respond(filtered);
-        return;
-      }
-    }
-
     // Handle slash commands
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setup-token") {
