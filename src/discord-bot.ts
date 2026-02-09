@@ -61,7 +61,7 @@ import { getNativeBalance, getWalletClient, SupportedChain } from "./lib/blockch
 import handleMintCommand from "./commands/mint.ts";
 import handleSendCommand from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
-import { handleBookButton, handleBookCommand, handleBookSelect } from "./commands/book.ts";
+import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 
@@ -306,7 +306,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId === "cancel_select_event") {
         return handleCancelSelect(interaction, userId);
       }
-      if (interaction.customId === "book_date_select") {
+      if (interaction.customId === "book_date_select" || interaction.customId === "book_time_select") {
         return handleBookSelect(interaction, userId, guildId);
       }
       return handleStringSelect(interaction, userId, guildId);
@@ -849,6 +849,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   const userId = interaction.user.id;
   const guildId = interaction.guildId!;
+
+  // Handle book name modal
+  if (interaction.customId === "book_name_modal") {
+    return handleBookModal(interaction, userId, guildId);
+  }
 
   const state = tokenSetupStates.get(userId);
   if (!state) return;
