@@ -4,6 +4,7 @@
     "unit": "hour",
     "slug": "satoshiroom",
     "name": "Satoshi Room",
+    "capacity": 15,
     "availabilities": "anytime",
     "price": [
       {
@@ -21,6 +22,7 @@
     "unit": "hour",
     "slug": "phonebooth",
     "name": "Phone booth",
+    "capacity": 1,
     "availabilities": "anytime",
     "calendarId": "c_d85b07cd944c033724c8b4adbea66840619181e445e2e6c8062cc0f761f15218@group.calendar.google.com",
     "price": [
@@ -39,6 +41,7 @@
     "unit": "hour",
     "slug": "mushroom",
     "name": "Mush Room",
+    "capacity": 10,
     "availabilities": "anytime",
     "price": [
       {
@@ -56,6 +59,7 @@
     "unit": "hour",
     "name": "Angel Room",
     "slug": "angelroom",
+    "capacity": 12,
     "availabilities": "anytime",
     "price": [
       {
@@ -73,6 +77,7 @@
     "unit": "hour",
     "name": "Ostrom Room",
     "slug": "ostromroom",
+    "capacity": 80,
     "availabilities": "anytime",
     "price": [
       {
