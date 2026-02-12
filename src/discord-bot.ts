@@ -213,8 +213,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // Handle slash commands
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === "setup-token") {
-        return handleSetupTokenCommand(interaction, userId, guildId);
+      if (interaction.commandName === "list-tokens") {
+        return handleListTokensCommand(interaction, userId, guildId);
+      }
+      if (interaction.commandName === "add-token") {
+        return handleAddTokenCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "setup-channels") {
         return handleSetupChannelsCommand(interaction, userId, guildId);
@@ -295,13 +298,87 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// Helper function to format token list
+function formatTokenList(settings: GuildSettings | null): string {
+  if (!settings) {
+    return "No tokens configured yet.";
+  }
+
+  const tokens: string[] = [];
+
+  // Contribution token
+  if (settings.contributionToken?.address) {
+    const ct = settings.contributionToken;
+    const explorerUrl = getExplorerUrl(ct.chain, ct.address);
+    tokens.push(
+      `**Contribution Token**\n` +
+      `• Name: ${ct.name} (${ct.symbol})\n` +
+      `• Chain: ${ct.chain}\n` +
+      `• Decimals: ${ct.decimals}\n` +
+      `• Address: [\`${ct.address.slice(0, 10)}...${ct.address.slice(-8)}\`](${explorerUrl})`
+    );
+  }
+
+  // Fiat token (if configured)
+  const fiatToken = (settings as any).fiatToken;
+  if (fiatToken?.address) {
+    const explorerUrl = getExplorerUrl(fiatToken.chain, fiatToken.address);
+    tokens.push(
+      `**Fiat Token**\n` +
+      `• Name: ${fiatToken.name} (${fiatToken.symbol})\n` +
+      `• Chain: ${fiatToken.chain}\n` +
+      `• Decimals: ${fiatToken.decimals}\n` +
+      `• Address: [\`${fiatToken.address.slice(0, 10)}...${fiatToken.address.slice(-8)}\`](${explorerUrl})`
+    );
+  }
+
+  if (tokens.length === 0) {
+    return "No tokens configured yet.";
+  }
+
+  return tokens.join("\n\n");
+}
+
+// Helper to get block explorer URL for a token
+function getExplorerUrl(chain: Chain, address: string): string {
+  const explorers: Record<Chain, string> = {
+    celo: "https://celoscan.io/token",
+    gnosis: "https://gnosisscan.io/token",
+    base: "https://basescan.org/token",
+    base_sepolia: "https://sepolia.basescan.org/token",
+    polygon: "https://polygonscan.com/token",
+  };
+  return `${explorers[chain]}/${address}`;
+}
+
 // Command handlers
-async function handleSetupTokenCommand(
+async function handleListTokensCommand(
   interaction: Interaction,
-  userId: string,
-  _guildId: string,
+  _userId: string,
+  guildId: string,
 ) {
   if (!interaction.isChatInputCommand()) return;
+
+  const settings = await loadGuildSettings(guildId);
+  const tokenList = formatTokenList(settings);
+
+  await interaction.reply({
+    content: `**🪙 Configured Tokens**\n\n${tokenList}`,
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+async function handleAddTokenCommand(
+  interaction: Interaction,
+  userId: string,
+  guildId: string,
+) {
+  if (!interaction.isChatInputCommand()) return;
+
+  // Show existing tokens first
+  const settings = await loadGuildSettings(guildId);
+  const tokenList = formatTokenList(settings);
+  const hasTokens = settings?.contributionToken?.address || (settings as any)?.fiatToken?.address;
 
   tokenSetupStates.set(userId, { step: "choice" });
 
@@ -316,8 +393,12 @@ async function handleSetupTokenCommand(
       .setStyle(ButtonStyle.Secondary),
   );
 
+  const header = hasTokens 
+    ? `**🪙 Current Tokens**\n\n${tokenList}\n\n---\n\n**Add/Update Token**\n\nWould you like to create a new token or use an existing one?`
+    : "**🪙 Token Setup**\n\nNo tokens configured yet.\n\nWould you like to create a new token or use an existing one?";
+
   await interaction.reply({
-    content: "**🪙 Token Setup**\n\nWould you like to create a new token or use an existing one?",
+    content: header,
     components: [row],
     flags: MessageFlags.Ephemeral,
   });
