@@ -351,7 +351,7 @@ async function formatTokenList(settings: GuildSettings | null): Promise<string> 
     
     const shortAddr = `${ct.address.slice(0, 6)}…${ct.address.slice(-4)}`;
     let tokenInfo = `**${ct.name} (${ct.symbol})**\n`;
-    tokenInfo += `• Address: [${ct.chain}:${shortAddr}](${explorerUrl})\n`;
+    tokenInfo += `• Address: [${ct.chain}:${shortAddr}](<${explorerUrl}>)\n`;
     tokenInfo += `• Supply: ${stats.totalSupply} ${ct.symbol}`;
     if (stats.holders !== null) {
       tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
@@ -368,7 +368,7 @@ async function formatTokenList(settings: GuildSettings | null): Promise<string> 
     
     const shortAddr = `${fiatToken.address.slice(0, 6)}…${fiatToken.address.slice(-4)}`;
     let tokenInfo = `**${fiatToken.name} (${fiatToken.symbol})**\n`;
-    tokenInfo += `• Address: [${fiatToken.chain}:${shortAddr}](${explorerUrl})\n`;
+    tokenInfo += `• Address: [${fiatToken.chain}:${shortAddr}](<${explorerUrl}>)\n`;
     tokenInfo += `• Supply: ${stats.totalSupply} ${fiatToken.symbol}`;
     if (stats.holders !== null) {
       tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
