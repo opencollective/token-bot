@@ -57,8 +57,8 @@ const channelSetupStates = new Map<string, ChannelSetupState>();
 const rewardEditStates = new Map<string, RewardEditState>();
 const costEditStates = new Map<string, CostEditState>();
 
-import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, SupportedChain } from "./lib/blockchain.ts";
-import handleMintCommand from "./commands/mint.ts";
+import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
+import handleMintCommand, { handleMintButton, handleMintModal, handleMintSelect } from "./commands/mint.ts";
 import handleSendCommand from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
@@ -264,6 +264,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId.startsWith("book_")) {
         return handleBookButton(interaction, userId, guildId);
       }
+      if (interaction.customId.startsWith("mint_")) {
+        return handleMintButton(interaction, userId);
+      }
       if (
         interaction.customId.startsWith("cancel_confirm_") ||
         interaction.customId === "cancel_abort"
@@ -281,6 +284,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId === "book_date_select" || interaction.customId === "book_time_select") {
         return handleBookSelect(interaction, userId, guildId);
+      }
+      if (interaction.customId === "mint_token_select") {
+        return handleMintSelect(interaction, userId, guildId);
       }
       return handleStringSelect(interaction, userId, guildId);
     }
@@ -1023,12 +1029,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return handleBookModal(interaction, userId, guildId);
   }
 
+  // Handle mint details modal
+  if (interaction.customId === "mint_details_modal") {
+    return handleMintModal(interaction, userId, guildId);
+  }
+
   const state = tokenSetupStates.get(userId);
   if (!state) return;
 
   async function addTokenToSettings(
     guildId: string,
-    tokenInfo: { name: string; symbol: string; decimals: number; chain: Chain; address: BlockchainAddress },
+    tokenInfo: { name: string; symbol: string; decimals: number; chain: Chain; address: BlockchainAddress; mintable: boolean },
   ) {
     const settings = await loadGuildSettings(guildId) || {
       guild: {
@@ -1057,6 +1068,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       decimals: tokenInfo.decimals,
       chain: tokenInfo.chain,
       address: tokenInfo.address,
+      mintable: tokenInfo.mintable,
     });
     (settings as any).tokens = tokens;
 
@@ -1081,6 +1093,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         decimals: 6,
         chain: "gnosis",
         address: tokenAddress as BlockchainAddress,
+        mintable: true, // Deployed tokens are always mintable
       });
       
       const explorerUrl = `https://gnosisscan.io/token/${tokenAddress}`;
@@ -1115,23 +1128,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
     try {
       const tokenInfo = await fetchTokenInfo(state.chain, tokenAddress);
 
+      // Check if bot has MINTER role on this token
+      const botAddress = botWallet.account?.address as string;
+      let mintable = false;
+      let mintableNote = "";
+      
+      try {
+        mintable = await hasRole(state.chain as SupportedChain, tokenAddress, MINTER_ROLE, botAddress) as boolean;
+      } catch (e) {
+        // Token might not have AccessControl, assume not mintable
+        mintable = false;
+      }
+
+      if (!mintable) {
+        const shortBotAddr = `${botAddress.slice(0, 6)}…${botAddress.slice(-4)}`;
+        mintableNote = `\n\n⚠️ **Not mintable** — Bot doesn't have MINTER role.\nTo make it mintable, grant MINTER role to: \`${botAddress}\``;
+      }
+
       await addTokenToSettings(guildId, {
         name: tokenInfo.name,
         symbol: tokenInfo.symbol,
         decimals: tokenInfo.decimals,
         chain: state.chain,
         address: tokenAddress,
+        mintable,
       });
 
       tokenSetupStates.delete(userId);
 
+      const explorerUrl = getExplorerUrl(state.chain, tokenAddress);
+      const shortAddr = `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}`;
+
       await interaction.editReply({
         content: [
-          "✅ **Token Configured!**",
+          "✅ **Token Added!**",
           "",
           `**Token:** ${tokenInfo.name} (${tokenInfo.symbol})`,
-          `**Chain:** ${state.chain}`,
-          `**Decimals:** ${tokenInfo.decimals}`,
+          `**Address:** [${state.chain}:${shortAddr}](<${explorerUrl}>)`,
+          `**Mintable:** ${mintable ? "Yes ✅" : "No ❌"}`,
+          mintableNote,
           "",
           "Next, run `/setup-channels` to configure the channels!",
         ].join("\n"),
