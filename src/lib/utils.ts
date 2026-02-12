@@ -51,12 +51,18 @@ export function getEnv(key: string): string | undefined {
   return undefined;
 }
 
+// Get data directory from env or default to ./data
+function getDataDir(): string {
+  return getEnv("DATA_DIR") || "./data";
+}
+
 export async function loadGuildFile(
   guildId: string,
   filename: string,
 ): Promise<GuildSettings | null> {
   try {
-    const path = join(Deno.cwd(), "data", guildId, filename);
+    const dataDir = getDataDir();
+    const path = join(dataDir, guildId, filename);
     const content = await Deno.readTextFile(path);
     return JSON.parse(content);
   } catch (error) {
@@ -70,7 +76,8 @@ export async function loadGuildSettings(guildId: string): Promise<GuildSettings 
 
 // File system helpers
 async function getDataPath(guildId: string, filename: string): Promise<string> {
-  const dirPath = `./data/${guildId}`;
+  const dataDir = getDataDir();
+  const dirPath = `${dataDir}/${guildId}`;
   await ensureDir(dirPath);
   return `${dirPath}/${filename}`;
 }
