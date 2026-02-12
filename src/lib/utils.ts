@@ -57,6 +57,14 @@ function getDataDir(): string {
   return getEnv("DATA_DIR") || "./data";
 }
 
+// Settings cache (10 second TTL for fast autocomplete)
+const settingsCache = new Map<string, { data: GuildSettings; expiry: number }>();
+const CACHE_TTL_MS = 10_000;
+
+export function invalidateSettingsCache(guildId: string): void {
+  settingsCache.delete(guildId);
+}
+
 // Migrate legacy settings (contributionToken/fiatToken) to tokens array
 function migrateSettings(raw: any): GuildSettings {
   const tokens: Token[] = raw.tokens || [];
@@ -125,9 +133,24 @@ export async function loadGuildFile(
 export async function loadGuildSettings(
   guildId: string,
 ): Promise<GuildSettings | null> {
+  // Check cache first
+  const cached = settingsCache.get(guildId);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.data;
+  }
+
   const raw = await loadGuildFile(guildId, "settings.json");
   if (!raw) return null;
-  return migrateSettings(raw);
+
+  const settings = migrateSettings(raw);
+
+  // Cache the result
+  settingsCache.set(guildId, {
+    data: settings,
+    expiry: Date.now() + CACHE_TTL_MS,
+  });
+
+  return settings;
 }
 
 // File system helpers
@@ -147,6 +170,8 @@ export async function saveGuildSettings(
 ): Promise<void> {
   const path = await getDataPath(guildId, "settings.json");
   await Deno.writeTextFile(path, JSON.stringify(settings, null, 2));
+  // Invalidate cache after save
+  invalidateSettingsCache(guildId);
 }
 
 export async function loadRoles(guildId: string): Promise<RoleSetting[]> {
