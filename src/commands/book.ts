@@ -125,9 +125,44 @@ function parseDateValue(value: string): Date {
   return new Date(year, month - 1, day);
 }
 
+interface CalendarEvent {
+  start: { dateTime: string };
+  end: { dateTime: string };
+  summary?: string;
+}
+
+// Check if a time slot overlaps with any booked event
+function isSlotBooked(
+  slotHour: number,
+  slotMinute: number,
+  selectedDate: Date,
+  bookedEvents: CalendarEvent[],
+): boolean {
+  const slotStart = new Date(selectedDate);
+  slotStart.setHours(slotHour, slotMinute, 0, 0);
+  
+  // A slot is "booked" if any event overlaps with its start time
+  // (i.e., event starts before slot ends AND event ends after slot starts)
+  for (const event of bookedEvents) {
+    const eventStart = new Date(event.start.dateTime);
+    const eventEnd = new Date(event.end.dateTime);
+    
+    // Check if this slot's start time falls within an event
+    if (slotStart >= eventStart && slotStart < eventEnd) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 // Get available time slots (30-min intervals)
-function getTimeSlots(selectedDate: Date, isToday: boolean): { label: string; value: string }[] {
-  const slots: { label: string; value: string }[] = [];
+function getTimeSlots(
+  selectedDate: Date,
+  isToday: boolean,
+  bookedEvents: CalendarEvent[] = [],
+): { label: string; value: string; booked: boolean }[] {
+  const slots: { label: string; value: string; booked: boolean }[] = [];
   const now = new Date();
   
   // Start hour: if today, start from next half hour; otherwise 8am
@@ -164,9 +199,15 @@ function getTimeSlots(selectedDate: Date, isToday: boolean): { label: string; va
       const ampm = hour >= 12 ? "pm" : "am";
       const minuteStr = minute === 0 ? "00" : "30";
       
+      const booked = isSlotBooked(hour, minute, selectedDate, bookedEvents);
+      const label = booked 
+        ? `🔴 ${hour12}:${minuteStr}${ampm}` 
+        : `${hour12}:${minuteStr}${ampm}`;
+      
       slots.push({
-        label: `${hour12}:${minuteStr}${ampm}`,
+        label,
         value: `${hour}:${minute}`,
+        booked,
       });
     }
   }
@@ -784,14 +825,35 @@ async function showTimeSelection(
   const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
   const product = products?.find((p) => p.slug === state.productSlug);
 
-  // Get availability
+  // Fetch events for the selected date to show booked times
+  let bookedEvents: CalendarEvent[] = [];
+  if (product?.calendarId) {
+    try {
+      const calendar = new GoogleCalendarClient();
+      const startOfDay = new Date(state.selectedDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(state.selectedDate);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      const events = await calendar.listEvents(product.calendarId, startOfDay, endOfDay);
+      bookedEvents = events.map(e => ({
+        start: { dateTime: e.start.dateTime },
+        end: { dateTime: e.end.dateTime },
+        summary: e.summary,
+      }));
+    } catch (error) {
+      console.error("Error fetching calendar events:", error);
+    }
+  }
+
+  // Get availability display
   const availability = product?.calendarId 
     ? await formatAvailability(product.calendarId, state.selectedDate)
     : "";
 
   const today = getLocalToday();
   const isToday = state.selectedDate.getTime() === today.getTime();
-  const timeSlots = getTimeSlots(state.selectedDate, isToday);
+  const timeSlots = getTimeSlots(state.selectedDate, isToday, bookedEvents);
 
   if (timeSlots.length === 0) {
     await interaction.update({
@@ -819,6 +881,7 @@ async function showTimeSelection(
     .addOptions(timeSlots.slice(0, 25).map(slot => ({
       label: slot.label,
       value: slot.value,
+      description: slot.booked ? "Currently booked" : undefined,
     })));
 
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
@@ -837,7 +900,7 @@ async function showTimeSelection(
   const header = buildSelectionHeader(state, product);
 
   await interaction.update({
-    content: `${header}\n${availability}\n\n⏰ **Select start time:**`,
+    content: `${header}\n${availability}\n\n⏰ **Select start time:** (🔴 = booked)`,
     components: [row, navRow],
   });
 }
