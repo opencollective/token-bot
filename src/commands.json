@@ -1,7 +1,12 @@
 [
   {
-    "name": "setup-token",
-    "description": "Configure the token for your server (admin only)",
+    "name": "list-tokens",
+    "description": "List all tokens configured for this server (admin only)",
+    "default_member_permissions": "8"
+  },
+  {
+    "name": "add-token",
+    "description": "Add or update a token for your server (admin only)",
     "default_member_permissions": "8"
   },
   {

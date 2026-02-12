@@ -368,6 +368,66 @@ export async function getBalance(
   return res as bigint;
 }
 
+export async function getTotalSupply(
+  chainSlug: SupportedChain,
+  tokenAddress: string,
+): Promise<bigint> {
+  const client = createPublicClient({
+    transport: http(RPC_URLS[chainSlug]),
+    chain: ChainConfig[chainSlug],
+  });
+  const res = await client.readContract({
+    address: tokenAddress as Address,
+    abi: ERC20_BURNABLE_ABI as Abi,
+    functionName: "totalSupply",
+    args: [],
+  });
+  return res as bigint;
+}
+
+// Block explorer API URLs for fetching token holder count
+const EXPLORER_API_URLS: Record<SupportedChain, string | null> = {
+  celo: "https://api.celoscan.io/api",
+  gnosis: "https://api.gnosisscan.io/api",
+  base: "https://api.basescan.org/api",
+  base_sepolia: "https://api-sepolia.basescan.org/api",
+  polygon: "https://api.polygonscan.com/api",
+  localhost: null,
+};
+
+export async function getTokenHolderCount(
+  chainSlug: SupportedChain,
+  tokenAddress: string,
+): Promise<number | null> {
+  const apiUrl = EXPLORER_API_URLS[chainSlug];
+  if (!apiUrl) return null;
+
+  try {
+    // Use the tokenholderlist endpoint to get holder count
+    const response = await fetch(
+      `${apiUrl}?module=token&action=tokeninfo&contractaddress=${tokenAddress}`
+    );
+    const data = await response.json();
+    
+    if (data.status === "1" && data.result?.[0]?.holdersCount) {
+      return parseInt(data.result[0].holdersCount, 10);
+    }
+    
+    // Fallback: try tokenholderlist (some explorers use this)
+    const response2 = await fetch(
+      `${apiUrl}?module=token&action=tokenholderlist&contractaddress=${tokenAddress}&page=1&offset=1`
+    );
+    const data2 = await response2.json();
+    
+    // If we get a result, there's at least 1 holder; the API doesn't give total count easily
+    // So we return null if we can't get the exact count
+    return null;
+  } catch (error) {
+    console.error(`Error fetching holder count for ${tokenAddress}:`, error);
+    return null;
+  }
+}
+
 export async function getNativeBalance(
   chainSlug: SupportedChain,
   address: string,
