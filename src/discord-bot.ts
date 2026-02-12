@@ -649,6 +649,59 @@ async function handleButton(
     const state = tokenSetupStates.get(userId);
     if (!state) return;
 
+    await interaction.deferUpdate();
+
+    // Check deployer balance on Gnosis
+    const deployerAddress = botWallet.account?.address as string;
+    const balance = await getNativeBalance("gnosis", deployerAddress);
+    const balanceFormatted = parseFloat(formatUnits(balance, 18)).toFixed(4);
+    const explorerUrl = `https://gnosisscan.io/address/${deployerAddress}`;
+    const shortAddr = `${deployerAddress.slice(0, 6)}…${deployerAddress.slice(-4)}`;
+
+    const MIN_DEPLOY_BALANCE = 0.001;
+    const hasEnoughBalance = parseFloat(balanceFormatted) >= MIN_DEPLOY_BALANCE;
+
+    if (!hasEnoughBalance) {
+      await interaction.editReply({
+        content: `**🪙 Create New Token**\n\n` +
+          `**Deployer:** [gnosis:${shortAddr}](<${explorerUrl}>)\n` +
+          `**Balance:** ${balanceFormatted} XDAI\n\n` +
+          `⚠️ **Insufficient balance**\n` +
+          `You need at least ${MIN_DEPLOY_BALANCE} XDAI to deploy a token.\n\n` +
+          `Please send some XDAI to the deployer address and try again.`,
+        components: [],
+      });
+      return;
+    }
+
+    // Balance is sufficient, show the modal button
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("token_show_create_modal")
+        .setLabel("Continue")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("token_cancel")
+        .setLabel("Cancel")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.editReply({
+      content: `**🪙 Create New Token**\n\n` +
+        `**Chain:** Gnosis\n` +
+        `**Deployer:** [gnosis:${shortAddr}](<${explorerUrl}>)\n` +
+        `**Balance:** ${balanceFormatted} XDAI ✅\n\n` +
+        `Click Continue to enter your token details.`,
+      components: [row],
+    });
+    return;
+  }
+
+  // Show create token modal (after balance check)
+  if (customId === "token_show_create_modal") {
+    const state = tokenSetupStates.get(userId);
+    if (!state) return;
+
     const guildName = interaction.guild?.name || "Server";
     const defaultSymbol = guildName.split(" ").map((w) =>
       w.substring(0, 1).toUpperCase()
@@ -677,6 +730,16 @@ async function handleButton(
       );
 
     await interaction.showModal(modal);
+    return;
+  }
+
+  // Cancel token setup
+  if (customId === "token_cancel") {
+    tokenSetupStates.delete(userId);
+    await interaction.update({
+      content: "Token setup cancelled.",
+      components: [],
+    });
     return;
   }
 
