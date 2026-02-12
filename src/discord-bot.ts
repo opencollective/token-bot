@@ -992,26 +992,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      // Deploy token (placeholder - needs actual implementation)
-      const tokenAddress = await deployTokenContract("base_sepolia", tokenName, tokenSymbol);
-      console.log(">>> deploying token (not implemented yet)", tokenName, tokenSymbol);
+      // Deploy token on Gnosis chain
+      const tokenAddress = await deployTokenContract("gnosis", tokenName, tokenSymbol);
+      console.log(">>> deployed token", tokenName, tokenSymbol, "at", tokenAddress);
 
       tokenSetupStates.delete(userId);
       await updateSettings(guildId, {
         name: tokenName,
         symbol: tokenSymbol,
         decimals: 6,
-        chain: "base_sepolia",
+        chain: "gnosis",
         address: tokenAddress,
       });
+      
+      const explorerUrl = `https://gnosisscan.io/token/${tokenAddress}`;
+      const shortAddr = `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}`;
+      
       await interaction.editReply({
         content: [
           "✅ **Token deployed successfully!**",
           "",
           `**Token:** ${tokenName} (${tokenSymbol})`,
-          `**Chain:** base_sepolia`,
-          `**Decimals:** 6`,
-          `**Address:** ${tokenAddress}`,
+          `**Address:** [gnosis:${shortAddr}](<${explorerUrl}>)`,
           "",
           "Next, run `/setup-channels` to configure the channels!",
         ].join("\n"),
