@@ -63,8 +63,11 @@ export async function loadGuildFile(
   try {
     const dataDir = getDataDir();
     const path = join(dataDir, guildId, filename);
+    console.log(`[loadGuildFile] Loading from: ${path}`);
     const content = await Deno.readTextFile(path);
-    return JSON.parse(content);
+    const parsed = JSON.parse(content);
+    console.log(`[loadGuildFile] Loaded settings, has tokens array: ${Array.isArray((parsed as any).tokens)}, length: ${(parsed as any).tokens?.length || 0}`);
+    return parsed;
   } catch (error) {
     console.error(`Error loading guild settings for guild ${guildId}:`, error);
     return null;

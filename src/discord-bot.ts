@@ -420,6 +420,14 @@ async function handleListTokensCommand(
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const settings = await loadGuildSettings(guildId);
+  
+  // Debug: log what we loaded
+  const tokensArray = (settings as any)?.tokens || [];
+  console.log(`[list-tokens] Guild ${guildId}: contributionToken=${settings?.contributionToken?.symbol}, fiatToken=${(settings as any)?.fiatToken?.symbol}, tokens array length=${tokensArray.length}`);
+  if (tokensArray.length > 0) {
+    console.log(`[list-tokens] Tokens array:`, JSON.stringify(tokensArray, null, 2));
+  }
+  
   const tokenList = await formatTokenList(settings);
 
   await interaction.editReply({
