@@ -978,7 +978,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       name: tokenInfo.name,
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
-      chain: state?.chain as Chain || CHAIN,
+      chain: tokenInfo.chain || state?.chain as Chain || CHAIN,
       address: tokenInfo.address as BlockchainAddress,
     };
 
