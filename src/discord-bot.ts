@@ -57,7 +57,7 @@ const channelSetupStates = new Map<string, ChannelSetupState>();
 const rewardEditStates = new Map<string, RewardEditState>();
 const costEditStates = new Map<string, CostEditState>();
 
-import { getNativeBalance, getWalletClient, SupportedChain } from "./lib/blockchain.ts";
+import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand from "./commands/mint.ts";
 import handleSendCommand from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
@@ -298,45 +298,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// Helper function to format token list
-function formatTokenList(settings: GuildSettings | null): string {
-  if (!settings) {
-    return "No tokens configured yet.";
-  }
-
-  const tokens: string[] = [];
-
-  // Contribution token
-  if (settings.contributionToken?.address) {
-    const ct = settings.contributionToken;
-    const explorerUrl = getExplorerUrl(ct.chain, ct.address);
-    tokens.push(
-      `**Contribution Token**\n` +
-      `• Name: ${ct.name} (${ct.symbol})\n` +
-      `• Chain: ${ct.chain}\n` +
-      `• Decimals: ${ct.decimals}\n` +
-      `• Address: [\`${ct.address.slice(0, 10)}...${ct.address.slice(-8)}\`](${explorerUrl})`
-    );
-  }
-
-  // Fiat token (if configured)
-  const fiatToken = (settings as any).fiatToken;
-  if (fiatToken?.address) {
-    const explorerUrl = getExplorerUrl(fiatToken.chain, fiatToken.address);
-    tokens.push(
-      `**Fiat Token**\n` +
-      `• Name: ${fiatToken.name} (${fiatToken.symbol})\n` +
-      `• Chain: ${fiatToken.chain}\n` +
-      `• Decimals: ${fiatToken.decimals}\n` +
-      `• Address: [\`${fiatToken.address.slice(0, 10)}...${fiatToken.address.slice(-8)}\`](${explorerUrl})`
-    );
-  }
-
-  if (tokens.length === 0) {
-    return "No tokens configured yet.";
-  }
-
-  return tokens.join("\n\n");
+// Token info with supply and holders
+interface TokenStats {
+  totalSupply: string;
+  holders: number | null;
 }
 
 // Helper to get block explorer URL for a token
@@ -351,6 +316,74 @@ function getExplorerUrl(chain: Chain, address: string): string {
   return `${explorers[chain]}/${address}`;
 }
 
+// Fetch token stats (supply and holders)
+async function fetchTokenStats(chain: Chain, address: string, decimals: number): Promise<TokenStats> {
+  try {
+    const [totalSupplyRaw, holders] = await Promise.all([
+      getTotalSupply(chain as SupportedChain, address),
+      getTokenHolderCount(chain as SupportedChain, address),
+    ]);
+    
+    const totalSupply = formatUnits(totalSupplyRaw, decimals);
+    // Format with thousand separators, no decimals
+    const formattedSupply = Math.floor(parseFloat(totalSupply)).toLocaleString('en-US');
+    
+    return { totalSupply: formattedSupply, holders };
+  } catch (error) {
+    console.error(`Error fetching token stats for ${address}:`, error);
+    return { totalSupply: "?", holders: null };
+  }
+}
+
+// Helper function to format token list
+async function formatTokenList(settings: GuildSettings | null): Promise<string> {
+  if (!settings) {
+    return "No tokens configured yet.";
+  }
+
+  const tokens: string[] = [];
+
+  // Contribution token
+  if (settings.contributionToken?.address) {
+    const ct = settings.contributionToken;
+    const explorerUrl = getExplorerUrl(ct.chain, ct.address);
+    const stats = await fetchTokenStats(ct.chain, ct.address, ct.decimals);
+    
+    const shortAddr = `${ct.address.slice(0, 6)}…${ct.address.slice(-4)}`;
+    let tokenInfo = `**${ct.name} (${ct.symbol})**\n`;
+    tokenInfo += `• Address: [${ct.chain}:${shortAddr}](${explorerUrl})\n`;
+    tokenInfo += `• Supply: ${stats.totalSupply} ${ct.symbol}`;
+    if (stats.holders !== null) {
+      tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
+    }
+    
+    tokens.push(tokenInfo);
+  }
+
+  // Fiat token (if configured)
+  const fiatToken = (settings as any).fiatToken;
+  if (fiatToken?.address) {
+    const explorerUrl = getExplorerUrl(fiatToken.chain, fiatToken.address);
+    const stats = await fetchTokenStats(fiatToken.chain, fiatToken.address, fiatToken.decimals);
+    
+    const shortAddr = `${fiatToken.address.slice(0, 6)}…${fiatToken.address.slice(-4)}`;
+    let tokenInfo = `**${fiatToken.name} (${fiatToken.symbol})**\n`;
+    tokenInfo += `• Address: [${fiatToken.chain}:${shortAddr}](${explorerUrl})\n`;
+    tokenInfo += `• Supply: ${stats.totalSupply} ${fiatToken.symbol}`;
+    if (stats.holders !== null) {
+      tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
+    }
+    
+    tokens.push(tokenInfo);
+  }
+
+  if (tokens.length === 0) {
+    return "No tokens configured yet.";
+  }
+
+  return tokens.join("\n\n");
+}
+
 // Command handlers
 async function handleListTokensCommand(
   interaction: Interaction,
@@ -359,12 +392,13 @@ async function handleListTokensCommand(
 ) {
   if (!interaction.isChatInputCommand()) return;
 
-  const settings = await loadGuildSettings(guildId);
-  const tokenList = formatTokenList(settings);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  await interaction.reply({
+  const settings = await loadGuildSettings(guildId);
+  const tokenList = await formatTokenList(settings);
+
+  await interaction.editReply({
     content: `**🪙 Configured Tokens**\n\n${tokenList}`,
-    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -375,9 +409,11 @@ async function handleAddTokenCommand(
 ) {
   if (!interaction.isChatInputCommand()) return;
 
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   // Show existing tokens first
   const settings = await loadGuildSettings(guildId);
-  const tokenList = formatTokenList(settings);
+  const tokenList = await formatTokenList(settings);
   const hasTokens = settings?.contributionToken?.address || (settings as any)?.fiatToken?.address;
 
   tokenSetupStates.set(userId, { step: "choice" });
@@ -397,10 +433,9 @@ async function handleAddTokenCommand(
     ? `**🪙 Current Tokens**\n\n${tokenList}\n\n---\n\n**Add/Update Token**\n\nWould you like to create a new token or use an existing one?`
     : "**🪙 Token Setup**\n\nNo tokens configured yet.\n\nWould you like to create a new token or use an existing one?";
 
-  await interaction.reply({
+  await interaction.editReply({
     content: header,
     components: [row],
-    flags: MessageFlags.Ephemeral,
   });
 }
 
