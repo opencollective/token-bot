@@ -377,6 +377,25 @@ async function formatTokenList(settings: GuildSettings | null): Promise<string> 
     tokens.push(tokenInfo);
   }
 
+  // Additional tokens from tokens array
+  const additionalTokens = (settings as any).tokens || [];
+  for (const token of additionalTokens) {
+    if (token?.address) {
+      const explorerUrl = getExplorerUrl(token.chain, token.address);
+      const stats = await fetchTokenStats(token.chain, token.address, token.decimals);
+      
+      const shortAddr = `${token.address.slice(0, 6)}…${token.address.slice(-4)}`;
+      let tokenInfo = `**${token.name} (${token.symbol})**\n`;
+      tokenInfo += `• Address: [${token.chain}:${shortAddr}](<${explorerUrl}>)\n`;
+      tokenInfo += `• Supply: ${stats.totalSupply} ${token.symbol}`;
+      if (stats.holders !== null) {
+        tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
+      }
+      
+      tokens.push(tokenInfo);
+    }
+  }
+
   if (tokens.length === 0) {
     return "No tokens configured yet.";
   }
@@ -1007,18 +1026,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const state = tokenSetupStates.get(userId);
   if (!state) return;
 
-  async function updateSettings(
+  async function addTokenToSettings(
     guildId: string,
-    tokenInfo: Partial<GuildSettings["contributionToken"]>,
+    tokenInfo: { name: string; symbol: string; decimals: number; chain: Chain; address: BlockchainAddress },
   ) {
     const settings = await loadGuildSettings(guildId) || {
-      contributionToken: {
-        name: "",
-        symbol: "",
-        decimals: 0,
-        chain: state?.chain as Chain,
-        address: "" as BlockchainAddress,
-      },
       guild: {
         id: guildId,
         name: interaction.guild!.name,
@@ -1037,13 +1049,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       },
     };
 
-    settings.contributionToken = {
+    // Add to tokens array (create if doesn't exist)
+    const tokens = (settings as any).tokens || [];
+    tokens.push({
       name: tokenInfo.name,
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
-      chain: tokenInfo.chain || state?.chain as Chain || CHAIN,
-      address: tokenInfo.address as BlockchainAddress,
-    };
+      chain: tokenInfo.chain,
+      address: tokenInfo.address,
+    });
+    (settings as any).tokens = tokens;
 
     await saveGuildSettings(guildId, settings);
   }
@@ -1060,12 +1075,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       console.log(">>> deployed token", tokenName, tokenSymbol, "at", tokenAddress);
 
       tokenSetupStates.delete(userId);
-      await updateSettings(guildId, {
+      await addTokenToSettings(guildId, {
         name: tokenName,
         symbol: tokenSymbol,
         decimals: 6,
         chain: "gnosis",
-        address: tokenAddress,
+        address: tokenAddress as BlockchainAddress,
       });
       
       const explorerUrl = `https://gnosisscan.io/token/${tokenAddress}`;
@@ -1100,7 +1115,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     try {
       const tokenInfo = await fetchTokenInfo(state.chain, tokenAddress);
 
-      updateSettings(guildId, {
+      await addTokenToSettings(guildId, {
         name: tokenInfo.name,
         symbol: tokenInfo.symbol,
         decimals: tokenInfo.decimals,
