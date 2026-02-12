@@ -1,8 +1,9 @@
 # Use the official Deno image
 FROM denoland/deno:alpine-2.5.4
 
-# Install curl and Node.js (needed for hardhat compile)
-RUN apk add --no-cache curl nodejs npm
+# Install curl and Node.js with npm (needed for hardhat compile)
+# Use nodejs and npm packages from Alpine edge/community for latest versions
+RUN apk add --no-cache curl nodejs npm --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
 
 # Create app directory
 RUN mkdir -p /app
