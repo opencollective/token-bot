@@ -115,18 +115,30 @@ export async function loadGuildFile(
   guildId: string,
   filename: string,
 ): Promise<any | null> {
+  const dataDir = getDataDir();
+  const primaryPath = join(dataDir, guildId, filename);
+
+  // Try primary data directory first
   try {
-    const dataDir = getDataDir();
-    const path = join(dataDir, guildId, filename);
-    const content = await Deno.readTextFile(path);
+    const content = await Deno.readTextFile(primaryPath);
     return JSON.parse(content);
-  } catch (error) {
-    console.error(
-      `Error loading guild file ${filename} for guild ${guildId}:`,
-      error,
-    );
-    return null;
+  } catch {
+    // Primary path failed, continue to fallback
   }
+
+  // Fallback to repo's ./data/ directory (for files like products.json)
+  if (dataDir !== "./data") {
+    try {
+      const fallbackPath = join("./data", guildId, filename);
+      const content = await Deno.readTextFile(fallbackPath);
+      return JSON.parse(content);
+    } catch {
+      // Fallback also failed
+    }
+  }
+
+  console.error(`Could not load ${filename} for guild ${guildId}`);
+  return null;
 }
 
 export async function loadGuildSettings(
