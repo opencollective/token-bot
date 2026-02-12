@@ -58,7 +58,7 @@ const rewardEditStates = new Map<string, RewardEditState>();
 const costEditStates = new Map<string, CostEditState>();
 
 import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
-import handleMintCommand, { handleMintButton, handleMintModal, handleMintSelect } from "./commands/mint.ts";
+import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
 import handleSendCommand from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
@@ -211,6 +211,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // Handle autocomplete
+    if (interaction.isAutocomplete()) {
+      if (interaction.commandName === "mint") {
+        return handleMintAutocomplete(interaction, guildId);
+      }
+      return;
+    }
+
     // Handle slash commands
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "list-tokens") {
@@ -264,9 +272,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId.startsWith("book_")) {
         return handleBookButton(interaction, userId, guildId);
       }
-      if (interaction.customId.startsWith("mint_")) {
-        return handleMintButton(interaction, userId);
-      }
       if (
         interaction.customId.startsWith("cancel_confirm_") ||
         interaction.customId === "cancel_abort"
@@ -284,9 +289,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId === "book_date_select" || interaction.customId === "book_time_select") {
         return handleBookSelect(interaction, userId, guildId);
-      }
-      if (interaction.customId === "mint_token_select") {
-        return handleMintSelect(interaction, userId, guildId);
       }
       return handleStringSelect(interaction, userId, guildId);
     }
@@ -343,70 +345,29 @@ async function fetchTokenStats(chain: Chain, address: string, decimals: number):
 
 // Helper function to format token list
 async function formatTokenList(settings: GuildSettings | null): Promise<string> {
-  if (!settings) {
+  if (!settings || settings.tokens.length === 0) {
     return "No tokens configured yet.";
   }
 
-  const tokens: string[] = [];
+  const tokenLines: string[] = [];
 
-  // Contribution token
-  if (settings.contributionToken?.address) {
-    const ct = settings.contributionToken;
-    const explorerUrl = getExplorerUrl(ct.chain, ct.address);
-    const stats = await fetchTokenStats(ct.chain, ct.address, ct.decimals);
-    
-    const shortAddr = `${ct.address.slice(0, 6)}…${ct.address.slice(-4)}`;
-    let tokenInfo = `**${ct.name} (${ct.symbol})**\n`;
-    tokenInfo += `• Address: [${ct.chain}:${shortAddr}](<${explorerUrl}>)\n`;
-    tokenInfo += `• Supply: ${stats.totalSupply} ${ct.symbol}`;
+  for (const token of settings.tokens) {
+    const explorerUrl = getExplorerUrl(token.chain, token.address);
+    const stats = await fetchTokenStats(token.chain, token.address, token.decimals);
+
+    const shortAddr = `${token.address.slice(0, 6)}…${token.address.slice(-4)}`;
+    let tokenInfo = `**${token.name} (${token.symbol})**`;
+    if (token.mintable) tokenInfo += " 🪙";
+    tokenInfo += `\n• Address: [${token.chain}:${shortAddr}](<${explorerUrl}>)`;
+    tokenInfo += `\n• Supply: ${stats.totalSupply} ${token.symbol}`;
     if (stats.holders !== null) {
-      tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
+      tokenInfo += ` · ${stats.holders.toLocaleString("en-US")} holders`;
     }
-    
-    tokens.push(tokenInfo);
+
+    tokenLines.push(tokenInfo);
   }
 
-  // Fiat token (if configured)
-  const fiatToken = (settings as any).fiatToken;
-  if (fiatToken?.address) {
-    const explorerUrl = getExplorerUrl(fiatToken.chain, fiatToken.address);
-    const stats = await fetchTokenStats(fiatToken.chain, fiatToken.address, fiatToken.decimals);
-    
-    const shortAddr = `${fiatToken.address.slice(0, 6)}…${fiatToken.address.slice(-4)}`;
-    let tokenInfo = `**${fiatToken.name} (${fiatToken.symbol})**\n`;
-    tokenInfo += `• Address: [${fiatToken.chain}:${shortAddr}](<${explorerUrl}>)\n`;
-    tokenInfo += `• Supply: ${stats.totalSupply} ${fiatToken.symbol}`;
-    if (stats.holders !== null) {
-      tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
-    }
-    
-    tokens.push(tokenInfo);
-  }
-
-  // Additional tokens from tokens array
-  const additionalTokens = (settings as any).tokens || [];
-  for (const token of additionalTokens) {
-    if (token?.address) {
-      const explorerUrl = getExplorerUrl(token.chain, token.address);
-      const stats = await fetchTokenStats(token.chain, token.address, token.decimals);
-      
-      const shortAddr = `${token.address.slice(0, 6)}…${token.address.slice(-4)}`;
-      let tokenInfo = `**${token.name} (${token.symbol})**\n`;
-      tokenInfo += `• Address: [${token.chain}:${shortAddr}](<${explorerUrl}>)\n`;
-      tokenInfo += `• Supply: ${stats.totalSupply} ${token.symbol}`;
-      if (stats.holders !== null) {
-        tokenInfo += ` · ${stats.holders.toLocaleString('en-US')} holders`;
-      }
-      
-      tokens.push(tokenInfo);
-    }
-  }
-
-  if (tokens.length === 0) {
-    return "No tokens configured yet.";
-  }
-
-  return tokens.join("\n\n");
+  return tokenLines.join("\n\n");
 }
 
 // Command handlers
@@ -420,18 +381,10 @@ async function handleListTokensCommand(
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const settings = await loadGuildSettings(guildId);
-  
-  // Debug: log what we loaded
-  const tokensArray = (settings as any)?.tokens || [];
-  console.log(`[list-tokens] Guild ${guildId}: contributionToken=${settings?.contributionToken?.symbol}, fiatToken=${(settings as any)?.fiatToken?.symbol}, tokens array length=${tokensArray.length}`);
-  if (tokensArray.length > 0) {
-    console.log(`[list-tokens] Tokens array:`, JSON.stringify(tokensArray, null, 2));
-  }
-  
   const tokenList = await formatTokenList(settings);
 
   await interaction.editReply({
-    content: `**🪙 Configured Tokens**\n\n${tokenList}`,
+    content: `**🪙 Configured Tokens**\n\n${tokenList}\n\n🪙 = mintable`,
   });
 }
 
@@ -447,7 +400,7 @@ async function handleAddTokenCommand(
   // Show existing tokens first
   const settings = await loadGuildSettings(guildId);
   const tokenList = await formatTokenList(settings);
-  const hasTokens = settings?.contributionToken?.address || (settings as any)?.fiatToken?.address;
+  const hasTokens = settings && settings.tokens.length > 0;
 
   tokenSetupStates.set(userId, { step: "choice" });
 
@@ -462,8 +415,8 @@ async function handleAddTokenCommand(
       .setStyle(ButtonStyle.Secondary),
   );
 
-  const header = hasTokens 
-    ? `**🪙 Current Tokens**\n\n${tokenList}\n\n---\n\n**Add/Update Token**\n\nWould you like to create a new token or use an existing one?`
+  const header = hasTokens
+    ? `**🪙 Current Tokens**\n\n${tokenList}\n\n---\n\n**Add Token**\n\nWould you like to create a new token or use an existing one?`
     : "**🪙 Token Setup**\n\nNo tokens configured yet.\n\nWould you like to create a new token or use an existing one?";
 
   await interaction.editReply({
@@ -1037,11 +990,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return handleBookModal(interaction, userId, guildId);
   }
 
-  // Handle mint details modal
-  if (interaction.customId === "mint_details_modal") {
-    return handleMintModal(interaction, userId, guildId);
-  }
-
   const state = tokenSetupStates.get(userId);
   if (!state) return;
 
@@ -1049,7 +997,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     guildId: string,
     tokenInfo: { name: string; symbol: string; decimals: number; chain: Chain; address: BlockchainAddress; mintable: boolean },
   ) {
-    const settings = await loadGuildSettings(guildId) || {
+    const settings: GuildSettings = (await loadGuildSettings(guildId)) || {
+      tokens: [],
       guild: {
         id: guildId,
         name: interaction.guild!.name,
@@ -1068,9 +1017,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       },
     };
 
-    // Add to tokens array (create if doesn't exist)
-    const tokens = (settings as any).tokens || [];
-    tokens.push({
+    // Add to tokens array
+    settings.tokens.push({
       name: tokenInfo.name,
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
@@ -1078,7 +1026,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       address: tokenInfo.address,
       mintable: tokenInfo.mintable,
     });
-    (settings as any).tokens = tokens;
 
     await saveGuildSettings(guildId, settings);
   }

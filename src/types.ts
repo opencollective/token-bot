@@ -1,15 +1,17 @@
 export type BlockchainAddress = `0x${string}`;
 export type Chain = "celo" | "gnosis" | "base" | "base_sepolia" | "polygon";
 
+export type Token = {
+  name: string;
+  symbol: string;
+  decimals: number;
+  chain: Chain;
+  address: BlockchainAddress;
+  mintable?: boolean;
+};
+
 export type GuildSettings = {
-  contributionToken: {
-    name: string;
-    symbol: string;
-    decimals: number;
-    chain: Chain;
-    address: BlockchainAddress;
-    mintInstructions?: string;
-  };
+  tokens: Token[];
   guild: {
     id: string;
     name: string;

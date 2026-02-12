@@ -1,5 +1,5 @@
 import { Interaction } from "discord.js";
-import { getBalance, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
+import { getBalance, SupportedChain } from "../lib/blockchain.ts";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { formatUnits } from "@wevm/viem";
@@ -9,9 +9,7 @@ export default async function handleBalanceCommand(
   userId: string,
   guildId: string,
 ) {
-  console.log("handleBalanceCommand");
   if (!interaction.isChatInputCommand() || !interaction.options) {
-    console.error("Interaction is not a chat input command or has no options");
     return;
   }
 
@@ -20,10 +18,9 @@ export default async function handleBalanceCommand(
   const isOwnBalance = targetUserId === userId;
 
   const guildSettings = await loadGuildSettings(guildId);
-  if (!guildSettings) {
-    console.error("Guild settings not found");
+  if (!guildSettings || guildSettings.tokens.length === 0) {
     await interaction.reply({
-      content: "❌ Guild settings not found.",
+      content: "❌ No tokens configured. Run `/add-token` first.",
       ephemeral: true,
     });
     return;
@@ -31,46 +28,47 @@ export default async function handleBalanceCommand(
 
   await interaction.deferReply({ ephemeral: true });
 
-  const chain = guildSettings.contributionToken.chain as SupportedChain;
-  const tokenSymbol = guildSettings.contributionToken.symbol;
-  const decimals = guildSettings.contributionToken.decimals;
-
   try {
-    // Get blockchain address from Discord user ID
     const address = await getAccountAddressFromDiscordUserId(targetUserId);
-    
+
     if (!address) {
       await interaction.editReply({
-        content: isOwnBalance 
+        content: isOwnBalance
           ? "❌ Could not find your account. Please make sure you're registered."
           : `❌ Could not find account for <@${targetUserId}>.`,
       });
       return;
     }
 
-    // Get balance
-    const balance = await getBalance(
-      chain,
-      guildSettings.contributionToken.address,
-      address,
-    );
-    
-    const balanceFormatted = parseFloat(formatUnits(balance, decimals)).toFixed(2);
-    
-    // Build txinfo.xyz link
-    const chainName = chain === "celo" ? "celo" : chain;
-    const txInfoUrl = `https://txinfo.xyz/${chainName}/address/${address}`;
-    
-    let replyContent: string;
-    if (isOwnBalance) {
-      replyContent = `💰 Your balance: **${balanceFormatted} ${tokenSymbol}**\n[[view account]](<${txInfoUrl}>)`;
-    } else {
-      replyContent = `💰 <@${targetUserId}>'s balance: **${balanceFormatted} ${tokenSymbol}**\n[[view account]](<${txInfoUrl}>)`;
+    // Fetch balances for all tokens
+    const balances: string[] = [];
+    for (const token of guildSettings.tokens) {
+      try {
+        const balance = await getBalance(
+          token.chain as SupportedChain,
+          token.address,
+          address,
+        );
+        const balanceFormatted = parseFloat(
+          formatUnits(balance, token.decimals),
+        ).toFixed(2);
+        balances.push(`**${balanceFormatted} ${token.symbol}**`);
+      } catch (error) {
+        console.error(`Error fetching ${token.symbol} balance:`, error);
+        balances.push(`? ${token.symbol}`);
+      }
     }
 
-    await interaction.editReply({
-      content: replyContent,
-    });
+    // Use first token's chain for txinfo link
+    const primaryChain = guildSettings.tokens[0].chain;
+    const txInfoUrl = `https://txinfo.xyz/${primaryChain}/address/${address}`;
+
+    const balanceList = balances.join(" · ");
+    const replyContent = isOwnBalance
+      ? `💰 Your balance: ${balanceList}\n[[view account]](<${txInfoUrl}>)`
+      : `💰 <@${targetUserId}>'s balance: ${balanceList}\n[[view account]](<${txInfoUrl}>)`;
+
+    await interaction.editReply({ content: replyContent });
   } catch (error) {
     console.error("Error fetching balance:", error);
     await interaction.editReply({

@@ -17,7 +17,35 @@
   {
     "name": "mint",
     "description": "Mint tokens for users (admin only)",
-    "default_member_permissions": "8"
+    "default_member_permissions": "8",
+    "options": [
+      {
+        "name": "token",
+        "description": "Token to mint",
+        "type": 3,
+        "required": true,
+        "autocomplete": true
+      },
+      {
+        "name": "users",
+        "description": "Users to mint for (mention with @)",
+        "type": 3,
+        "required": true
+      },
+      {
+        "name": "amount",
+        "description": "Amount per user",
+        "type": 10,
+        "required": true,
+        "min_value": 0.01
+      },
+      {
+        "name": "description",
+        "description": "Reason for minting (optional)",
+        "type": 3,
+        "required": false
+      }
+    ]
   },
   {
     "name": "balance",
