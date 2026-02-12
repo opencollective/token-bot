@@ -1,9 +1,14 @@
 # Stage 1: Compile hardhat contracts using Node
 FROM node:20-alpine AS builder
 
+# Install git (needed for github: dependencies in package.json)
+RUN apk add --no-cache git
+
 WORKDIR /build
 COPY hardhat/ ./
-RUN npm ci && npx hardhat compile
+
+# Install dependencies and compile
+RUN npm install && npx hardhat compile
 
 # Stage 2: Run with Deno
 FROM denoland/deno:alpine-2.5.4
