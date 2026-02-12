@@ -124,11 +124,11 @@ export class Nostr {
     uri: URI,
     { content, tags }: { content: string; tags: string[][] },
   ) {
-    if (tags.length === 0) {
-      const { tags: tagsFromContent, cleanDescription } = extractHashtags(content);
-      content = cleanDescription;
-      tags = tagsFromContent;
-    }
+    // Always extract hashtags from content and merge with provided tags
+    const { tags: tagsFromContent, cleanDescription } = extractHashtags(content);
+    content = cleanDescription;
+    tags = [...tags, ...tagsFromContent];
+
     const event: EventTemplate = {
       kind: 1111,
       created_at: Math.floor(Date.now() / 1000),
