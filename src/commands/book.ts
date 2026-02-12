@@ -202,7 +202,7 @@ function getTimeSlots(
       const booked = isSlotBooked(hour, minute, selectedDate, bookedEvents);
       const label = booked 
         ? `🔴 ${hour12}:${minuteStr}${ampm}` 
-        : `${hour12}:${minuteStr}${ampm}`;
+        : `🟢 ${hour12}:${minuteStr}${ampm}`;
       
       slots.push({
         label,
@@ -881,7 +881,7 @@ async function showTimeSelection(
     .addOptions(timeSlots.slice(0, 25).map(slot => ({
       label: slot.label,
       value: slot.value,
-      description: slot.booked ? "Currently booked" : undefined,
+      description: slot.booked ? "booked" : undefined,
     })));
 
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
