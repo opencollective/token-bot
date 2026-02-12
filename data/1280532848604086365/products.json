@@ -111,11 +111,11 @@
     "price": [
       {
         "token": "CHT",
-        "amount": 0
+        "amount": 2
       },
       {
         "token": "EURb",
-        "amount": 0
+        "amount": 50
       }
     ]
   }
