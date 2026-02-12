@@ -316,6 +316,23 @@ function getExplorerUrl(chain: Chain, address: string): string {
   return `${explorers[chain]}/${address}`;
 }
 
+// Helper to get block explorer URL for an address
+function getAddressExplorerUrl(chain: Chain, address: string): string {
+  const explorers: Record<Chain, string> = {
+    celo: "https://celoscan.io/address",
+    gnosis: "https://gnosisscan.io/address",
+    base: "https://basescan.org/address",
+    base_sepolia: "https://sepolia.basescan.org/address",
+    polygon: "https://polygonscan.com/address",
+  };
+  return `${explorers[chain]}/${address}`;
+}
+
+// Default chain for deploying new tokens
+const DEFAULT_DEPLOY_CHAIN: Chain = "gnosis";
+// Minimum balance required to deploy (in native token units)
+const MIN_DEPLOY_BALANCE = 0.01;
+
 // Fetch token stats (supply and holders)
 async function fetchTokenStats(chain: Chain, address: string, decimals: number): Promise<TokenStats> {
   try {
@@ -646,6 +663,67 @@ async function handleButton(
 
   // Token setup buttons
   if (customId === "token_create_new") {
+    const state = tokenSetupStates.get(userId);
+    if (!state) return;
+
+    await interaction.deferUpdate();
+
+    // Check deployer balance on default chain
+    const deployerAddress = botWallet.account?.address as string;
+    const balance = await getNativeBalance(DEFAULT_DEPLOY_CHAIN, deployerAddress);
+    const balanceFormatted = parseFloat(formatUnits(balance, 18)).toFixed(4);
+    const explorerUrl = getAddressExplorerUrl(DEFAULT_DEPLOY_CHAIN, deployerAddress);
+    const shortAddr = `${deployerAddress.slice(0, 6)}…${deployerAddress.slice(-4)}`;
+
+    const hasEnoughBalance = parseFloat(balanceFormatted) >= MIN_DEPLOY_BALANCE;
+
+    if (!hasEnoughBalance) {
+      await interaction.editReply({
+        content: `**🪙 Create New Token**\n\n` +
+          `**Deployer:** [${DEFAULT_DEPLOY_CHAIN}:${shortAddr}](<${explorerUrl}>)\n` +
+          `**Balance:** ${balanceFormatted} XDAI\n\n` +
+          `⚠️ **Insufficient balance**\n` +
+          `You need at least ${MIN_DEPLOY_BALANCE} XDAI to deploy a token.\n\n` +
+          `Please send some XDAI to the deployer address and try again.`,
+        components: [],
+      });
+      return;
+    }
+
+    // Balance is sufficient, show the modal
+    state.chain = DEFAULT_DEPLOY_CHAIN;
+    tokenSetupStates.set(userId, state);
+
+    const guildName = interaction.guild?.name || "Server";
+    const defaultSymbol = guildName.split(" ").map((w) =>
+      w.substring(0, 1).toUpperCase()
+    ).join("") + "T";
+
+    // First show balance info, then the modal button
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("token_show_create_modal")
+        .setLabel("Continue to Create Token")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("book_cancel")
+        .setLabel("Cancel")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.editReply({
+      content: `**🪙 Create New Token**\n\n` +
+        `**Chain:** ${DEFAULT_DEPLOY_CHAIN}\n` +
+        `**Deployer:** [${DEFAULT_DEPLOY_CHAIN}:${shortAddr}](<${explorerUrl}>)\n` +
+        `**Balance:** ${balanceFormatted} XDAI ✅\n\n` +
+        `Click continue to enter your token details.`,
+      components: [row],
+    });
+    return;
+  }
+
+  // Show create token modal (after balance check)
+  if (customId === "token_show_create_modal") {
     const state = tokenSetupStates.get(userId);
     if (!state) return;
 
@@ -988,30 +1066,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.customId === "token_create_modal") {
     const tokenName = interaction.fields.getTextInputValue("token_name");
     const tokenSymbol = interaction.fields.getTextInputValue("token_symbol");
+    const deployChain = state?.chain || DEFAULT_DEPLOY_CHAIN;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      // Deploy token (placeholder - needs actual implementation)
-      const tokenAddress = await deployTokenContract("base_sepolia", tokenName, tokenSymbol);
-      console.log(">>> deploying token (not implemented yet)", tokenName, tokenSymbol);
+      // Deploy token
+      const tokenAddress = await deployTokenContract(deployChain as SupportedChain, tokenName, tokenSymbol);
+      console.log(">>> deployed token", tokenName, tokenSymbol, "at", tokenAddress, "on", deployChain);
 
       tokenSetupStates.delete(userId);
       await updateSettings(guildId, {
         name: tokenName,
         symbol: tokenSymbol,
         decimals: 6,
-        chain: "base_sepolia",
+        chain: deployChain,
         address: tokenAddress,
       });
+
+      const explorerUrl = getExplorerUrl(deployChain, tokenAddress);
+      const shortAddr = `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}`;
+
       await interaction.editReply({
         content: [
           "✅ **Token deployed successfully!**",
           "",
           `**Token:** ${tokenName} (${tokenSymbol})`,
-          `**Chain:** base_sepolia`,
-          `**Decimals:** 6`,
-          `**Address:** ${tokenAddress}`,
+          `**Address:** [${deployChain}:${shortAddr}](<${explorerUrl}>)`,
           "",
           "Next, run `/setup-channels` to configure the channels!",
         ].join("\n"),
