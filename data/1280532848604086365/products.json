@@ -98,5 +98,25 @@
         "amount": 100
       }
     ]
+  },
+  {
+    "type": "room",
+    "unit": "hour",
+    "name": "Coworking",
+    "slug": "coworking",
+    "capacity": 30,
+    "availabilities": "anytime",
+    "calendarId": "c_46409c48af2476b038fed585c06edd93133b5393d8a2b72b3ca98445a3372860@group.calendar.google.com",
+    "channelId": "1443323751134531695",
+    "price": [
+      {
+        "token": "CHT",
+        "amount": 0
+      },
+      {
+        "token": "EURb",
+        "amount": 0
+      }
+    ]
   }
 ]
