@@ -48,6 +48,39 @@
     ]
   },
   {
+    "name": "burn",
+    "description": "Burn tokens from users (admin only)",
+    "default_member_permissions": "8",
+    "options": [
+      {
+        "name": "token",
+        "description": "Token to burn",
+        "type": 3,
+        "required": true,
+        "autocomplete": true
+      },
+      {
+        "name": "users",
+        "description": "Users to burn from (mention with @)",
+        "type": 3,
+        "required": true
+      },
+      {
+        "name": "amount",
+        "description": "Amount per user",
+        "type": 10,
+        "required": true,
+        "min_value": 0.01
+      },
+      {
+        "name": "description",
+        "description": "Reason for burning (optional)",
+        "type": 3,
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "balance",
     "description": "Check your token balance (or another user's balance)",
     "options": [
