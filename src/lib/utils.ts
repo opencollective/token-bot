@@ -57,9 +57,8 @@ function getDataDir(): string {
   return getEnv("DATA_DIR") || "./data";
 }
 
-// Settings cache (10 second TTL for fast autocomplete)
-const settingsCache = new Map<string, { data: GuildSettings; expiry: number }>();
-const CACHE_TTL_MS = 10_000;
+// Settings cache (invalidated only on save)
+const settingsCache = new Map<string, GuildSettings>();
 
 export function invalidateSettingsCache(guildId: string): void {
   settingsCache.delete(guildId);
@@ -135,20 +134,15 @@ export async function loadGuildSettings(
 ): Promise<GuildSettings | null> {
   // Check cache first
   const cached = settingsCache.get(guildId);
-  if (cached && Date.now() < cached.expiry) {
-    return cached.data;
+  if (cached) {
+    return cached;
   }
 
   const raw = await loadGuildFile(guildId, "settings.json");
   if (!raw) return null;
 
   const settings = migrateSettings(raw);
-
-  // Cache the result
-  settingsCache.set(guildId, {
-    data: settings,
-    expiry: Date.now() + CACHE_TTL_MS,
-  });
+  settingsCache.set(guildId, settings);
 
   return settings;
 }
