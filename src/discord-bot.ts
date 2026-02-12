@@ -59,6 +59,7 @@ const costEditStates = new Map<string, CostEditState>();
 
 import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
+import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handleSendCommand from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
@@ -216,6 +217,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "mint") {
         return handleMintAutocomplete(interaction, guildId);
       }
+      if (interaction.commandName === "burn") {
+        return handleBurnAutocomplete(interaction, guildId);
+      }
       return;
     }
 
@@ -232,6 +236,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "mint") {
         return handleMintCommand(interaction, userId, guildId);
+      }
+      if (interaction.commandName === "burn") {
+        return handleBurnCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "send") {
         return handleSendCommand(interaction, userId, guildId);
