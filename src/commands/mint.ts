@@ -26,6 +26,11 @@ function getMintableTokens(tokens: Token[]): Token[] {
   return tokens.filter((t) => t.mintable === true);
 }
 
+// Format number with thousand separators
+function formatAmount(amount: number): string {
+  return amount.toLocaleString("en-US");
+}
+
 // Handle autocomplete for token selection
 export async function handleMintAutocomplete(
   interaction: AutocompleteInteraction,
@@ -175,6 +180,11 @@ export default async function handleMintCommand(
     }
   }
 
+  // Build links
+  const tokenUrl = `https://txinfo.xyz/${chain}/token/${token.address}`;
+  const tokenLink = `[${token.symbol}](<${tokenUrl}>)`;
+  const formattedAmount = formatAmount(amount);
+
   // Post to Discord transactions channel
   const successfulMints = results.filter((r) => r.success);
   if (
@@ -188,12 +198,15 @@ export default async function handleMintCommand(
       )) as TextChannel;
 
       if (transactionsChannel) {
-        const recipientMentions = successfulMints
-          .map((r) => `<@${r.userId}>`)
-          .join(", ");
-        let discordMessage = `🪙 <@${userId}> minted ${amount} ${token.symbol} each for ${recipientMentions}`;
+        // Build message for each recipient with tx link
+        const mintLines = successfulMints.map((r) => {
+          const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
+          return `🪙 <@${userId}> minted ${formattedAmount} ${tokenLink} for <@${r.userId}> [[tx]](<${txUrl}>)`;
+        });
+        
+        let discordMessage = mintLines.join("\n");
         if (description) {
-          discordMessage += `: ${description}`;
+          discordMessage += `\n📝 ${description}`;
         }
         await transactionsChannel.send(discordMessage);
       }
@@ -208,10 +221,11 @@ export default async function handleMintCommand(
 
   let replyContent = "";
   if (successCount > 0) {
-    const recipientMentions = successfulMints
-      .map((r) => `<@${r.userId}>`)
-      .join(", ");
-    replyContent = `✅ Minted ${amount} ${token.symbol} each for ${recipientMentions}`;
+    const mintLines = successfulMints.map((r) => {
+      const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
+      return `✅ Minted ${formattedAmount} ${tokenLink} for <@${r.userId}> [[tx]](<${txUrl}>)`;
+    });
+    replyContent = mintLines.join("\n");
     if (description) {
       replyContent += `\n📝 ${description}`;
     }
