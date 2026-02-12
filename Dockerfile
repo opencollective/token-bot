@@ -1,9 +1,15 @@
-# Use the official Deno image
+# Stage 1: Compile hardhat contracts using Node
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+COPY hardhat/ ./
+RUN npm ci && npx hardhat compile
+
+# Stage 2: Run with Deno
 FROM denoland/deno:alpine-2.5.4
 
-# Install curl and Node.js with npm (needed for hardhat compile)
-# Use nodejs and npm packages from Alpine edge/community for latest versions
-RUN apk add --no-cache curl nodejs npm --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
+# Install curl
+RUN apk add --no-cache curl
 
 # Create app directory
 RUN mkdir -p /app
@@ -11,10 +17,10 @@ RUN mkdir -p /app
 # Set working directory
 WORKDIR /app
 
-# Copy your project files
+# Copy project files
 COPY . .
 
-# Compile hardhat contracts
-RUN cd hardhat && npm ci && npx hardhat compile
+# Copy compiled artifacts from builder
+COPY --from=builder /build/artifacts ./hardhat/artifacts
 
 CMD ["deno", "task", "start"]
