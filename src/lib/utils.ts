@@ -1,5 +1,5 @@
 import { join } from "@std/path";
-import { GuildSettings, RoleSetting } from "../types.ts";
+import { GuildSettings, RoleSetting, Token } from "../types.ts";
 import { ensureDir } from "@std/fs/ensure-dir";
 
 type MessageAction = {
@@ -11,6 +11,7 @@ type MessageAction = {
   discordUserId: string;
   accountAddress: string;
 };
+
 export function parseMessageContent(
   messageContent: string,
 ): MessageAction | null {
@@ -56,45 +57,106 @@ function getDataDir(): string {
   return getEnv("DATA_DIR") || "./data";
 }
 
+// Migrate legacy settings (contributionToken/fiatToken) to tokens array
+function migrateSettings(raw: any): GuildSettings {
+  const tokens: Token[] = raw.tokens || [];
+
+  // Migrate contributionToken if exists and not already in tokens
+  if (raw.contributionToken?.address) {
+    const exists = tokens.some(
+      (t) =>
+        t.address.toLowerCase() === raw.contributionToken.address.toLowerCase(),
+    );
+    if (!exists) {
+      tokens.unshift({
+        name: raw.contributionToken.name,
+        symbol: raw.contributionToken.symbol,
+        decimals: raw.contributionToken.decimals,
+        chain: raw.contributionToken.chain,
+        address: raw.contributionToken.address,
+        mintable: true, // Legacy contributionToken was always mintable
+      });
+    }
+  }
+
+  // Migrate fiatToken if exists and not already in tokens
+  if (raw.fiatToken?.address) {
+    const exists = tokens.some(
+      (t) => t.address.toLowerCase() === raw.fiatToken.address.toLowerCase(),
+    );
+    if (!exists) {
+      tokens.push({
+        name: raw.fiatToken.name,
+        symbol: raw.fiatToken.symbol,
+        decimals: raw.fiatToken.decimals,
+        chain: raw.fiatToken.chain,
+        address: raw.fiatToken.address,
+        mintable: false, // Fiat tokens typically not mintable by bot
+      });
+    }
+  }
+
+  return {
+    tokens,
+    guild: raw.guild,
+    creator: raw.creator,
+    channels: raw.channels || { transactions: "", contributions: "", logs: "" },
+  };
+}
+
 export async function loadGuildFile(
   guildId: string,
   filename: string,
-): Promise<GuildSettings | null> {
+): Promise<any | null> {
   try {
     const dataDir = getDataDir();
     const path = join(dataDir, guildId, filename);
-    console.log(`[loadGuildFile] Loading from: ${path}`);
     const content = await Deno.readTextFile(path);
-    const parsed = JSON.parse(content);
-    console.log(`[loadGuildFile] Loaded settings, has tokens array: ${Array.isArray((parsed as any).tokens)}, length: ${(parsed as any).tokens?.length || 0}`);
-    return parsed;
+    return JSON.parse(content);
   } catch (error) {
-    console.error(`Error loading guild settings for guild ${guildId}:`, error);
+    console.error(
+      `Error loading guild file ${filename} for guild ${guildId}:`,
+      error,
+    );
     return null;
   }
 }
-export async function loadGuildSettings(guildId: string): Promise<GuildSettings | null> {
-  return await loadGuildFile(guildId, "settings.json");
+
+export async function loadGuildSettings(
+  guildId: string,
+): Promise<GuildSettings | null> {
+  const raw = await loadGuildFile(guildId, "settings.json");
+  if (!raw) return null;
+  return migrateSettings(raw);
 }
 
 // File system helpers
-async function getDataPath(guildId: string, filename: string): Promise<string> {
+async function getDataPath(
+  guildId: string,
+  filename: string,
+): Promise<string> {
   const dataDir = getDataDir();
   const dirPath = `${dataDir}/${guildId}`;
   await ensureDir(dirPath);
   return `${dirPath}/${filename}`;
 }
 
-export async function saveGuildSettings(guildId: string, settings: GuildSettings): Promise<void> {
+export async function saveGuildSettings(
+  guildId: string,
+  settings: GuildSettings,
+): Promise<void> {
   const path = await getDataPath(guildId, "settings.json");
   await Deno.writeTextFile(path, JSON.stringify(settings, null, 2));
 }
 
 export async function loadRoles(guildId: string): Promise<RoleSetting[]> {
-  return await loadGuildFile(guildId, "roles.json") as RoleSetting[] || [];
+  return ((await loadGuildFile(guildId, "roles.json")) as RoleSetting[]) || [];
 }
 
-export async function saveRoles(guildId: string, roles: RoleSetting[]): Promise<void> {
+export async function saveRoles(
+  guildId: string,
+  roles: RoleSetting[],
+): Promise<void> {
   const path = await getDataPath(guildId, "roles.json");
   await Deno.writeTextFile(path, JSON.stringify(roles, null, 2));
 }
