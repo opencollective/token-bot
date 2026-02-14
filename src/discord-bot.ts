@@ -65,6 +65,7 @@ import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
+import { setDiscordClient, startApiServer } from "./api.ts";
 
 // Display server startup time and timezone
 const now = new Date();
@@ -233,6 +234,10 @@ async function registerCommands() {
 client.on(Events.ClientReady, async (readyClient) => {
   console.log(`✅ Discord bot logged in as ${readyClient.user.tag}`);
   await registerCommands();
+  
+  // Start API server and pass Discord client reference
+  setDiscordClient(client);
+  startApiServer();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
