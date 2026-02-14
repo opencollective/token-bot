@@ -12,7 +12,7 @@ import {
 } from "discord.js";
 import { BookState, Product } from "../types.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
-import { disabledCalendars } from "../discord-bot.ts";
+import { disabledCalendars } from "../lib/calendar-state.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { burnTokensFrom, getBalance, SupportedChain } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";

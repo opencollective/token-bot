@@ -92,8 +92,7 @@ if (nativeBalance < BigInt(0.001 * 10 ** 18)) {
 
 // Check Google Calendar credentials
 let calendarEnabled = false;
-// Set of calendar IDs that failed write access check (disabled for booking)
-export const disabledCalendars = new Set<string>();
+import { disabledCalendars } from "./lib/calendar-state.ts";
 
 try {
   const keyFilePath = Deno.env.get("GOOGLE_ACCOUNT_KEY_FILEPATH") || "./google-account-key.json";
