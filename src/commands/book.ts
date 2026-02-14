@@ -1049,11 +1049,11 @@ async function showPaymentSelection(
 
   const state = bookStates.get(userId);
   if (!state || !state.name || !state.duration || !state.productSlug) {
+    const errorMsg = { content: "⚠️ Session expired. Please run /book again.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update({
-        content: "⚠️ Session expired. Please run /book again.",
-        components: [],
-      });
+      await interaction.update(errorMsg);
+    } else if (interaction.isModalSubmit()) {
+      await interaction.editReply(errorMsg);
     }
     return;
   }
@@ -1062,22 +1062,22 @@ async function showPaymentSelection(
   const product = products?.find((p) => p.slug === state.productSlug);
 
   if (!product || !product.price || product.price.length === 0) {
+    const errorMsg = { content: "⚠️ No payment options configured for this room.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update({
-        content: "⚠️ No payment options configured for this room.",
-        components: [],
-      });
+      await interaction.update(errorMsg);
+    } else if (interaction.isModalSubmit()) {
+      await interaction.editReply(errorMsg);
     }
     return;
   }
 
   const guildSettings = await loadGuildSettings(guildId);
   if (!guildSettings || guildSettings.tokens.length === 0) {
+    const errorMsg = { content: "⚠️ No tokens configured.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update({
-        content: "⚠️ No tokens configured.",
-        components: [],
-      });
+      await interaction.update(errorMsg);
+    } else if (interaction.isModalSubmit()) {
+      await interaction.editReply(errorMsg);
     }
     return;
   }
@@ -1114,11 +1114,11 @@ async function showPaymentSelection(
   }
 
   if (paymentButtons.length === 0) {
+    const errorMsg = { content: "⚠️ No valid payment tokens configured.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update({
-        content: "⚠️ No valid payment tokens configured.",
-        components: [],
-      });
+      await interaction.update(errorMsg);
+    } else if (interaction.isModalSubmit()) {
+      await interaction.editReply(errorMsg);
     }
     return;
   }
@@ -1172,12 +1172,9 @@ async function showConfirmation(
 
   const state = bookStates.get(userId);
   if (!state || !state.selectedDate || state.selectedHour === undefined || state.selectedMinute === undefined || !state.duration) {
-    if (interaction.isButton()) {
-      await interaction.update({
-        content: "⚠️ Session expired. Please run /book again.",
-        components: [],
-      });
-    }
+    const errorMsg = { content: "⚠️ Session expired. Please run /book again.", components: [] };
+    if (interaction.isButton()) await interaction.update(errorMsg);
+    else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
 
@@ -1196,17 +1193,17 @@ async function showConfirmation(
   const product = products?.find((p) => p.slug === state.productSlug);
 
   if (!product) {
-    if (interaction.isButton()) {
-      await interaction.update({ content: "⚠️ Product not found.", components: [] });
-    }
+    const errorMsg = { content: "⚠️ Product not found.", components: [] };
+    if (interaction.isButton()) await interaction.update(errorMsg);
+    else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
 
   const guildSettings = await loadGuildSettings(guildId);
   if (!guildSettings) {
-    if (interaction.isButton()) {
-      await interaction.update({ content: "⚠️ Guild settings not found.", components: [] });
-    }
+    const errorMsg = { content: "⚠️ Guild settings not found.", components: [] };
+    if (interaction.isButton()) await interaction.update(errorMsg);
+    else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
 
@@ -1220,9 +1217,9 @@ async function showConfirmation(
   );
 
   if (!tokenConfig) {
-    if (interaction.isButton()) {
-      await interaction.update({ content: "⚠️ Token configuration not found.", components: [] });
-    }
+    const errorMsg = { content: "⚠️ Token configuration not found.", components: [] };
+    if (interaction.isButton()) await interaction.update(errorMsg);
+    else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
 
@@ -1267,16 +1264,16 @@ async function showConfirmation(
   const startTimeStr = formatDiscordTime(startTime);
   const endTimeStr = formatDiscordTime(endTime);
 
-  let content = `${"═".repeat(40)}
+  let content = `${"═".repeat(20)}
 **📋 Booking Summary**
-${"═".repeat(40)}
+${"═".repeat(20)}
 **Event:**    ${state.name}
 **Room:**     ${product.name}
 **When:**     ${startDateStr} at ${startTimeStr}
 **Until:**    ${endTimeStr}
 **Duration:** ${formatDuration(state.duration)}
 **Price:**    ${priceAmount.toFixed(2)} ${tokenSymbol}
-${"═".repeat(40)}
+${"═".repeat(20)}
 
 **Your balance:** ${balanceFormatted} ${tokenSymbol}`;
 
@@ -1288,7 +1285,7 @@ ${"═".repeat(40)}
   if (interaction.isButton()) {
     await interaction.update({ content, components: [row] });
   } else if (interaction.isModalSubmit()) {
-    await interaction.update({ content, components: [row] });
+    await interaction.editReply({ content, components: [row] });
   }
 }
 
