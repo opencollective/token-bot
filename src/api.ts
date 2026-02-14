@@ -213,9 +213,8 @@ async function handleBookExecute(req: Request): Promise<Response> {
 To cancel, run the /cancel command in Discord.
 
 User ID: ${userId}
-Payment Token: ${tokenSymbol}
-Token Chain: ${tokenConfig.chain}
-Token Address: ${tokenConfig.address}`;
+Booking TX: ${txHash}
+Booking Chain: ${tokenConfig.chain}`;
 
     const calendarEvent = await calendarClient.createEvent(product.calendarId, {
       summary: eventName || "Room Booking",

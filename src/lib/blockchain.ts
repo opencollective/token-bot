@@ -544,3 +544,29 @@ export async function hasRole(
     args: [role, account as Address],
   });
 }
+
+/**
+ * Get the token contract address from a transaction hash
+ * The "to" field of a token transfer/burn transaction is the token contract
+ */
+export async function getTokenAddressFromTx(
+  chainSlug: SupportedChain,
+  txHash: string,
+): Promise<string | null> {
+  try {
+    const client = createPublicClient({
+      transport: http(RPC_URLS[chainSlug]),
+      chain: ChainConfig[chainSlug],
+    });
+
+    const tx = await client.getTransaction({
+      hash: txHash as Hash,
+    });
+
+    // The "to" address is the token contract
+    return tx.to || null;
+  } catch (error) {
+    console.error(`Error getting token from tx ${txHash}:`, error);
+    return null;
+  }
+}

@@ -10,7 +10,7 @@ import {
 import { CalendarEvent, GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { Product } from "../types.ts";
-import { mintTokens, SupportedChain } from "../lib/blockchain.ts";
+import { getTokenAddressFromTx, mintTokens, SupportedChain } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 
@@ -66,27 +66,24 @@ export const cancelStates = new Map<string, {
     productName: string;
     productSlug: string;
     priceAmount: number;
-    paymentToken?: {
-      symbol: string;
+    bookingTx?: {
+      txHash: string;
       chain: string;
-      address: string;
     };
   }>;
 }>();
 
-// Parse payment token info from event description
-function parsePaymentToken(description: string | undefined): { symbol: string; chain: string; address: string } | undefined {
+// Parse booking transaction info from event description
+function parseBookingTx(description: string | undefined): { txHash: string; chain: string } | undefined {
   if (!description) return undefined;
   
-  const symbolMatch = description.match(/Payment Token: (\w+)/);
-  const chainMatch = description.match(/Token Chain: (\w+)/);
-  const addressMatch = description.match(/Token Address: (0x[a-fA-F0-9]+)/);
+  const txMatch = description.match(/Booking TX: (0x[a-fA-F0-9]+)/);
+  const chainMatch = description.match(/Booking Chain: (\w+)/);
   
-  if (symbolMatch && chainMatch && addressMatch) {
+  if (txMatch && chainMatch) {
     return {
-      symbol: symbolMatch[1],
+      txHash: txMatch[1],
       chain: chainMatch[1],
-      address: addressMatch[1],
     };
   }
   
@@ -128,10 +125,9 @@ export async function handleCancelCommand(
       productName: string;
       productSlug: string;
       priceAmount: number;
-      paymentToken?: {
-        symbol: string;
+      bookingTx?: {
+        txHash: string;
         chain: string;
-        address: string;
       };
     }> = [];
 
@@ -159,8 +155,8 @@ export async function handleCancelCommand(
             );
             const hours = durationMinutes / 60;
             
-            // Try to get payment token from event description, fall back to product price
-            const paymentToken = parsePaymentToken(event.description);
+            // Try to get booking transaction from event description
+            const bookingTx = parseBookingTx(event.description);
             const priceAmount = product.price[0].amount * hours;
 
             userEvents.push({
@@ -169,7 +165,7 @@ export async function handleCancelCommand(
               productName: product.name,
               productSlug: product.slug,
               priceAmount,
-              paymentToken,
+              bookingTx,
             });
           }
         }
@@ -258,10 +254,25 @@ export async function handleCancelSelect(
   const refundPercentage = hoursUntilBooking > 24 ? 100 : 50;
   const refundAmount = (selectedItem.priceAmount * refundPercentage) / 100;
 
-  // Use payment token from booking if available, otherwise fall back to guild default
+  // Look up token from booking transaction if available
   const guildId = interaction.guildId!;
   const guildSettings = await loadGuildSettings(guildId);
-  const tokenSymbol = selectedItem.paymentToken?.symbol || guildSettings?.tokens[0].symbol || "tokens";
+  
+  let tokenSymbol = guildSettings?.tokens[0].symbol || "tokens";
+  if (selectedItem.bookingTx && guildSettings) {
+    const tokenAddress = await getTokenAddressFromTx(
+      selectedItem.bookingTx.chain as SupportedChain,
+      selectedItem.bookingTx.txHash
+    );
+    if (tokenAddress) {
+      const token = guildSettings.tokens.find(
+        t => t.address.toLowerCase() === tokenAddress.toLowerCase()
+      );
+      if (token) {
+        tokenSymbol = token.symbol;
+      }
+    }
+  }
 
   // Create confirmation buttons
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -350,18 +361,31 @@ export async function handleCancelButton(
         return;
       }
 
-      // Use payment token from booking if available, otherwise fall back to guild default
-      const refundToken = selectedItem.paymentToken 
-        ? {
-            symbol: selectedItem.paymentToken.symbol,
-            chain: selectedItem.paymentToken.chain as SupportedChain,
-            address: selectedItem.paymentToken.address,
+      // Look up token from booking transaction if available, otherwise fall back to guild default
+      let refundToken = {
+        symbol: guildSettings.tokens[0].symbol,
+        chain: guildSettings.tokens[0].chain as SupportedChain,
+        address: guildSettings.tokens[0].address,
+      };
+      
+      if (selectedItem.bookingTx) {
+        const tokenAddress = await getTokenAddressFromTx(
+          selectedItem.bookingTx.chain as SupportedChain,
+          selectedItem.bookingTx.txHash
+        );
+        if (tokenAddress) {
+          const token = guildSettings.tokens.find(
+            t => t.address.toLowerCase() === tokenAddress.toLowerCase()
+          );
+          if (token) {
+            refundToken = {
+              symbol: token.symbol,
+              chain: token.chain as SupportedChain,
+              address: token.address,
+            };
           }
-        : {
-            symbol: guildSettings.tokens[0].symbol,
-            chain: guildSettings.tokens[0].chain as SupportedChain,
-            address: guildSettings.tokens[0].address,
-          };
+        }
+      }
       
       const tokenSymbol = refundToken.symbol;
 
