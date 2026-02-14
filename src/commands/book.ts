@@ -1053,7 +1053,7 @@ async function showConfirmation(
   // Calculate price
   const hours = state.duration / 60;
   const priceAmount = product.price[0].amount * hours;
-  const tokenSymbol = guildSettings.contributionToken.symbol;
+  const tokenSymbol = guildSettings.tokens[0].symbol;
   const priceInfo = product.price
     .map((p) => `${(p.amount * hours).toFixed(2)} ${p.token}`)
     .join(" or ");
@@ -1061,16 +1061,16 @@ async function showConfirmation(
   // Get user's balance
   const userAddress = await getCachedAddress(userId);
   const balance = await getBalance(
-    guildSettings.contributionToken.chain as SupportedChain,
-    guildSettings.contributionToken.address,
+    guildSettings.tokens[0].chain as SupportedChain,
+    guildSettings.tokens[0].address,
     userAddress,
   );
   const balanceFormatted = parseFloat(
-    formatUnits(balance, guildSettings.contributionToken.decimals),
+    formatUnits(balance, guildSettings.tokens[0].decimals),
   ).toFixed(2);
   const requiredAmount = parseUnits(
     priceAmount.toString(),
-    guildSettings.contributionToken.decimals,
+    guildSettings.tokens[0].decimals,
   );
   const hasEnoughBalance = balance >= requiredAmount;
 
@@ -1108,7 +1108,7 @@ ${"═".repeat(40)}
 **Your balance:** ${balanceFormatted} ${tokenSymbol}`;
 
   if (!hasEnoughBalance) {
-    const mintInstructions = guildSettings.contributionToken.mintInstructions || "";
+    const mintInstructions = guildSettings.tokens[0].mintInstructions || "";
     content += `\n\n⚠️ **Insufficient balance**\nYou need ${priceAmount.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.\n\n${mintInstructions}`;
   }
 
@@ -1165,27 +1165,27 @@ async function processBooking(
 
   const hours = (state.duration || 60) / 60;
   const priceAmount = product.price[0].amount * hours;
-  const tokenSymbol = guildSettings.contributionToken.symbol;
+  const tokenSymbol = guildSettings.tokens[0].symbol;
 
   try {
     const userAddress = await getCachedAddress(userId);
 
     const balance = await getBalance(
-      guildSettings.contributionToken.chain as SupportedChain,
-      guildSettings.contributionToken.address,
+      guildSettings.tokens[0].chain as SupportedChain,
+      guildSettings.tokens[0].address,
       userAddress,
     );
 
     const requiredAmount = parseUnits(
       priceAmount.toString(),
-      guildSettings.contributionToken.decimals,
+      guildSettings.tokens[0].decimals,
     );
 
     if (balance < requiredAmount) {
       const balanceFormatted = parseFloat(
-        formatUnits(balance, guildSettings.contributionToken.decimals),
+        formatUnits(balance, guildSettings.tokens[0].decimals),
       ).toFixed(2);
-      const mintInstructions = guildSettings.contributionToken.mintInstructions || "";
+      const mintInstructions = guildSettings.tokens[0].mintInstructions || "";
 
       await interaction.editReply({
         content: `❌ **Insufficient balance**
@@ -1199,11 +1199,11 @@ ${mintInstructions}`,
     }
 
     const txHash = await burnTokensFrom(
-      guildSettings.contributionToken.chain as SupportedChain,
-      guildSettings.contributionToken.address,
+      guildSettings.tokens[0].chain as SupportedChain,
+      guildSettings.tokens[0].address,
       userAddress,
       priceAmount.toString(),
-      guildSettings.contributionToken.decimals,
+      guildSettings.tokens[0].decimals,
     );
 
     if (!txHash) {
@@ -1222,8 +1222,8 @@ ${mintInstructions}`,
 
       await calendarClient.ensureCalendarInList(product.calendarId);
 
-      const chainId = guildSettings.contributionToken.chain === "celo" ? 42220 : 84532;
-      const explorerBaseUrl = guildSettings.contributionToken.chain === "celo"
+      const chainId = guildSettings.tokens[0].chain === "celo" ? 42220 : 84532;
+      const explorerBaseUrl = guildSettings.tokens[0].chain === "celo"
         ? "https://celoscan.io"
         : "https://sepolia.basescan.org";
       const txUrl = `${explorerBaseUrl}/tx/${txHash}`;

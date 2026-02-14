@@ -14,14 +14,10 @@ interface GuildSettings {
     name: string;
     icon?: string;
   };
-  contributionToken?: {
+  tokens: Array<{
     name: string;
     symbol: string;
-  };
-  fiatToken?: {
-    name: string;
-    symbol: string;
-  };
+  }>;
 }
 
 async function getGuilds(): Promise<Array<{ id: string; name: string }>> {

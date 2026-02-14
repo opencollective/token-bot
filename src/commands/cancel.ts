@@ -224,7 +224,7 @@ export async function handleCancelSelect(
   // Load guild settings for token symbol
   const guildId = interaction.guildId!;
   const guildSettings = await loadGuildSettings(guildId);
-  const tokenSymbol = guildSettings?.contributionToken.symbol || "tokens";
+  const tokenSymbol = guildSettings?.tokens[0].symbol || "tokens";
 
   // Create confirmation buttons
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -313,7 +313,7 @@ export async function handleCancelButton(
         return;
       }
 
-      const tokenSymbol = guildSettings.contributionToken.symbol;
+      const tokenSymbol = guildSettings.tokens[0].symbol;
 
       // Calculate refund
       const startDate = new Date(selectedItem.event.start.dateTime);
@@ -329,8 +329,8 @@ export async function handleCancelButton(
 
       // Mint tokens to refund the user
       const txHash = await mintTokens(
-        guildSettings.contributionToken.chain as SupportedChain,
-        guildSettings.contributionToken.address,
+        guildSettings.tokens[0].chain as SupportedChain,
+        guildSettings.tokens[0].address,
         userAddress,
         refundAmount.toString(),
       );
@@ -351,8 +351,8 @@ export async function handleCancelButton(
       );
 
       // Get explorer URL based on chain
-      const chainId = guildSettings.contributionToken.chain === "celo" ? 42220 : 84532;
-      const explorerBaseUrl = guildSettings.contributionToken.chain === "celo"
+      const chainId = guildSettings.tokens[0].chain === "celo" ? 42220 : 84532;
+      const explorerBaseUrl = guildSettings.tokens[0].chain === "celo"
         ? "https://celoscan.io"
         : "https://sepolia.basescan.org";
       const txUrl = `${explorerBaseUrl}/tx/${txHash}`;

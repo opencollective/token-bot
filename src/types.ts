@@ -8,6 +8,7 @@ export type Token = {
   chain: Chain;
   address: BlockchainAddress;
   mintable?: boolean;
+  mintInstructions?: string;
 };
 
 export type GuildSettings = {
