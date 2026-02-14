@@ -1484,7 +1484,10 @@ ${mintInstructions}`,
       eventDescription +=
         `\n\nPlease reach out to @${interaction.user.username} on Discord for questions about this booking.
         \n\nTo cancel, ${interaction.user.displayName} needs to run the /cancel command in Discord.
-        \n\nUser ID: ${userId}`;
+        \n\nUser ID: ${userId}
+Payment Token: ${tokenSymbol}
+Token Chain: ${tokenConfig.chain}
+Token Address: ${tokenConfig.address}`;
 
       await calendarClient.createEvent(product.calendarId, {
         summary: state.name || "Room Booking",

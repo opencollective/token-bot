@@ -66,8 +66,32 @@ export const cancelStates = new Map<string, {
     productName: string;
     productSlug: string;
     priceAmount: number;
+    paymentToken?: {
+      symbol: string;
+      chain: string;
+      address: string;
+    };
   }>;
 }>();
+
+// Parse payment token info from event description
+function parsePaymentToken(description: string | undefined): { symbol: string; chain: string; address: string } | undefined {
+  if (!description) return undefined;
+  
+  const symbolMatch = description.match(/Payment Token: (\w+)/);
+  const chainMatch = description.match(/Token Chain: (\w+)/);
+  const addressMatch = description.match(/Token Address: (0x[a-fA-F0-9]+)/);
+  
+  if (symbolMatch && chainMatch && addressMatch) {
+    return {
+      symbol: symbolMatch[1],
+      chain: chainMatch[1],
+      address: addressMatch[1],
+    };
+  }
+  
+  return undefined;
+}
 
 export async function handleCancelCommand(
   interaction: Interaction,
@@ -104,6 +128,11 @@ export async function handleCancelCommand(
       productName: string;
       productSlug: string;
       priceAmount: number;
+      paymentToken?: {
+        symbol: string;
+        chain: string;
+        address: string;
+      };
     }> = [];
 
     for (const product of productsWithCalendar) {
@@ -129,6 +158,9 @@ export async function handleCancelCommand(
               (endDate.getTime() - startDate.getTime()) / 60000,
             );
             const hours = durationMinutes / 60;
+            
+            // Try to get payment token from event description, fall back to product price
+            const paymentToken = parsePaymentToken(event.description);
             const priceAmount = product.price[0].amount * hours;
 
             userEvents.push({
@@ -137,6 +169,7 @@ export async function handleCancelCommand(
               productName: product.name,
               productSlug: product.slug,
               priceAmount,
+              paymentToken,
             });
           }
         }
@@ -225,10 +258,10 @@ export async function handleCancelSelect(
   const refundPercentage = hoursUntilBooking > 24 ? 100 : 50;
   const refundAmount = (selectedItem.priceAmount * refundPercentage) / 100;
 
-  // Load guild settings for token symbol
+  // Use payment token from booking if available, otherwise fall back to guild default
   const guildId = interaction.guildId!;
   const guildSettings = await loadGuildSettings(guildId);
-  const tokenSymbol = guildSettings?.tokens[0].symbol || "tokens";
+  const tokenSymbol = selectedItem.paymentToken?.symbol || guildSettings?.tokens[0].symbol || "tokens";
 
   // Create confirmation buttons
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -317,7 +350,20 @@ export async function handleCancelButton(
         return;
       }
 
-      const tokenSymbol = guildSettings.tokens[0].symbol;
+      // Use payment token from booking if available, otherwise fall back to guild default
+      const refundToken = selectedItem.paymentToken 
+        ? {
+            symbol: selectedItem.paymentToken.symbol,
+            chain: selectedItem.paymentToken.chain as SupportedChain,
+            address: selectedItem.paymentToken.address,
+          }
+        : {
+            symbol: guildSettings.tokens[0].symbol,
+            chain: guildSettings.tokens[0].chain as SupportedChain,
+            address: guildSettings.tokens[0].address,
+          };
+      
+      const tokenSymbol = refundToken.symbol;
 
       // Calculate refund
       const startDate = new Date(selectedItem.event.start.dateTime);
@@ -331,10 +377,10 @@ export async function handleCancelButton(
       // Get user's blockchain address
       const userAddress = await getCachedAddress(userId);
 
-      // Mint tokens to refund the user
+      // Mint tokens to refund the user (using the same token they paid with)
       const txHash = await mintTokens(
-        guildSettings.tokens[0].chain as SupportedChain,
-        guildSettings.tokens[0].address,
+        refundToken.chain,
+        refundToken.address,
         userAddress,
         refundAmount.toString(),
       );
@@ -355,9 +401,12 @@ export async function handleCancelButton(
       );
 
       // Get explorer URL based on chain
-      const chainId = guildSettings.tokens[0].chain === "celo" ? 42220 : 84532;
-      const explorerBaseUrl = guildSettings.tokens[0].chain === "celo"
+      const chainId = refundToken.chain === "celo" ? 42220 : 
+                      refundToken.chain === "gnosis" ? 100 : 84532;
+      const explorerBaseUrl = refundToken.chain === "celo"
         ? "https://celoscan.io"
+        : refundToken.chain === "gnosis"
+        ? "https://gnosisscan.io"
         : "https://sepolia.basescan.org";
       const txUrl = `${explorerBaseUrl}/tx/${txHash}`;
 
