@@ -115,9 +115,13 @@ export async function handleCancelCommand(
           futureDate,
         );
 
-        // Filter events booked by this user
+        // Filter events booked by this user (check User ID first, then fall back to username)
+        const username = interaction.user.username;
         for (const event of events) {
-          if (event.description?.includes(`User ID: ${userId}`)) {
+          const matchesUserId = event.description?.includes(`User ID: ${userId}`);
+          const matchesUsername = event.description?.includes(`@${username})`);
+          
+          if (matchesUserId || matchesUsername) {
             // Calculate price based on duration
             const startDate = new Date(event.start.dateTime);
             const endDate = new Date(event.end.dateTime);
