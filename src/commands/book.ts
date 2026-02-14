@@ -776,10 +776,47 @@ export async function handleBookButton(
     }
 
     state.name = `${interaction.user.displayName}'s booking`;
+    state.step = "payment";
+    bookStates.set(userId, state);
+
+    await showPaymentSelection(interaction, userId, guildId);
+    return;
+  }
+
+  // Payment method selection
+  if (customId.startsWith("book_pay_")) {
+    if (!state || !state.name || !state.duration) {
+      await interaction.update({
+        content: "⚠️ Session expired. Please run /book again.",
+        components: [],
+      });
+      return;
+    }
+
+    const tokenSymbol = customId.replace("book_pay_", "");
+    state.selectedToken = tokenSymbol;
     state.step = "confirm";
     bookStates.set(userId, state);
 
     await showConfirmation(interaction, userId, guildId);
+    return;
+  }
+
+  // Back to payment selection
+  if (customId === "book_back_payment") {
+    if (!state || !state.name) {
+      await interaction.update({
+        content: "⚠️ Session expired. Please run /book again.",
+        components: [],
+      });
+      return;
+    }
+
+    state.step = "payment";
+    state.selectedToken = undefined;
+    bookStates.set(userId, state);
+
+    await showPaymentSelection(interaction, userId, guildId);
     return;
   }
 
@@ -1002,6 +1039,129 @@ async function showNameInput(
   });
 }
 
+// Show payment method selection
+async function showPaymentSelection(
+  interaction: Interaction,
+  userId: string,
+  guildId: string,
+) {
+  if (!interaction.isButton() && !interaction.isModalSubmit()) return;
+
+  const state = bookStates.get(userId);
+  if (!state || !state.name || !state.duration || !state.productSlug) {
+    if (interaction.isButton()) {
+      await interaction.update({
+        content: "⚠️ Session expired. Please run /book again.",
+        components: [],
+      });
+    }
+    return;
+  }
+
+  const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+  const product = products?.find((p) => p.slug === state.productSlug);
+
+  if (!product || !product.price || product.price.length === 0) {
+    if (interaction.isButton()) {
+      await interaction.update({
+        content: "⚠️ No payment options configured for this room.",
+        components: [],
+      });
+    }
+    return;
+  }
+
+  const guildSettings = await loadGuildSettings(guildId);
+  if (!guildSettings || guildSettings.tokens.length === 0) {
+    if (interaction.isButton()) {
+      await interaction.update({
+        content: "⚠️ No tokens configured.",
+        components: [],
+      });
+    }
+    return;
+  }
+
+  // If only one payment option, skip to confirmation
+  if (product.price.length === 1) {
+    state.selectedToken = product.price[0].token;
+    state.step = "confirm";
+    bookStates.set(userId, state);
+    await showConfirmation(interaction, userId, guildId);
+    return;
+  }
+
+  const hours = state.duration / 60;
+  const header = buildSelectionHeader(state, product);
+
+  // Build payment option buttons
+  const paymentButtons: ButtonBuilder[] = [];
+  for (const price of product.price) {
+    const totalPrice = (price.amount * hours).toFixed(2);
+    // Check if this token is configured in guild settings
+    const tokenConfig = guildSettings.tokens.find(
+      (t) => t.symbol.toLowerCase() === price.token.toLowerCase()
+    );
+    
+    if (tokenConfig) {
+      paymentButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`book_pay_${price.token}`)
+          .setLabel(`Pay ${totalPrice} ${price.token}`)
+          .setStyle(ButtonStyle.Primary)
+      );
+    }
+  }
+
+  if (paymentButtons.length === 0) {
+    if (interaction.isButton()) {
+      await interaction.update({
+        content: "⚠️ No valid payment tokens configured.",
+        components: [],
+      });
+    }
+    return;
+  }
+
+  // If only one valid payment option after filtering, skip to confirmation
+  if (paymentButtons.length === 1) {
+    const tokenSymbol = product.price.find((p) => 
+      guildSettings.tokens.some((t) => t.symbol.toLowerCase() === p.token.toLowerCase())
+    )?.token;
+    if (tokenSymbol) {
+      state.selectedToken = tokenSymbol;
+      state.step = "confirm";
+      bookStates.set(userId, state);
+      await showConfirmation(interaction, userId, guildId);
+      return;
+    }
+  }
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...paymentButtons.slice(0, 5));
+
+  const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("book_back_duration")
+      .setLabel("← Back")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("book_cancel")
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Danger),
+  );
+
+  const updateContent = {
+    content: `${header}\n💳 **Choose payment method:**`,
+    components: [row, navRow],
+  };
+
+  if (interaction.isButton()) {
+    await interaction.update(updateContent);
+  } else if (interaction.isModalSubmit()) {
+    await interaction.editReply(updateContent);
+  }
+}
+
 // Show confirmation UI
 async function showConfirmation(
   interaction: Interaction,
@@ -1050,27 +1210,40 @@ async function showConfirmation(
     return;
   }
 
+  // Find the selected token and price
+  const selectedTokenSymbol = state.selectedToken || product.price[0].token;
+  const selectedPrice = product.price.find(
+    (p) => p.token.toLowerCase() === selectedTokenSymbol.toLowerCase()
+  ) || product.price[0];
+  const tokenConfig = guildSettings.tokens.find(
+    (t) => t.symbol.toLowerCase() === selectedTokenSymbol.toLowerCase()
+  );
+
+  if (!tokenConfig) {
+    if (interaction.isButton()) {
+      await interaction.update({ content: "⚠️ Token configuration not found.", components: [] });
+    }
+    return;
+  }
+
   // Calculate price
   const hours = state.duration / 60;
-  const priceAmount = product.price[0].amount * hours;
-  const tokenSymbol = guildSettings.tokens[0].symbol;
-  const priceInfo = product.price
-    .map((p) => `${(p.amount * hours).toFixed(2)} ${p.token}`)
-    .join(" or ");
+  const priceAmount = selectedPrice.amount * hours;
+  const tokenSymbol = tokenConfig.symbol;
 
   // Get user's balance
   const userAddress = await getCachedAddress(userId);
   const balance = await getBalance(
-    guildSettings.tokens[0].chain as SupportedChain,
-    guildSettings.tokens[0].address,
+    tokenConfig.chain as SupportedChain,
+    tokenConfig.address,
     userAddress,
   );
   const balanceFormatted = parseFloat(
-    formatUnits(balance, guildSettings.tokens[0].decimals),
+    formatUnits(balance, tokenConfig.decimals),
   ).toFixed(2);
   const requiredAmount = parseUnits(
     priceAmount.toString(),
-    guildSettings.tokens[0].decimals,
+    tokenConfig.decimals,
   );
   const hasEnoughBalance = balance >= requiredAmount;
 
@@ -1081,7 +1254,7 @@ async function showConfirmation(
       .setStyle(ButtonStyle.Success)
       .setDisabled(!hasEnoughBalance),
     new ButtonBuilder()
-      .setCustomId("book_back_duration")
+      .setCustomId("book_back_payment")
       .setLabel("← Back")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
@@ -1102,13 +1275,13 @@ ${"═".repeat(40)}
 **When:**     ${startDateStr} at ${startTimeStr}
 **Until:**    ${endTimeStr}
 **Duration:** ${formatDuration(state.duration)}
-**Price:**    ${priceInfo}
+**Price:**    ${priceAmount.toFixed(2)} ${tokenSymbol}
 ${"═".repeat(40)}
 
 **Your balance:** ${balanceFormatted} ${tokenSymbol}`;
 
   if (!hasEnoughBalance) {
-    const mintInstructions = guildSettings.tokens[0].mintInstructions || "";
+    const mintInstructions = tokenConfig.mintInstructions || "";
     content += `\n\n⚠️ **Insufficient balance**\nYou need ${priceAmount.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.\n\n${mintInstructions}`;
   }
 
@@ -1163,29 +1336,45 @@ async function processBooking(
     encodeURIComponent(product.calendarId!)
   }&ctz=${encodeURIComponent(guildSettings.guild.timezone || "Europe/Brussels")}`;
 
+  // Find the selected token and price
+  const selectedTokenSymbol = state.selectedToken || product.price[0].token;
+  const selectedPrice = product.price.find(
+    (p) => p.token.toLowerCase() === selectedTokenSymbol.toLowerCase()
+  ) || product.price[0];
+  const tokenConfig = guildSettings.tokens.find(
+    (t) => t.symbol.toLowerCase() === selectedTokenSymbol.toLowerCase()
+  );
+
+  if (!tokenConfig) {
+    await interaction.editReply({
+      content: "⚠️ Token configuration not found.",
+    });
+    return;
+  }
+
   const hours = (state.duration || 60) / 60;
-  const priceAmount = product.price[0].amount * hours;
-  const tokenSymbol = guildSettings.tokens[0].symbol;
+  const priceAmount = selectedPrice.amount * hours;
+  const tokenSymbol = tokenConfig.symbol;
 
   try {
     const userAddress = await getCachedAddress(userId);
 
     const balance = await getBalance(
-      guildSettings.tokens[0].chain as SupportedChain,
-      guildSettings.tokens[0].address,
+      tokenConfig.chain as SupportedChain,
+      tokenConfig.address,
       userAddress,
     );
 
     const requiredAmount = parseUnits(
       priceAmount.toString(),
-      guildSettings.tokens[0].decimals,
+      tokenConfig.decimals,
     );
 
     if (balance < requiredAmount) {
       const balanceFormatted = parseFloat(
-        formatUnits(balance, guildSettings.tokens[0].decimals),
+        formatUnits(balance, tokenConfig.decimals),
       ).toFixed(2);
-      const mintInstructions = guildSettings.tokens[0].mintInstructions || "";
+      const mintInstructions = tokenConfig.mintInstructions || "";
 
       await interaction.editReply({
         content: `❌ **Insufficient balance**
@@ -1199,11 +1388,11 @@ ${mintInstructions}`,
     }
 
     const txHash = await burnTokensFrom(
-      guildSettings.tokens[0].chain as SupportedChain,
-      guildSettings.tokens[0].address,
+      tokenConfig.chain as SupportedChain,
+      tokenConfig.address,
       userAddress,
       priceAmount.toString(),
-      guildSettings.tokens[0].decimals,
+      tokenConfig.decimals,
     );
 
     if (!txHash) {
@@ -1222,9 +1411,12 @@ ${mintInstructions}`,
 
       await calendarClient.ensureCalendarInList(product.calendarId);
 
-      const chainId = guildSettings.tokens[0].chain === "celo" ? 42220 : 84532;
-      const explorerBaseUrl = guildSettings.tokens[0].chain === "celo"
+      const chainId = tokenConfig.chain === "celo" ? 42220 : 
+                      tokenConfig.chain === "gnosis" ? 100 : 84532;
+      const explorerBaseUrl = tokenConfig.chain === "celo"
         ? "https://celoscan.io"
+        : tokenConfig.chain === "gnosis" 
+        ? "https://gnosisscan.io"
         : "https://sepolia.basescan.org";
       const txUrl = `${explorerBaseUrl}/tx/${txHash}`;
 
@@ -1438,10 +1630,10 @@ export async function handleBookModal(
 
     const eventName = interaction.fields.getTextInputValue("event_name");
     state.name = eventName;
-    state.step = "confirm";
+    state.step = "payment";
     bookStates.set(userId, state);
 
     await interaction.deferUpdate();
-    await showConfirmation(interaction, userId, guildId);
+    await showPaymentSelection(interaction, userId, guildId);
   }
 }

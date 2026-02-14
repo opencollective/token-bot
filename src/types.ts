@@ -91,7 +91,7 @@ export type Product = {
 };
 
 export type BookState = {
-  step?: "room" | "date" | "time" | "duration" | "name" | "confirm";
+  step?: "room" | "date" | "time" | "duration" | "name" | "payment" | "confirm";
   productSlug?: string;
   guildId?: string;
   name?: string;
@@ -101,4 +101,5 @@ export type BookState = {
   startTime?: Date;
   endTime?: Date;
   duration?: number;
+  selectedToken?: string; // Token symbol for payment (e.g., "CHT", "EURb")
 };
