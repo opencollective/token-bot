@@ -303,4 +303,39 @@ export class GoogleCalendarClient {
       throw new Error(`Failed to delete event: ${error}`);
     }
   }
+
+  /**
+   * Test write access to a calendar by creating and immediately deleting a test event
+   * @param calendarId - The ID of the calendar to test
+   * @returns true if write access is available, false otherwise
+   */
+  async testWriteAccess(calendarId: string): Promise<boolean> {
+    try {
+      // Create a test event far in the future
+      const testStart = new Date();
+      testStart.setFullYear(testStart.getFullYear() + 10);
+      const testEnd = new Date(testStart.getTime() + 60000);
+
+      const response = await this.calendar.events.insert({
+        calendarId,
+        requestBody: {
+          summary: "[TEST] Write access check - safe to delete",
+          start: { dateTime: testStart.toISOString() },
+          end: { dateTime: testEnd.toISOString() },
+        },
+      });
+
+      // Immediately delete the test event
+      if (response.data.id) {
+        await this.calendar.events.delete({
+          calendarId,
+          eventId: response.data.id,
+        });
+      }
+
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
 }

@@ -12,6 +12,7 @@ import {
 } from "discord.js";
 import { BookState, Product } from "../types.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
+import { disabledCalendars } from "../discord-bot.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { burnTokensFrom, getBalance, SupportedChain } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
@@ -296,13 +297,27 @@ export async function handleBookCommand(
 
   // Load products (rooms) for selection
   const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
-  const bookableRooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
+  // Filter to rooms with calendars that have write access
+  const bookableRooms = products?.filter((p) => 
+    p.type === "room" && 
+    p.calendarId && 
+    !disabledCalendars.has(p.calendarId)
+  ) || [];
 
   if (bookableRooms.length === 0) {
-    await interaction.reply({
-      content: "⚠️ No bookable rooms configured.",
-      flags: MessageFlags.Ephemeral,
-    });
+    // Check if there are rooms but all are disabled
+    const allRooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
+    if (allRooms.length > 0) {
+      await interaction.reply({
+        content: "⚠️ All room calendars are currently unavailable (missing write permissions). Please contact an administrator.",
+        flags: MessageFlags.Ephemeral,
+      });
+    } else {
+      await interaction.reply({
+        content: "⚠️ No bookable rooms configured.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
     return;
   }
 
@@ -472,13 +487,21 @@ export async function handleBookButton(
 
     const roomSlug = customId.replace("book_room_", "");
     
-    // Verify room exists
+    // Verify room exists and has write access
     const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
     const product = products?.find((p) => p.slug === roomSlug);
 
     if (!product || !product.calendarId) {
       await interaction.update({
         content: "⚠️ This room is not available for booking.",
+        components: [],
+      });
+      return;
+    }
+
+    if (disabledCalendars.has(product.calendarId)) {
+      await interaction.update({
+        content: "⚠️ This room's calendar is currently unavailable (missing write permissions). Please contact an administrator.",
         components: [],
       });
       return;
@@ -661,9 +684,13 @@ export async function handleBookButton(
     state.selectedMinute = undefined;
     bookStates.set(userId, state);
 
-    // Rebuild room selection
+    // Rebuild room selection (filter out disabled calendars)
     const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
-    const bookableRooms = products?.filter((p) => p.type === "room" && p.calendarId) || [];
+    const bookableRooms = products?.filter((p) => 
+      p.type === "room" && 
+      p.calendarId && 
+      !disabledCalendars.has(p.calendarId)
+    ) || [];
 
     // Build room list with details
     let roomList = "";

@@ -92,6 +92,9 @@ if (nativeBalance < BigInt(0.001 * 10 ** 18)) {
 
 // Check Google Calendar credentials
 let calendarEnabled = false;
+// Set of calendar IDs that failed write access check (disabled for booking)
+export const disabledCalendars = new Set<string>();
+
 try {
   const keyFilePath = Deno.env.get("GOOGLE_ACCOUNT_KEY_FILEPATH") || "./google-account-key.json";
   await Deno.stat(keyFilePath);
@@ -100,6 +103,42 @@ try {
   const testClient = new GoogleCalendarClient();
   calendarEnabled = true;
   console.log("✅ Google Calendar credentials found and loaded");
+
+  // Check write access to all product calendars
+  console.log("📅 Checking calendar write permissions...");
+  const dataDir = Deno.env.get("DATA_DIR") || "./data";
+  
+  try {
+    for await (const guildEntry of Deno.readDir(dataDir)) {
+      if (!guildEntry.isDirectory) continue;
+      
+      const productsPath = `${dataDir}/${guildEntry.name}/products.json`;
+      try {
+        const productsJson = await Deno.readTextFile(productsPath);
+        const products = JSON.parse(productsJson) as Product[];
+        
+        for (const product of products) {
+          if (product.calendarId) {
+            const hasAccess = await testClient.testWriteAccess(product.calendarId);
+            if (hasAccess) {
+              console.log(`  ✅ ${product.name}: write access OK`);
+            } else {
+              console.warn(`  ❌ ${product.name}: NO write access - booking disabled`);
+              disabledCalendars.add(product.calendarId);
+            }
+          }
+        }
+      } catch {
+        // No products.json for this guild, skip
+      }
+    }
+  } catch (error) {
+    console.warn("⚠️  Could not check calendar permissions:", error);
+  }
+  
+  if (disabledCalendars.size > 0) {
+    console.warn(`⚠️  ${disabledCalendars.size} calendar(s) disabled due to missing write permissions`);
+  }
 } catch (error) {
   console.warn("⚠️  Google Calendar credentials not found or invalid");
   console.warn("⚠️  /book and /cancel commands will be disabled");
