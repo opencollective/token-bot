@@ -1343,8 +1343,10 @@ async function processBooking(
   );
 
   if (!tokenConfig) {
+    console.error(`Token config not found for ${selectedTokenSymbol}`);
+    console.error("Available tokens:", guildSettings.tokens.map(t => t.symbol));
     await interaction.editReply({
-      content: "⚠️ Token configuration not found.",
+      content: `⚠️ Token configuration not found for ${selectedTokenSymbol}.\nAvailable: ${guildSettings.tokens.map(t => t.symbol).join(", ")}`,
     });
     return;
   }
@@ -1352,6 +1354,8 @@ async function processBooking(
   const hours = (state.duration || 60) / 60;
   const priceAmount = selectedPrice.amount * hours;
   const tokenSymbol = tokenConfig.symbol;
+
+  console.log(`Processing payment: ${priceAmount} ${tokenSymbol} on ${tokenConfig.chain}`);
 
   try {
     const userAddress = await getCachedAddress(userId);
@@ -1550,13 +1554,21 @@ Please contact an administrator for a refund.`;
     }
   } catch (error: any) {
     console.error("Error processing payment:", error);
+    console.error("Token config:", JSON.stringify(tokenConfig, null, 2));
+    console.error("Price amount:", priceAmount);
+    console.error("User address:", userAddress);
 
     await interaction.editReply({
       content: `❌ **Payment failed**
 
-${error.message}
+**Error:** ${error.message || "Unknown error"}
 
-Please ensure you have enough ${tokenSymbol} tokens in your account.`,
+**Details:**
+• Token: ${tokenSymbol} (${tokenConfig.chain})
+• Amount: ${priceAmount.toFixed(2)}
+• Address: ${tokenConfig.address.slice(0, 10)}...
+
+Please ensure you have enough ${tokenSymbol} tokens and the bot has permission to burn from your account.`,
     });
   }
 }
