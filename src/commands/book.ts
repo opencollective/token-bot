@@ -1526,8 +1526,9 @@ You can view the calendar of all bookings for the ${product.name} room on its [p
       });
     } catch (error: any) {
       console.error("Error creating calendar event:", error);
+      console.error("Error details:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
 
-      let errorMessage = "❌ Payment successful but booking failed.";
+      let errorMessage = `❌ Payment successful but booking failed.\n\n**Error:** ${error.message || "Unknown error"}`;
       if (error.conflictingEvent) {
         const conflictStart = new Date(error.conflictingEvent.start.dateTime);
         const conflictEnd = new Date(error.conflictingEvent.end.dateTime);
