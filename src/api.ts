@@ -15,27 +15,32 @@ import { Client, TextChannel } from "discord.js";
 const API_KEY = Deno.env.get("API_KEY");
 const API_PORT = parseInt(Deno.env.get("API_PORT") || "3000");
 
-// Git info (populated at startup)
+// Git info (populated lazily on first request)
 let gitSha = "unknown";
 let gitMessage = "unknown";
 let gitBranch = "unknown";
+let gitLoaded = false;
 let startTime = new Date();
 
-try {
-  const process = new Deno.Command("git", {
-    args: ["log", "-1", "--format=%H|%s|%D"],
-    stdout: "piped",
-  });
-  const output = await process.output();
-  const result = new TextDecoder().decode(output.stdout).trim();
-  const [sha, message, refs] = result.split("|");
-  gitSha = sha || "unknown";
-  gitMessage = message || "unknown";
-  // Extract branch from refs like "HEAD -> main, origin/main"
-  const branchMatch = refs?.match(/HEAD -> ([^,]+)/);
-  gitBranch = branchMatch?.[1] || "unknown";
-} catch {
-  console.warn("⚠️  Could not get git info");
+async function loadGitInfo() {
+  if (gitLoaded) return;
+  gitLoaded = true;
+  try {
+    const process = new Deno.Command("git", {
+      args: ["log", "-1", "--format=%H|%s|%D"],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const output = await process.output();
+    const result = new TextDecoder().decode(output.stdout).trim();
+    const [sha, message, refs] = result.split("|");
+    gitSha = sha || "unknown";
+    gitMessage = message || "unknown";
+    const branchMatch = refs?.match(/HEAD -> ([^,]+)/);
+    gitBranch = branchMatch?.[1] || "unknown";
+  } catch {
+    // git not available, keep defaults
+  }
 }
 
 // Helper functions
@@ -418,6 +423,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // Route requests
   if (path === "/status.json" && req.method === "GET") {
+    await loadGitInfo();
     response = json({
       status: "ok",
       git: {
