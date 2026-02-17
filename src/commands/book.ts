@@ -829,7 +829,7 @@ export async function handleBookButton(
     return;
   }
 
-  // Back to payment selection
+  // Back from confirmation - go to payment if multiple options, otherwise back to name
   if (customId === "book_back_payment") {
     if (!state || !state.name) {
       await interaction.update({
@@ -839,11 +839,29 @@ export async function handleBookButton(
       return;
     }
 
-    state.step = "payment";
-    state.selectedToken = undefined;
-    bookStates.set(userId, state);
+    // Check if there are multiple payment options
+    const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+    const product = products?.find((p) => p.slug === state.productSlug);
+    const guildSettings = await loadGuildSettings(guildId);
+    
+    const validPriceCount = product?.price?.filter((p) =>
+      guildSettings?.tokens.some((t) => t.symbol.toLowerCase() === p.token.toLowerCase())
+    ).length || 0;
 
-    await showPaymentSelection(interaction, userId, guildId);
+    if (validPriceCount > 1) {
+      // Multiple payment options - show payment selection
+      state.step = "payment";
+      state.selectedToken = undefined;
+      bookStates.set(userId, state);
+      await showPaymentSelection(interaction, userId, guildId);
+    } else {
+      // Single payment option - skip payment, go back to name
+      state.step = "name";
+      state.name = undefined;
+      state.selectedToken = undefined;
+      bookStates.set(userId, state);
+      await showNameInput(interaction, userId, guildId);
+    }
     return;
   }
 
@@ -1291,16 +1309,14 @@ async function showConfirmation(
   const startTimeStr = formatDiscordTime(startTime);
   const endTimeStr = formatDiscordTime(endTime);
 
-  let content = `${"═".repeat(20)}
-**📋 Booking Summary**
-${"═".repeat(20)}
-**Event:**    ${state.name}
-**Room:**     ${product.name}
-**When:**     ${startDateStr} at ${startTimeStr}
-**Until:**    ${endTimeStr}
+  let content = `📋 **Booking Summary**
+
+**Event:** ${state.name}
+**Room:** ${product.name}
+**When:** ${startDateStr} at ${startTimeStr}
+**Until:** ${endTimeStr}
 **Duration:** ${formatDuration(state.duration)}
-**Price:**    ${priceAmount.toFixed(2)} ${tokenSymbol}
-${"═".repeat(20)}
+**Price:** ${priceAmount.toFixed(2)} ${tokenSymbol}
 
 **Your balance:** ${balanceFormatted} ${tokenSymbol}`;
 
