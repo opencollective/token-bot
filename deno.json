@@ -14,6 +14,7 @@
     "test-calendar-access": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/test-calendar-access.ts",
     "sync-calendars": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/sync-shared-calendars.ts",
     "cli": "deno run --allow-read --allow-net --allow-env --no-prompt src/commands/cli.ts",
+    "backfill": "deno run --env-file=.env --allow-net --allow-env --allow-read --no-prompt scripts/backfill-transactions.ts",
     "hh:node": "cd hardhat && npx hardhat node",
     "hh:deploy": "deno run --allow-run --cwd=hardhat npm:hardhat run scripts/deploy.ts --network localhost",
     "test:mint": "deno test --allow-run --allow-net --allow-env --env-file=.env.test --allow-read --allow-write tests/lib.blockchain.mint.test.ts",
