@@ -98,17 +98,22 @@ import { disabledCalendars } from "./lib/calendar-state.ts";
 try {
   const keyFilePath = Deno.env.get("GOOGLE_ACCOUNT_KEY_FILEPATH") || "./google-account-key.json";
   await Deno.stat(keyFilePath);
-
-  // Try to instantiate the client to verify credentials are valid
-  const testClient = new GoogleCalendarClient();
   calendarEnabled = true;
-  console.log("✅ Google Calendar credentials found and loaded");
+  console.log("✅ Google Calendar credentials found");
+} catch (error) {
+  console.warn("⚠️  Google Calendar credentials not found or invalid");
+  console.warn("⚠️  /book and /cancel commands will be disabled");
+  console.warn(`⚠️  Set GOOGLE_ACCOUNT_KEY_FILEPATH or place credentials at ./google-account-key.json`);
+}
 
-  // Check write access to all product calendars
+// Check calendar write permissions in the background (non-blocking)
+async function checkCalendarPermissions() {
+  if (!calendarEnabled) return;
   console.log("📅 Checking calendar write permissions...");
   const dataDir = Deno.env.get("DATA_DIR") || "./data";
   
   try {
+    const testClient = new GoogleCalendarClient();
     for await (const guildEntry of Deno.readDir(dataDir)) {
       if (!guildEntry.isDirectory) continue;
       
@@ -138,11 +143,9 @@ try {
   
   if (disabledCalendars.size > 0) {
     console.warn(`⚠️  ${disabledCalendars.size} calendar(s) disabled due to missing write permissions`);
+  } else {
+    console.log("📅 All calendars OK");
   }
-} catch (error) {
-  console.warn("⚠️  Google Calendar credentials not found or invalid");
-  console.warn("⚠️  /book and /cancel commands will be disabled");
-  console.warn(`⚠️  Set GOOGLE_ACCOUNT_KEY_FILEPATH or place credentials at ./google-account-key.json`);
 }
 
 const client = new Client({
@@ -238,6 +241,9 @@ client.on(Events.ClientReady, async (readyClient) => {
   // Start API server and pass Discord client reference
   setDiscordClient(client);
   startApiServer();
+  
+  // Check calendar permissions in background (don't block bot startup)
+  checkCalendarPermissions().catch(err => console.error("Calendar check failed:", err));
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
