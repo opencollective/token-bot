@@ -41,7 +41,7 @@ export default async function handleBalanceCommand(
     }
 
     // Fetch balances for all tokens
-    const balances: string[] = [];
+    const balanceLines: string[] = [];
     for (const token of guildSettings.tokens) {
       try {
         const balance = await getBalance(
@@ -52,21 +52,18 @@ export default async function handleBalanceCommand(
         const balanceFormatted = parseFloat(
           formatUnits(balance, token.decimals),
         ).toFixed(2);
-        balances.push(`**${balanceFormatted} ${token.symbol}**`);
+        const tokenUrl = `https://txinfo.xyz/${token.chain}/token/${token.address}?a=${address}`;
+        balanceLines.push(`**${balanceFormatted}** [${token.symbol}](<${tokenUrl}>)`);
       } catch (error) {
         console.error(`Error fetching ${token.symbol} balance:`, error);
-        balances.push(`? ${token.symbol}`);
+        balanceLines.push(`? ${token.symbol}`);
       }
     }
 
-    // Use first token's chain for txinfo link
-    const primaryChain = guildSettings.tokens[0].chain;
-    const txInfoUrl = `https://txinfo.xyz/${primaryChain}/address/${address}`;
-
-    const balanceList = balances.join(" · ");
-    const replyContent = isOwnBalance
-      ? `💰 Your balance: ${balanceList}\n[[view account]](<${txInfoUrl}>)`
-      : `💰 <@${targetUserId}>'s balance: ${balanceList}\n[[view account]](<${txInfoUrl}>)`;
+    const header = isOwnBalance
+      ? `💰 **Your balance:**`
+      : `💰 **<@${targetUserId}>'s balance:**`;
+    const replyContent = `${header}\n${balanceLines.join("\n")}`;
 
     await interaction.editReply({ content: replyContent });
   } catch (error) {
