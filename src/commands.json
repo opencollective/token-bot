@@ -101,6 +101,19 @@
         "description": "The user to send tokens to",
         "required": true,
         "type": 6
+      },
+      {
+        "name": "amount",
+        "description": "Number of tokens to send",
+        "type": 10,
+        "required": true,
+        "min_value": 0.01
+      },
+      {
+        "name": "description",
+        "description": "Reason for sending",
+        "type": 3,
+        "required": false
       }
     ]
   },
