@@ -225,10 +225,10 @@ async function showConfirmation(interaction: any, state: SendState) {
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmBtn, cancelBtn);
 
-  if (interaction.editReply) {
-    await interaction.editReply({ content: msg, components: [row] });
-  } else if (interaction.update) {
+  if (interaction.isStringSelectMenu?.() || interaction.isButton?.()) {
     await interaction.update({ content: msg, components: [row] });
+  } else {
+    await interaction.editReply({ content: msg, components: [row] });
   }
 }
 
