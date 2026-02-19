@@ -128,30 +128,22 @@ export default async function handleSendCommand(
 
     // Fetch balances for all tokens
     const balances = new Map<number, bigint>();
-    const tokensWithBalance: number[] = [];
+    const tokensWithBalance: number[] = []; // positive balance (any amount)
 
     for (let i = 0; i < guildSettings.tokens.length; i++) {
       const token = guildSettings.tokens[i];
       try {
         const balance = await getBalance(token.chain as SupportedChain, token.address, senderAddress);
         balances.set(i, balance);
-        const needed = parseUnits(amount.toFixed(token.decimals), token.decimals);
-        if (balance >= needed) tokensWithBalance.push(i);
+        if (balance > 0n) tokensWithBalance.push(i);
       } catch (err) {
         console.error(`Error fetching balance for ${token.symbol}:`, err);
       }
     }
 
     if (tokensWithBalance.length === 0) {
-      // Show what they have
-      const balLines = guildSettings.tokens
-        .map((t, i) => {
-          const b = balances.get(i) ?? 0n;
-          return `  ${t.symbol}: ${fmtBal(b, t.decimals)}`;
-        })
-        .join("\n");
       await interaction.editReply({
-        content: `❌ Insufficient balance to send ${amount} tokens.\n\nYour balances:\n${balLines}`,
+        content: `❌ You don't have any token balance.`,
       });
       return;
     }
@@ -268,9 +260,29 @@ export async function handleSendInteraction(
 
   // ── Confirm → execute transfer ──
   if (interaction.isButton() && interaction.customId === "send_confirm") {
-    await interaction.update({ content: "⏳ Sending...", components: [] });
+    await interaction.update({ content: "⏳ Checking balance...", components: [] });
 
     const token = state.token!;
+
+    // Re-check balance before executing
+    try {
+      const currentBalance = await getBalance(token.chain as SupportedChain, token.address, state.senderAddress);
+      const needed = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
+      if (currentBalance < needed) {
+        await interaction.editReply({
+          content: `❌ Insufficient ${token.symbol} balance. You have ${fmtBal(currentBalance, token.decimals)} but need ${state.amount}.`,
+        });
+        sendStates.delete(userId);
+        return;
+      }
+    } catch (err) {
+      await interaction.editReply({ content: `❌ Could not verify balance: ${err}` });
+      sendStates.delete(userId);
+      return;
+    }
+
+    await interaction.editReply({ content: "⏳ Sending..." });
+
     const guildSettings = await loadGuildSettings(guildId);
     if (!guildSettings) {
       await interaction.editReply({ content: "❌ Settings not found." });
