@@ -187,14 +187,11 @@ export default async function handleMintCommand(
 
   // Post to Discord transactions channel
   const successfulMints = results.filter((r) => r.success);
-  if (
-    successfulMints.length > 0 &&
-    guildSettings.channels?.transactions &&
-    interaction.guild
-  ) {
+  const txChannelId = token.transactionsChannelId || guildSettings.channels?.transactions;
+  if (successfulMints.length > 0 && txChannelId) {
     try {
-      const transactionsChannel = (await interaction.guild.channels.fetch(
-        guildSettings.channels.transactions,
+      const transactionsChannel = (await interaction.client.channels.fetch(
+        txChannelId,
       )) as TextChannel;
 
       if (transactionsChannel) {

@@ -337,10 +337,11 @@ export async function handleSendInteraction(
 
       const txUri = `ethereum:${chainId}:tx:${hash}` as URI;
 
-      // Post to transactions channel
-      if (guildSettings.channels?.transactions) {
+      // Post to transactions channel (token-specific or default)
+      const txChannelId = token.transactionsChannelId || guildSettings.channels?.transactions;
+      if (txChannelId) {
         try {
-          const ch = await interaction.client.channels.fetch(guildSettings.channels.transactions) as TextChannel;
+          const ch = await interaction.client.channels.fetch(txChannelId) as TextChannel;
           if (ch) {
             let msg = `💸 <@${userId}> sent ${state.amount.toLocaleString("en-US")} ${token.symbol} to <@${state.recipientId}>`;
             if (state.description) msg += `: ${state.description}`;

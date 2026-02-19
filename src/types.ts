@@ -9,6 +9,7 @@ export type Token = {
   address: BlockchainAddress;
   mintable?: boolean;
   mintInstructions?: string;
+  transactionsChannelId?: string; // Override default transactions channel for this token
 };
 
 export type GuildSettings = {
