@@ -3,11 +3,8 @@ import {
   ButtonBuilder,
   ButtonStyle,
   Interaction,
-  ModalBuilder,
   StringSelectMenuBuilder,
   TextChannel,
-  TextInputBuilder,
-  TextInputStyle,
 } from "discord.js";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
@@ -17,7 +14,6 @@ import {
   CommunityConfig,
   callOnCardCallData,
   getAccountAddress,
-  getAccountBalance,
   getCardAddress,
   tokenTransferCallData,
   tokenTransferEventTopic,
@@ -29,7 +25,7 @@ import { SupportedChain, ChainConfig, getBalance } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import type { GuildSettings, Token } from "../types.ts";
 
-// ── State for multi-step send flow ──────────────────────────────────────────
+// ── State ───────────────────────────────────────────────────────────────────
 
 interface SendState {
   recipientId: string;
@@ -37,9 +33,11 @@ interface SendState {
   guildId: string;
   senderId: string;
   senderAddress: string;
+  amount: number;
+  description?: string;
   tokenIndex?: number;
   token?: Token;
-  balances: Map<number, bigint>; // tokenIndex → balance
+  balances: Map<number, bigint>;
 }
 
 export const sendStates = new Map<string, SendState>();
@@ -49,19 +47,13 @@ export const sendStates = new Map<string, SendState>();
 function buildCommunityConfig(guildSettings: GuildSettings, token: Token): any {
   const chain = token.chain as SupportedChain;
   const chainId = ChainConfig[chain].id;
-  const cardManagerAddress = "0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28";
-  const entrypointAddress = "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6";
-  const paymasterAddress = "0xe5Eb4fB0F3312649Eb7b62fba66C9E26579D7208";
-  const accountFactoryAddress = "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2";
-
   return {
     community: {
       name: guildSettings.guild?.name || "Token Bot Community",
-      description: "Discord Token Bot Community",
-      alias: "token-bot",
+      description: "Discord Token Bot Community", alias: "token-bot",
       primary_token: { address: token.address, chain_id: chainId },
-      primary_account_factory: { address: accountFactoryAddress, chain_id: chainId },
-      primary_card_manager: { address: cardManagerAddress, chain_id: chainId },
+      primary_account_factory: { address: "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2", chain_id: chainId },
+      primary_card_manager: { address: "0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28", chain_id: chainId },
     },
     tokens: {
       [`${chainId}:${token.address}`]: {
@@ -70,36 +62,33 @@ function buildCommunityConfig(guildSettings: GuildSettings, token: Token): any {
       },
     },
     accounts: {
-      [`${chainId}:${accountFactoryAddress}`]: {
-        chain_id: chainId, entrypoint_address: entrypointAddress,
-        paymaster_address: paymasterAddress, account_factory_address: accountFactoryAddress,
-        paymaster_type: "cw-safe",
+      [`${chainId}:0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2`]: {
+        chain_id: chainId, entrypoint_address: "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6",
+        paymaster_address: "0xe5Eb4fB0F3312649Eb7b62fba66C9E26579D7208",
+        account_factory_address: "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2", paymaster_type: "cw-safe",
       },
     },
     cards: {
-      [`${chainId}:${cardManagerAddress}`]: {
+      [`${chainId}:0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28`]: {
         chain_id: chainId, instance_id: "cw-discord-1",
-        address: cardManagerAddress, type: "safe",
+        address: "0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28", type: "safe",
       },
     },
     chains: {
       [chainId.toString()]: {
         id: chainId,
-        node: {
-          url: `https://${chainId}.engine.citizenwallet.xyz`,
-          ws_url: `wss://${chainId}.engine.citizenwallet.xyz`,
-        },
+        node: { url: `https://${chainId}.engine.citizenwallet.xyz`, ws_url: `wss://${chainId}.engine.citizenwallet.xyz` },
       },
     },
   };
 }
 
-function formatBalance(balance: bigint, decimals: number): string {
+function fmtBal(balance: bigint, decimals: number): string {
   const num = Number(formatUnits(balance, decimals));
   return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
-// ── Step 1: /send @user → show token selection ─────────────────────────────
+// ── Step 1: /send @user amount description ──────────────────────────────────
 
 export default async function handleSendCommand(
   interaction: Interaction,
@@ -109,8 +98,11 @@ export default async function handleSendCommand(
   if (!interaction.isChatInputCommand() || !interaction.options) return;
 
   const recipientUser = interaction.options.getUser("user");
-  if (!recipientUser) {
-    await interaction.reply({ content: "❌ Please specify a user.", ephemeral: true });
+  const amount = interaction.options.getNumber("amount");
+  const description = interaction.options.getString("description") || undefined;
+
+  if (!recipientUser || !amount) {
+    await interaction.reply({ content: "❌ Missing required options.", ephemeral: true });
     return;
   }
 
@@ -128,7 +120,6 @@ export default async function handleSendCommand(
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    // Get sender's address
     const senderAddress = await getAccountAddressFromDiscordUserId(userId);
     if (!senderAddress) {
       await interaction.editReply({ content: "❌ Could not find your account." });
@@ -137,65 +128,71 @@ export default async function handleSendCommand(
 
     // Fetch balances for all tokens
     const balances = new Map<number, bigint>();
-    const tokenOptions: { label: string; description: string; value: string }[] = [];
+    const tokensWithBalance: number[] = [];
 
     for (let i = 0; i < guildSettings.tokens.length; i++) {
       const token = guildSettings.tokens[i];
       try {
-        const balance = await getBalance(
-          token.chain as SupportedChain,
-          token.address,
-          senderAddress,
-        );
+        const balance = await getBalance(token.chain as SupportedChain, token.address, senderAddress);
         balances.set(i, balance);
-
-        if (balance > 0n) {
-          tokenOptions.push({
-            label: `${token.symbol} — ${token.name}`,
-            description: `Balance: ${formatBalance(balance, token.decimals)} ${token.symbol}`,
-            value: String(i),
-          });
-        }
+        const needed = parseUnits(amount.toFixed(token.decimals), token.decimals);
+        if (balance >= needed) tokensWithBalance.push(i);
       } catch (err) {
         console.error(`Error fetching balance for ${token.symbol}:`, err);
       }
     }
 
-    if (tokenOptions.length === 0) {
-      await interaction.editReply({ content: "❌ You don't have any token balance to send." });
+    if (tokensWithBalance.length === 0) {
+      // Show what they have
+      const balLines = guildSettings.tokens
+        .map((t, i) => {
+          const b = balances.get(i) ?? 0n;
+          return `  ${t.symbol}: ${fmtBal(b, t.decimals)}`;
+        })
+        .join("\n");
+      await interaction.editReply({
+        content: `❌ Insufficient balance to send ${amount} tokens.\n\nYour balances:\n${balLines}`,
+      });
       return;
     }
 
-    // Store state
     const state: SendState = {
       recipientId: recipientUser.id,
       recipientName: recipientUser.username,
-      guildId,
-      senderId: userId,
-      senderAddress,
-      balances,
+      guildId, senderId: userId, senderAddress,
+      amount, description, balances,
     };
     sendStates.set(userId, state);
 
-    // If only one token with balance, skip selection
-    if (tokenOptions.length === 1) {
-      const idx = Number(tokenOptions[0].value);
+    // If only one token has sufficient balance → go straight to confirmation
+    if (tokensWithBalance.length === 1) {
+      const idx = tokensWithBalance[0];
       state.tokenIndex = idx;
       state.token = guildSettings.tokens[idx];
-      await showAmountPrompt(interaction, state);
+      await showConfirmation(interaction, state);
       return;
     }
 
-    // Show token selection
+    // Multiple tokens → show picker
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId("send_token_select")
-      .setPlaceholder("Select a token to send")
-      .addOptions(tokenOptions);
+      .setPlaceholder("Select which token to send")
+      .addOptions(
+        tokensWithBalance.map((i) => {
+          const t = guildSettings.tokens[i];
+          const b = balances.get(i) ?? 0n;
+          return {
+            label: `${t.symbol} — ${t.name}`,
+            description: `Balance: ${fmtBal(b, t.decimals)} ${t.symbol}`,
+            value: String(i),
+          };
+        }),
+      );
 
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
 
     await interaction.editReply({
-      content: `💸 Sending to <@${recipientUser.id}>\n\n**Select the token to send:**`,
+      content: `💸 Sending **${amount}** to <@${recipientUser.id}>\n\nYou have sufficient balance in multiple tokens. **Which one?**`,
       components: [row],
     });
   } catch (error) {
@@ -206,31 +203,36 @@ export default async function handleSendCommand(
   }
 }
 
-// ── Show amount prompt (modal) ──────────────────────────────────────────────
+// ── Confirmation step ───────────────────────────────────────────────────────
 
-async function showAmountPrompt(interaction: any, state: SendState) {
+async function showConfirmation(interaction: any, state: SendState) {
   const token = state.token!;
   const balance = state.balances.get(state.tokenIndex!) ?? 0n;
-  const balStr = formatBalance(balance, token.decimals);
 
-  // Use a button to trigger a modal (modals can't be sent from editReply directly)
-  const button = new ButtonBuilder()
-    .setCustomId("send_amount_btn")
-    .setLabel(`Enter amount of ${token.symbol} to send`)
-    .setStyle(ButtonStyle.Primary);
+  let msg = `💸 **Send ${state.amount.toLocaleString("en-US")} ${token.symbol}** to <@${state.recipientId}>`;
+  if (state.description) msg += `\n📝 ${state.description}`;
+  msg += `\n\nYour balance: ${fmtBal(balance, token.decimals)} ${token.symbol}`;
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
+  const confirmBtn = new ButtonBuilder()
+    .setCustomId("send_confirm")
+    .setLabel("Confirm")
+    .setStyle(ButtonStyle.Success);
 
-  const content = `💸 Sending **${token.symbol}** to <@${state.recipientId}>\n📊 Your balance: **${balStr} ${token.symbol}**\n\nClick below to enter the amount:`;
+  const cancelBtn = new ButtonBuilder()
+    .setCustomId("send_cancel")
+    .setLabel("Cancel")
+    .setStyle(ButtonStyle.Secondary);
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmBtn, cancelBtn);
 
   if (interaction.editReply) {
-    await interaction.editReply({ content, components: [row] });
+    await interaction.editReply({ content: msg, components: [row] });
   } else if (interaction.update) {
-    await interaction.update({ content, components: [row] });
+    await interaction.update({ content: msg, components: [row] });
   }
 }
 
-// ── Handle interactions (token select, amount button, modal submit) ─────────
+// ── Handle interactions ─────────────────────────────────────────────────────
 
 export async function handleSendInteraction(
   interaction: Interaction,
@@ -245,7 +247,7 @@ export async function handleSendInteraction(
     return;
   }
 
-  // ── Token selection ──
+  // ── Token selection → show confirmation ──
   if (interaction.isStringSelectMenu() && interaction.customId === "send_token_select") {
     const tokenIndex = Number(interaction.values[0]);
     const guildSettings = await loadGuildSettings(guildId);
@@ -253,81 +255,33 @@ export async function handleSendInteraction(
 
     state.tokenIndex = tokenIndex;
     state.token = guildSettings.tokens[tokenIndex];
-
-    await showAmountPrompt(interaction, state);
+    await showConfirmation(interaction, state);
     return;
   }
 
-  // ── Amount button → show modal ──
-  if (interaction.isButton() && interaction.customId === "send_amount_btn") {
-    const token = state.token!;
-    const balance = state.balances.get(state.tokenIndex!) ?? 0n;
-    const balStr = formatBalance(balance, token.decimals);
-
-    const modal = new ModalBuilder()
-      .setCustomId("send_amount_modal")
-      .setTitle(`Send ${token.symbol} to @${state.recipientName}`);
-
-    const amountInput = new TextInputBuilder()
-      .setCustomId("send_amount_input")
-      .setLabel(`Amount (balance: ${balStr} ${token.symbol})`)
-      .setPlaceholder("e.g. 10")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    const messageInput = new TextInputBuilder()
-      .setCustomId("send_message_input")
-      .setLabel("Message (optional)")
-      .setPlaceholder("e.g. Thanks for helping out!")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(false);
-
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(amountInput),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(messageInput),
-    );
-
-    await interaction.showModal(modal);
+  // ── Cancel ──
+  if (interaction.isButton() && interaction.customId === "send_cancel") {
+    sendStates.delete(userId);
+    await interaction.update({ content: "❌ Send cancelled.", components: [] });
     return;
   }
 
-  // ── Modal submit → execute transfer ──
-  if (interaction.isModalSubmit() && interaction.customId === "send_amount_modal") {
-    const amountStr = interaction.fields.getTextInputValue("send_amount_input").trim();
-    const message = interaction.fields.getTextInputValue("send_message_input")?.trim() || undefined;
-
-    const amount = Number(amountStr);
-    if (isNaN(amount) || amount <= 0) {
-      await interaction.reply({ content: "❌ Invalid amount. Please enter a positive number.", ephemeral: true });
-      return;
-    }
-
-    await interaction.deferReply({ ephemeral: true });
+  // ── Confirm → execute transfer ──
+  if (interaction.isButton() && interaction.customId === "send_confirm") {
+    await interaction.update({ content: "⏳ Sending...", components: [] });
 
     const token = state.token!;
-    const balance = state.balances.get(state.tokenIndex!) ?? 0n;
-    const formattedAmount = parseUnits(amount.toFixed(token.decimals), token.decimals);
-
-    if (balance < formattedAmount) {
-      const balStr = formatBalance(balance, token.decimals);
-      await interaction.editReply({
-        content: `❌ Insufficient balance. You have ${balStr} ${token.symbol} but tried to send ${amount} ${token.symbol}.`,
-      });
-      sendStates.delete(userId);
-      return;
-    }
-
     const guildSettings = await loadGuildSettings(guildId);
     if (!guildSettings) {
       await interaction.editReply({ content: "❌ Settings not found." });
+      sendStates.delete(userId);
       return;
     }
 
     try {
       const chain = token.chain as SupportedChain;
       const chainId = ChainConfig[chain].id;
-      const communityConfigData = buildCommunityConfig(guildSettings, token);
-      const community = new CommunityConfig(communityConfigData);
+      const community = new CommunityConfig(buildCommunityConfig(guildSettings, token));
 
       const senderHashedUserId = keccak256(toUtf8Bytes(state.senderId));
       const recipientHashedUserId = keccak256(toUtf8Bytes(state.recipientId));
@@ -354,6 +308,7 @@ export async function handleSendInteraction(
         return;
       }
 
+      const formattedAmount = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
       const bundler = new BundlerService(community);
       const transferCalldata = tokenTransferCallData(recipientAddress, formattedAmount);
       const calldata = callOnCardCallData(
@@ -368,7 +323,7 @@ export async function handleSendInteraction(
       };
 
       let extraData: UserOpExtraData | undefined;
-      if (message) extraData = { description: message };
+      if (state.description) extraData = { description: state.description };
 
       const hash = await bundler.call(
         signer,
@@ -387,8 +342,8 @@ export async function handleSendInteraction(
         try {
           const ch = await interaction.guild.channels.fetch(guildSettings.channels.transactions) as TextChannel;
           if (ch) {
-            let msg = `💸 <@${userId}> sent ${amount.toLocaleString("en-US")} ${token.symbol} to <@${state.recipientId}>`;
-            if (message) msg += `: ${message}`;
+            let msg = `💸 <@${userId}> sent ${state.amount.toLocaleString("en-US")} ${token.symbol} to <@${state.recipientId}>`;
+            if (state.description) msg += `: ${state.description}`;
             await ch.send(msg);
           }
         } catch (err) {
@@ -396,19 +351,19 @@ export async function handleSendInteraction(
         }
       }
 
-      // Nostr annotation
+      // Nostr
       try {
         const nostr = Nostr.getInstance();
         await nostr.publishMetadata(txUri, {
-          content: message || `Sent ${amount} ${token.symbol} to Discord user`,
-          tags: [["t", "send"], ["t", "transfer"], ["amount", amount.toString()]],
+          content: state.description || `Sent ${state.amount} ${token.symbol} to Discord user`,
+          tags: [["t", "send"], ["t", "transfer"], ["amount", state.amount.toString()]],
         });
       } catch (err) {
         console.error("Error publishing Nostr:", err);
       }
 
-      let reply = `✅ Sent **${amount.toLocaleString("en-US")} ${token.symbol}** to <@${state.recipientId}>`;
-      if (message) reply += `\n📝 ${message}`;
+      let reply = `✅ Sent **${state.amount.toLocaleString("en-US")} ${token.symbol}** to <@${state.recipientId}>`;
+      if (state.description) reply += `\n📝 ${state.description}`;
       await interaction.editReply({ content: reply });
     } catch (error) {
       console.error("Error executing send:", error);

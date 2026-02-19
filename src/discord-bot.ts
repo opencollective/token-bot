@@ -334,7 +334,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       ) {
         return handleCancelButton(interaction, userId);
       }
-      if (interaction.customId === "send_amount_btn") {
+      if (interaction.customId === "send_confirm" || interaction.customId === "send_cancel") {
         return handleSendInteraction(interaction, userId, guildId);
       }
       return handleButton(interaction, userId, guildId);
@@ -1046,11 +1046,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   const userId = interaction.user.id;
   const guildId = interaction.guildId!;
-
-  // Handle send amount modal
-  if (interaction.customId === "send_amount_modal") {
-    return handleSendInteraction(interaction, userId, guildId);
-  }
 
   // Handle book name modal
   if (interaction.customId === "book_name_modal") {
