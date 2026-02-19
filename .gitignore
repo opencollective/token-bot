@@ -140,4 +140,5 @@ dist
 .pnp.*
 
 .*
+!.github/
 cache/
