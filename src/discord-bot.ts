@@ -60,7 +60,7 @@ const costEditStates = new Map<string, CostEditState>();
 import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
-import handleSendCommand from "./commands/send.ts";
+import handleSendCommand, { handleSendInteraction, sendStates } from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
@@ -334,6 +334,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       ) {
         return handleCancelButton(interaction, userId);
       }
+      if (interaction.customId === "send_amount_btn") {
+        return handleSendInteraction(interaction, userId, guildId);
+      }
       return handleButton(interaction, userId, guildId);
     }
     if (interaction.isChannelSelectMenu()) {
@@ -345,6 +348,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId === "book_date_select" || interaction.customId === "book_time_select") {
         return handleBookSelect(interaction, userId, guildId);
+      }
+      if (interaction.customId === "send_token_select") {
+        return handleSendInteraction(interaction, userId, guildId);
       }
       return handleStringSelect(interaction, userId, guildId);
     }
@@ -1040,6 +1046,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   const userId = interaction.user.id;
   const guildId = interaction.guildId!;
+
+  // Handle send amount modal
+  if (interaction.customId === "send_amount_modal") {
+    return handleSendInteraction(interaction, userId, guildId);
+  }
 
   // Handle book name modal
   if (interaction.customId === "book_name_modal") {
