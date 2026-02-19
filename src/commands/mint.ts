@@ -7,7 +7,7 @@ import {
 import { mintTokens, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
-import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
+import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { Token } from "../types.ts";
 
 // Parse user mentions from a string, returns array of user IDs
@@ -132,7 +132,7 @@ export default async function handleMintCommand(
   for (const recipientUserId of recipientUserIds) {
     try {
       const recipientAddress =
-        await getAccountAddressFromDiscordUserId(recipientUserId);
+        await getAccountAddressForToken(recipientUserId, token);
 
       const hash = await mintTokens(
         chain,

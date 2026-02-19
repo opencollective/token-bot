@@ -7,7 +7,7 @@ import {
 import { burnTokensFrom, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
-import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
+import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { Token } from "../types.ts";
 
 // Parse user mentions from a string, returns array of user IDs
@@ -131,7 +131,7 @@ export default async function handleBurnCommand(
   for (const targetUserId of targetUserIds) {
     try {
       const targetAddress =
-        await getAccountAddressFromDiscordUserId(targetUserId);
+        await getAccountAddressForToken(targetUserId, token);
 
       const hash = await burnTokensFrom(
         chain,

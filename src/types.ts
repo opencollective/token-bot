@@ -10,6 +10,8 @@ export type Token = {
   mintable?: boolean;
   mintInstructions?: string;
   transactionsChannelId?: string; // Override default transactions channel for this token
+  cardManagerAddress?: BlockchainAddress; // Override default CardManager for address resolution
+  cardManagerInstanceId?: string; // Override default instance ID (default: "cw-discord-1")
 };
 
 export type GuildSettings = {

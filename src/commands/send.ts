@@ -22,7 +22,7 @@ import {
 } from "@citizenwallet/sdk";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { SupportedChain, ChainConfig, getBalance } from "../lib/blockchain.ts";
-import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
+import { getAccountAddressFromDiscordUserId, getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { GuildSettings, Token } from "../types.ts";
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -32,12 +32,13 @@ interface SendState {
   recipientName: string;
   guildId: string;
   senderId: string;
-  senderAddress: string;
+  senderAddress: string; // Address for the selected token's chain
   amount: number;
   description?: string;
   tokenIndex?: number;
   token?: Token;
   balances: Map<number, bigint>;
+  addresses: Map<number, string>; // tokenIndex → resolved address per chain
 }
 
 export const sendStates = new Map<string, SendState>();
@@ -120,21 +121,22 @@ export default async function handleSendCommand(
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    const senderAddress = await getAccountAddressFromDiscordUserId(userId);
-    if (!senderAddress) {
-      await interaction.editReply({ content: "❌ Could not find your account." });
-      return;
-    }
-
-    // Fetch balances for all tokens
+    // Fetch balances for all tokens (each may resolve a different address per chain)
     const balances = new Map<number, bigint>();
-    const tokensWithBalance: number[] = []; // positive balance (any amount)
+    const addresses = new Map<number, string>(); // tokenIndex → resolved address
+    const tokensWithBalance: number[] = [];
 
     for (let i = 0; i < guildSettings.tokens.length; i++) {
       const token = guildSettings.tokens[i];
       try {
-        console.log(`[send] Fetching balance for ${token.symbol} (${token.chain}) at ${senderAddress}`);
-        const balance = await getBalance(token.chain as SupportedChain, token.address, senderAddress);
+        const address = await getAccountAddressForToken(userId, token);
+        if (!address) {
+          console.log(`[send] Could not resolve address for ${token.symbol} (${token.chain})`);
+          continue;
+        }
+        addresses.set(i, address);
+        console.log(`[send] ${token.symbol} (${token.chain}) address: ${address}`);
+        const balance = await getBalance(token.chain as SupportedChain, token.address, address);
         console.log(`[send] ${token.symbol} balance: ${balance.toString()}`);
         balances.set(i, balance);
         if (balance > 0n) tokensWithBalance.push(i);
@@ -154,8 +156,8 @@ export default async function handleSendCommand(
     const state: SendState = {
       recipientId: recipientUser.id,
       recipientName: recipientUser.username,
-      guildId, senderId: userId, senderAddress,
-      amount, description, balances,
+      guildId, senderId: userId, senderAddress: "",
+      amount, description, balances, addresses,
     };
     sendStates.set(userId, state);
 
@@ -164,6 +166,7 @@ export default async function handleSendCommand(
       const idx = tokensWithBalance[0];
       state.tokenIndex = idx;
       state.token = guildSettings.tokens[idx];
+      state.senderAddress = addresses.get(idx) || "";
       await showConfirmation(interaction, state);
       return;
     }
@@ -250,6 +253,7 @@ export async function handleSendInteraction(
 
     state.tokenIndex = tokenIndex;
     state.token = guildSettings.tokens[tokenIndex];
+    state.senderAddress = state.addresses.get(tokenIndex) || "";
     await showConfirmation(interaction, state);
     return;
   }
@@ -267,9 +271,10 @@ export async function handleSendInteraction(
 
     const token = state.token!;
 
-    // Re-check balance before executing
+    // Re-check balance before executing (use token-specific address)
+    const senderAddr = state.senderAddress || state.addresses.get(state.tokenIndex!) || "";
     try {
-      const currentBalance = await getBalance(token.chain as SupportedChain, token.address, state.senderAddress);
+      const currentBalance = await getBalance(token.chain as SupportedChain, token.address, senderAddr);
       const needed = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
       if (currentBalance < needed) {
         await interaction.editReply({

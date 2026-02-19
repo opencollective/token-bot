@@ -1,7 +1,7 @@
 import { Interaction } from "discord.js";
 import { getBalance, SupportedChain } from "../lib/blockchain.ts";
 import { loadGuildSettings } from "../lib/utils.ts";
-import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
+import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { formatUnits } from "@wevm/viem";
 
 export default async function handleBalanceCommand(
@@ -29,21 +29,16 @@ export default async function handleBalanceCommand(
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    const address = await getAccountAddressFromDiscordUserId(targetUserId);
-
-    if (!address) {
-      await interaction.editReply({
-        content: isOwnBalance
-          ? "❌ Could not find your account. Please make sure you're registered."
-          : `❌ Could not find account for <@${targetUserId}>.`,
-      });
-      return;
-    }
-
-    // Fetch balances for all tokens
+    // Fetch balances for all tokens (each may resolve a different address per chain)
     const balanceLines: string[] = [];
     for (const token of guildSettings.tokens) {
       try {
+        const address = await getAccountAddressForToken(targetUserId, token);
+        if (!address) {
+          console.error(`Could not resolve address for ${targetUserId} on ${token.chain}`);
+          balanceLines.push(`? ${token.symbol}`);
+          continue;
+        }
         const balance = await getBalance(
           token.chain as SupportedChain,
           token.address,
