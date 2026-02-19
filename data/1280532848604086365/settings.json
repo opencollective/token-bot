@@ -1,18 +1,4 @@
 {
-  "contributionToken": {
-    "name": "Commons Hub Token",
-    "symbol": "CHT",
-    "decimals": 6,
-    "chain": "celo",
-    "address": "0x65dd32834927de9e57e72a3e2130a19f81c6371d"
-  },
-  "fiatToken": {
-    "name": "EURb",
-    "symbol": "EURb",
-    "decimals": 6,
-    "chain": "gnosis",
-    "address": "0x5815E61eF72c9E6107b5c5A05FD121F334f7a7f1"
-  },
   "guild": {
     "id": "1280532848604086365",
     "name": "Commons Hub Brussels",
