@@ -133,13 +133,16 @@ export default async function handleSendCommand(
     for (let i = 0; i < guildSettings.tokens.length; i++) {
       const token = guildSettings.tokens[i];
       try {
+        console.log(`[send] Fetching balance for ${token.symbol} (${token.chain}) at ${senderAddress}`);
         const balance = await getBalance(token.chain as SupportedChain, token.address, senderAddress);
+        console.log(`[send] ${token.symbol} balance: ${balance.toString()}`);
         balances.set(i, balance);
         if (balance > 0n) tokensWithBalance.push(i);
       } catch (err) {
-        console.error(`Error fetching balance for ${token.symbol}:`, err);
+        console.error(`[send] Error fetching balance for ${token.symbol} (${token.chain}):`, err);
       }
     }
+    console.log(`[send] Tokens with positive balance: ${tokensWithBalance.map(i => guildSettings.tokens[i].symbol).join(", ") || "none"}`);
 
     if (tokensWithBalance.length === 0) {
       await interaction.editReply({
