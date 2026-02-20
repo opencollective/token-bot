@@ -5,6 +5,7 @@ import {
   TextChannel,
 } from "discord.js";
 import { burnTokensFrom, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
+import { parseUnits } from "@wevm/viem";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
@@ -130,16 +131,24 @@ export default async function handleBurnCommand(
   // Burn from each user
   for (const targetUserId of targetUserIds) {
     try {
-      const targetAddress =
-        await getAccountAddressForToken(targetUserId, token);
+      let hash: string | null;
 
-      const hash = await burnTokensFrom(
-        chain,
-        token.address,
-        targetAddress,
-        amount.toString(),
-        token.decimals,
-      );
+      if (token.walletManager === "opencollective") {
+        const { Token: OCToken } = await import("@opencollective/token-factory");
+        const ocToken = new OCToken({
+          name: token.name, symbol: token.symbol,
+          chain: token.chain, tokenAddress: token.address,
+        });
+        const amountWei = parseUnits(amount.toFixed(token.decimals), token.decimals);
+        hash = await ocToken.burnFrom(amountWei, `discord:${targetUserId}`);
+      } else {
+        const targetAddress =
+          await getAccountAddressForToken(targetUserId, token);
+        hash = await burnTokensFrom(
+          chain, token.address, targetAddress,
+          amount.toString(), token.decimals,
+        );
+      }
 
       if (hash) {
         results.push({ userId: targetUserId, success: true, hash });

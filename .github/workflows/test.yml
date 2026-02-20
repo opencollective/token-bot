@@ -16,5 +16,8 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Run tests
+      - name: Run unit tests
         run: deno test --allow-read --allow-env --allow-net tests/tx-notifications.test.ts tests/send-token-selection.test.ts
+
+      - name: Run integration tests (balance)
+        run: deno test --allow-read --allow-env --allow-net tests/balance-check.test.ts

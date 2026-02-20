@@ -24,7 +24,8 @@
       "chain": "celo",
       "address": "0x65dd32834927de9e57e72a3e2130a19f81c6371d",
       "mintable": true,
-      "transactionsChannelId": "1354115945718878269"
+      "transactionsChannelId": "1354115945718878269",
+      "walletManager": "citizenwallet"
     },
     {
       "name": "EURchb",
@@ -33,7 +34,8 @@
       "chain": "gnosis",
       "address": "0x5815E61eF72c9E6107b5c5A05FD121F334f7a7f1",
       "mintable": false,
-      "transactionsChannelId": "1372518467323826259"
+      "transactionsChannelId": "1372518467323826259",
+      "walletManager": "opencollective"
     }
   ]
 }

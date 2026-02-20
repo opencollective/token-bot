@@ -301,59 +301,80 @@ export async function handleSendInteraction(
     try {
       const chain = token.chain as SupportedChain;
       const chainId = ChainConfig[chain].id;
-      const community = new CommunityConfig(buildCommunityConfig(guildSettings, token));
+      let hash: string;
 
-      const senderHashedUserId = keccak256(toUtf8Bytes(state.senderId));
-      const recipientHashedUserId = keccak256(toUtf8Bytes(state.recipientId));
-      const recipientAddress = await getCardAddress(community, recipientHashedUserId);
+      const walletManager = token.walletManager || "citizenwallet";
 
-      if (!recipientAddress) {
-        await interaction.editReply({ content: "❌ Could not find recipient's account." });
-        sendStates.delete(userId);
-        return;
+      if (walletManager === "opencollective") {
+        // Use @opencollective/token-factory for Safe-based transfers
+        const { Token: OCToken } = await import("@opencollective/token-factory");
+        const ocToken = new OCToken({
+          name: token.name,
+          symbol: token.symbol,
+          chain: token.chain,
+          tokenAddress: token.address,
+        });
+        const amountWei = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
+        hash = await ocToken.transfer(
+          `discord:${state.senderId}`,
+          `discord:${state.recipientId}`,
+          amountWei,
+        );
+      } else {
+        // Citizen Wallet bundler-based transfer
+        const community = new CommunityConfig(buildCommunityConfig(guildSettings, token));
+        const senderHashedUserId = keccak256(toUtf8Bytes(state.senderId));
+        const recipientHashedUserId = keccak256(toUtf8Bytes(state.recipientId));
+        const recipientAddress = await getCardAddress(community, recipientHashedUserId);
+
+        if (!recipientAddress) {
+          await interaction.editReply({ content: "❌ Could not find recipient's account." });
+          sendStates.delete(userId);
+          return;
+        }
+
+        const privateKey = Deno.env.get("PRIVATE_KEY");
+        if (!privateKey) {
+          await interaction.editReply({ content: "❌ Bot configuration error: Private key not set." });
+          sendStates.delete(userId);
+          return;
+        }
+
+        const signer = new Wallet(privateKey);
+        const signerAccountAddress = await getAccountAddress(community, signer.address);
+        if (!signerAccountAddress) {
+          await interaction.editReply({ content: "❌ Could not find bot's account address." });
+          sendStates.delete(userId);
+          return;
+        }
+
+        const formattedAmount = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
+        const bundler = new BundlerService(community);
+        const transferCalldata = tokenTransferCallData(recipientAddress, formattedAmount);
+        const calldata = callOnCardCallData(
+          community, senderHashedUserId, token.address, BigInt(0), transferCalldata,
+        );
+
+        const userOpData: UserOpData = {
+          topic: tokenTransferEventTopic,
+          from: senderAddr,
+          to: recipientAddress,
+          value: formattedAmount.toString(),
+        };
+
+        let extraData: UserOpExtraData | undefined;
+        if (state.description) extraData = { description: state.description };
+
+        hash = await bundler.call(
+          signer,
+          community.primarySafeCardConfig.address,
+          signerAccountAddress,
+          calldata,
+          BigInt(0),
+          userOpData,
+          extraData,
+        );
       }
-
-      const privateKey = Deno.env.get("PRIVATE_KEY");
-      if (!privateKey) {
-        await interaction.editReply({ content: "❌ Bot configuration error: Private key not set." });
-        sendStates.delete(userId);
-        return;
-      }
-
-      const signer = new Wallet(privateKey);
-      const signerAccountAddress = await getAccountAddress(community, signer.address);
-      if (!signerAccountAddress) {
-        await interaction.editReply({ content: "❌ Could not find bot's account address." });
-        sendStates.delete(userId);
-        return;
-      }
-
-      const formattedAmount = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
-      const bundler = new BundlerService(community);
-      const transferCalldata = tokenTransferCallData(recipientAddress, formattedAmount);
-      const calldata = callOnCardCallData(
-        community, senderHashedUserId, token.address, BigInt(0), transferCalldata,
-      );
-
-      const userOpData: UserOpData = {
-        topic: tokenTransferEventTopic,
-        from: state.senderAddress,
-        to: recipientAddress,
-        value: formattedAmount.toString(),
-      };
-
-      let extraData: UserOpExtraData | undefined;
-      if (state.description) extraData = { description: state.description };
-
-      const hash = await bundler.call(
-        signer,
-        community.primarySafeCardConfig.address,
-        signerAccountAddress,
-        calldata,
-        BigInt(0),
-        userOpData,
-        extraData,
-      );
 
       const txUri = `ethereum:${chainId}:tx:${hash}` as URI;
 

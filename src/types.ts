@@ -1,6 +1,8 @@
 export type BlockchainAddress = `0x${string}`;
 export type Chain = "celo" | "gnosis" | "base" | "base_sepolia" | "polygon";
 
+export type WalletManager = "citizenwallet" | "opencollective";
+
 export type Token = {
   name: string;
   symbol: string;
@@ -10,8 +12,10 @@ export type Token = {
   mintable?: boolean;
   mintInstructions?: string;
   transactionsChannelId?: string; // Override default transactions channel for this token
-  cardManagerAddress?: BlockchainAddress; // Override default CardManager for address resolution
-  cardManagerInstanceId?: string; // Override default instance ID (default: "cw-discord-1")
+  walletManager?: WalletManager; // How to resolve user addresses (default: "citizenwallet")
+  // citizenwallet-specific:
+  cardManagerAddress?: BlockchainAddress;
+  cardManagerInstanceId?: string;
 };
 
 export type GuildSettings = {

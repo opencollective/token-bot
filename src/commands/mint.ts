@@ -5,6 +5,7 @@ import {
   TextChannel,
 } from "discord.js";
 import { mintTokens, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
+import { parseUnits } from "@wevm/viem";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
@@ -131,16 +132,24 @@ export default async function handleMintCommand(
   // Mint for each user
   for (const recipientUserId of recipientUserIds) {
     try {
-      const recipientAddress =
-        await getAccountAddressForToken(recipientUserId, token);
+      let hash: string | null;
 
-      const hash = await mintTokens(
-        chain,
-        token.address,
-        recipientAddress,
-        amount.toString(),
-        token.decimals,
-      );
+      if (token.walletManager === "opencollective") {
+        const { Token: OCToken } = await import("@opencollective/token-factory");
+        const ocToken = new OCToken({
+          name: token.name, symbol: token.symbol,
+          chain: token.chain, tokenAddress: token.address,
+        });
+        const amountWei = parseUnits(amount.toFixed(token.decimals), token.decimals);
+        hash = await ocToken.mintTo(amountWei, `discord:${recipientUserId}`);
+      } else {
+        const recipientAddress =
+          await getAccountAddressForToken(recipientUserId, token);
+        hash = await mintTokens(
+          chain, token.address, recipientAddress,
+          amount.toString(), token.decimals,
+        );
+      }
 
       if (hash) {
         results.push({ userId: recipientUserId, success: true, hash });
