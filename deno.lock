@@ -27,13 +27,14 @@
     "jsr:@wevm/viem@^2.37.4": "2.37.4",
     "npm:@noble/curves@1.9.1": "1.9.1",
     "npm:@noble/hashes@1.8.0": "1.8.0",
+    "npm:@opencollective/token-factory@~0.1.1": "0.1.1",
     "npm:@safe-global/api-kit@4": "4.0.0",
     "npm:@safe-global/protocol-kit@^5.1.1": "5.2.18",
     "npm:@safe-global/protocol-kit@^6.1.1": "6.1.1",
     "npm:@safe-global/types-kit@3.0.0": "3.0.0",
     "npm:@scure/bip32@1.7.0": "1.7.0",
     "npm:@scure/bip39@1.6.0": "1.6.0",
-    "npm:@types/node@*": "24.2.0",
+    "npm:@types/node@*": "22.7.5",
     "npm:abitype@1.1.0": "1.1.0",
     "npm:chrono-node@^2.7.8": "2.8.4",
     "npm:discord.js@*": "14.22.1",
@@ -230,6 +231,16 @@
     "@noble/hashes@1.8.0": {
       "integrity": "sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A=="
     },
+    "@opencollective/token-factory@0.1.1": {
+      "integrity": "sha512-vSRZHbpZ+mQb/h3+07MXbCfaIAZJOd1ViRklNVtfKga83qWe9UPyCsCCdodHKrXqYhhlNOP9gLPs2vWBdH8apQ==",
+      "dependencies": [
+        "@safe-global/api-kit",
+        "@safe-global/protocol-kit@6.1.1",
+        "@safe-global/types-kit@3.0.0",
+        "ethers",
+        "viem"
+      ]
+    },
     "@peculiar/asn1-schema@2.5.0": {
       "integrity": "sha512-YM/nFfskFJSlHqv59ed6dZlLZqtZQwjRVJ4bBAiWV08Oc+1rSd5lDZcBEx0lGDHfSoH3UziI2pXt2UM33KerPQ==",
       "dependencies": [
@@ -244,7 +255,7 @@
         "@safe-global/protocol-kit@6.1.1",
         "@safe-global/types-kit@3.0.0",
         "node-fetch",
-        "viem@2.37.4_ws@8.18.3"
+        "viem"
       ]
     },
     "@safe-global/protocol-kit@5.2.18": {
@@ -255,7 +266,7 @@
         "@safe-global/types-kit@1.0.5",
         "abitype",
         "semver",
-        "viem@2.37.4_ws@8.18.3"
+        "viem"
       ],
       "optionalDependencies": [
         "@noble/curves@1.9.1",
@@ -270,7 +281,7 @@
         "@safe-global/types-kit@3.0.0",
         "abitype",
         "semver",
-        "viem@2.37.4_ws@8.18.3"
+        "viem"
       ],
       "optionalDependencies": [
         "@noble/curves@1.9.1",
@@ -350,19 +361,13 @@
     "@types/node@22.7.5": {
       "integrity": "sha512-jML7s2NAzMWc//QSJ1a3prpk78cOPchGvXJsC3C6R6PSMoooztvRVQEz89gmBTBY1SPMaqo5teB4uNHPdetShQ==",
       "dependencies": [
-        "undici-types@6.19.8"
-      ]
-    },
-    "@types/node@24.2.0": {
-      "integrity": "sha512-3xyG3pMCq3oYCNg7/ZP+E1ooTaGB4cG8JWRsqqOYQdbWNY4zbaV0Ennrd7stjiJEFZCaybcIgpTjJWHRfBSIDw==",
-      "dependencies": [
-        "undici-types@7.10.0"
+        "undici-types"
       ]
     },
     "@types/ws@8.18.1": {
       "integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==",
       "dependencies": [
-        "@types/node@24.2.0"
+        "@types/node"
       ]
     },
     "@vladfrangu/async_event_emitter@2.4.6": {
@@ -530,7 +535,7 @@
         "@adraffy/ens-normalize@1.10.1",
         "@noble/curves@1.2.0",
         "@noble/hashes@1.3.2",
-        "@types/node@22.7.5",
+        "@types/node",
         "aes-js",
         "tslib@2.7.0",
         "ws@8.17.1"
@@ -566,7 +571,7 @@
         "router",
         "send",
         "serve-static",
-        "statuses@2.0.2",
+        "statuses",
         "type-is",
         "vary"
       ]
@@ -585,7 +590,7 @@
         "escape-html",
         "on-finished",
         "parseurl",
-        "statuses@2.0.2"
+        "statuses"
       ]
     },
     "forwarded@0.2.0": {
@@ -694,7 +699,7 @@
         "depd",
         "inherits",
         "setprototypeof",
-        "statuses@2.0.1",
+        "statuses",
         "toidentifier"
       ]
     },
@@ -926,7 +931,7 @@
         "ms",
         "on-finished",
         "range-parser",
-        "statuses@2.0.2"
+        "statuses"
       ]
     },
     "serve-static@2.2.0": {
@@ -980,9 +985,6 @@
     "statuses@2.0.1": {
       "integrity": "sha512-RwNA9Z/7PrK06rYLIzFMlaF+l73iwpzsqRIFgbMLbTcLD6cOao82TaWefPXQvB2fOC4AjuYSEndS7N/mTCbkdQ=="
     },
-    "statuses@2.0.2": {
-      "integrity": "sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw=="
-    },
     "toidentifier@1.0.1": {
       "integrity": "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA=="
     },
@@ -1009,9 +1011,6 @@
     "undici-types@6.19.8": {
       "integrity": "sha512-ve2KP6f/JnbPBFyobGHuerC9g1FYGn/F8n1LWTwNxCEzd6IfqTwUQcNXgEtmmQ6DlRrC1hrSrBnCZPokRrDHjw=="
     },
-    "undici-types@7.10.0": {
-      "integrity": "sha512-t5Fy/nfn+14LuOc2KNYg75vZqClpAiqscVvMygNnlsHBFpSXdJaYtXMcdNLpl/Qvc3P2cB3s6lOV51nqsFq4ag=="
-    },
     "undici@6.21.3": {
       "integrity": "sha512-gBLkYIlEnSp8pFbT64yFgGE6UIB9tAkhukC23PmMDCe5Nd+cRqKxSjw5y54MK2AZMgZfJWMaNE4nYUHgi1XEOw=="
     },
@@ -1027,19 +1026,6 @@
     },
     "vary@1.1.2": {
       "integrity": "sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg=="
-    },
-    "viem@2.37.4_ws@8.18.3": {
-      "integrity": "sha512-1ig5O6l1wJmaw3yrSrUimjRLQEZon2ymTqSDjdntu6Bry1/tLC2GClXeS3SiCzrifpLxzfCLQWDITYVTBA10KA==",
-      "dependencies": [
-        "@noble/curves@1.9.1",
-        "@noble/hashes@1.8.0",
-        "@scure/bip32@1.7.0",
-        "@scure/bip39@1.6.0",
-        "abitype",
-        "isows",
-        "ox@0.9.3",
-        "ws@8.18.3"
-      ]
     },
     "viem@2.39.0_ws@8.18.3": {
       "integrity": "sha512-rCN+IfnMESlrg/iPyyVL+M9NS/BHzyyNy72470tFmbTuscY3iPaZGMtJDcHKKV8TC6HV9DjWk0zWX6cpu0juyA==",
@@ -1083,6 +1069,8 @@
       "jsr:@std/path@^1.1.2",
       "jsr:@std/testing@1",
       "jsr:@wevm/viem@^2.37.4",
+      "npm:@citizenwallet/sdk@^2.0.106",
+      "npm:@opencollective/token-factory@~0.1.1",
       "npm:@safe-global/api-kit@4",
       "npm:@safe-global/protocol-kit@^6.1.1",
       "npm:@safe-global/types-kit@3.0.0",
