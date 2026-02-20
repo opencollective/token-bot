@@ -48,7 +48,7 @@ export default async function handleBalanceCommand(
           formatUnits(balance, token.decimals),
         ).toFixed(2);
         const tokenUrl = `https://txinfo.xyz/${token.chain}/token/${token.address}?a=${address}`;
-        balanceLines.push(`**${balanceFormatted}** [${token.symbol}](<${tokenUrl}>)`);
+        balanceLines.push(`**${balanceFormatted}** ${token.symbol} — [view transactions](<${tokenUrl}>)`);
       } catch (error) {
         console.error(`Error fetching ${token.symbol} balance:`, error);
         balanceLines.push(`? ${token.symbol}`);
