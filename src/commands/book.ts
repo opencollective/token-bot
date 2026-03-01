@@ -539,6 +539,26 @@ export async function handleBookButton(
     }
 
     const dateValue = customId.replace("book_date_", "");
+
+    if (dateValue === "custom") {
+      // Show modal for custom date entry
+      const modal = new ModalBuilder()
+        .setCustomId("book_date_modal")
+        .setTitle("Enter a Date")
+        .addComponents(
+          new ActionRowBuilder<TextInputBuilder>().addComponents(
+            new TextInputBuilder()
+              .setCustomId("custom_date")
+              .setLabel("Date (DD/MM/YYYY)")
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder("e.g., 15/03/2026")
+              .setRequired(true)
+              .setMaxLength(10),
+          ),
+        );
+      await interaction.showModal(modal);
+      return;
+    }
     
     if (dateValue === "other") {
       // Extended date selection via dropdown
@@ -879,27 +899,6 @@ export async function handleBookButton(
       bookStates.set(userId, state);
       await showNameInput(interaction, userId, guildId);
     }
-    return;
-  }
-
-  // Custom date button - show modal
-  if (customId === "book_date_custom") {
-    const modal = new ModalBuilder()
-      .setCustomId("book_date_modal")
-      .setTitle("Enter a Date")
-      .addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder()
-            .setCustomId("custom_date")
-            .setLabel("Date (DD/MM/YYYY)")
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder("e.g., 15/03/2026")
-            .setRequired(true)
-            .setMaxLength(10),
-        ),
-      );
-
-    await interaction.showModal(modal);
     return;
   }
 
