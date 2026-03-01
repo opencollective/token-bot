@@ -293,6 +293,27 @@ export class GoogleCalendarClient {
    * @param calendarId - The ID of the calendar
    * @param eventId - The ID of the event to delete
    */
+  async updateEvent(
+    calendarId: string,
+    eventId: string,
+    event: {
+      summary?: string;
+      description?: string;
+      start?: { dateTime: string; timeZone?: string };
+      end?: { dateTime: string; timeZone?: string };
+    },
+  ): Promise<void> {
+    try {
+      await this.calendar.events.patch({
+        calendarId,
+        eventId,
+        requestBody: event,
+      });
+    } catch (error) {
+      throw new Error(`Failed to update event: ${error}`);
+    }
+  }
+
   async deleteEvent(calendarId: string, eventId: string): Promise<void> {
     try {
       await this.calendar.events.delete({

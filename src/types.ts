@@ -109,4 +109,5 @@ export type BookState = {
   endTime?: Date;
   duration?: number;
   selectedToken?: string; // Token symbol for payment (e.g., "CHT", "EURb")
+  eventUrl?: string; // Optional URL (Luma, Eventbrite, etc.)
 };

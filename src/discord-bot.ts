@@ -64,6 +64,7 @@ import handleSendCommand, { handleSendInteraction, sendStates } from "./commands
 import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
+import { handleBookingsButton, handleBookingsCommand, handleBookingsModal, handleBookingsSelect } from "./commands/bookings.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 import { setDiscordClient, startApiServer } from "./api.ts";
 
@@ -217,7 +218,7 @@ async function registerCommands() {
     // Filter out calendar commands if credentials are not available
     let commandsToRegister = commands;
     if (!calendarEnabled) {
-      commandsToRegister = commands.filter(cmd => cmd.name !== "book" && cmd.name !== "cancel");
+      commandsToRegister = commands.filter(cmd => cmd.name !== "book" && cmd.name !== "cancel" && cmd.name !== "bookings");
       console.log("⚠️  Skipping registration of /book and /cancel commands (no calendar credentials)");
     }
 
@@ -321,6 +322,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         return handleCancelCommand(interaction, userId, guildId);
       }
+      if (interaction.commandName === "bookings") {
+        if (!calendarEnabled) {
+          await interaction.reply({
+            content: "⚠️ Calendar features are disabled. Google Calendar credentials not found.",
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+        return handleBookingsCommand(interaction, userId, guildId);
+      }
     }
 
     // Handle component interactions
@@ -337,6 +348,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId === "send_confirm" || interaction.customId === "send_cancel") {
         return handleSendInteraction(interaction, userId, guildId);
       }
+      if (interaction.customId.startsWith("bookings_")) {
+        return handleBookingsButton(interaction, userId, guildId);
+      }
       return handleButton(interaction, userId, guildId);
     }
     if (interaction.isChannelSelectMenu()) {
@@ -348,6 +362,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId === "book_date_select" || interaction.customId === "book_time_select") {
         return handleBookSelect(interaction, userId, guildId);
+      }
+      if (interaction.customId.startsWith("bookings_")) {
+        return handleBookingsSelect(interaction, userId, guildId);
       }
       if (interaction.customId === "send_token_select") {
         return handleSendInteraction(interaction, userId, guildId);
@@ -1047,9 +1064,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const userId = interaction.user.id;
   const guildId = interaction.guildId!;
 
-  // Handle book name modal
-  if (interaction.customId === "book_name_modal") {
+  // Handle book modals
+  if (interaction.customId === "book_name_modal" || interaction.customId === "book_date_modal") {
     return handleBookModal(interaction, userId, guildId);
+  }
+
+  // Handle bookings modals
+  if (interaction.customId === "bookings_url_modal") {
+    return handleBookingsModal(interaction, userId, guildId);
   }
 
   const state = tokenSetupStates.get(userId);

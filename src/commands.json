@@ -204,5 +204,9 @@
   {
     "name": "cancel",
     "description": "Cancel one of your upcoming room bookings"
+  },
+  {
+    "name": "bookings",
+    "description": "View and manage your upcoming room bookings"
   }
 ]

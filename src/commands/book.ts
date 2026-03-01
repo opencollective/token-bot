@@ -907,7 +907,7 @@ export async function handleBookButton(
   if (customId === "book_custom_name") {
     const modal = new ModalBuilder()
       .setCustomId("book_name_modal")
-      .setTitle("Event Name")
+      .setTitle("Event Details")
       .addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(
           new TextInputBuilder()
@@ -917,6 +917,15 @@ export async function handleBookButton(
             .setPlaceholder("e.g., Team Meeting, Workshop, Client Call")
             .setRequired(true)
             .setMaxLength(100),
+        ),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("event_url")
+            .setLabel("Event URL (optional)")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("https://lu.ma/your-event")
+            .setRequired(false)
+            .setMaxLength(500),
         ),
       );
 
@@ -1535,6 +1544,9 @@ ${mintInstructions}`,
       if (transactionMessageLink) {
         eventDescription += `\n${transactionMessageLink}`;
       }
+      if (state.eventUrl) {
+        eventDescription += `\nEvent URL: ${state.eventUrl}`;
+      }
       eventDescription +=
         `\n\nPlease reach out to @${interaction.user.username} on Discord for questions about this booking.
         \n\nTo cancel, ${interaction.user.displayName} needs to run the /cancel command in Discord.
@@ -1602,7 +1614,7 @@ Booking Chain: ${tokenConfig.chain}`;
 **Room:** ${product.name}
 **Start:** ${state.startTime.toLocaleString()}
 **End:** ${state.endTime.toLocaleString()}
-**Paid:** ${priceAmount.toFixed(2)} ${tokenSymbol}
+**Paid:** ${priceAmount.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}
 
 [View transaction](<${txUrl}>)
 
@@ -1789,7 +1801,10 @@ export async function handleBookModal(
     }
 
     const eventName = interaction.fields.getTextInputValue("event_name");
+    let eventUrl = "";
+    try { eventUrl = interaction.fields.getTextInputValue("event_url").trim(); } catch { /* optional field */ }
     state.name = eventName;
+    if (eventUrl) state.eventUrl = eventUrl;
     state.step = "payment";
     bookStates.set(userId, state);
 
