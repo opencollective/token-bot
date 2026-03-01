@@ -19,6 +19,15 @@ import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 
+// Helper to update message for both button/select and deferred modal interactions
+async function updateMessage(interaction: Interaction, data: { content: string; components: any[] }) {
+  if ((interaction.isButton() || interaction.isStringSelectMenu()) && 'update' in interaction) {
+    await interaction.update(data);
+  } else if (interaction.isModalSubmit()) {
+    await interaction.editReply(data);
+  }
+}
+
 // Cache for Discord ID to blockchain address mapping
 const addressCache = new Map<string, string>();
 
@@ -416,7 +425,7 @@ async function showDateSelection(
   }
   rows.push(row2);
   
-  // Third row: Last day + Other + Cancel
+  // Third row: Last day + Other + Custom + Cancel
   const row3 = new ActionRowBuilder<ButtonBuilder>();
   if (dateOptions.length > 6) {
     row3.addComponents(
@@ -429,7 +438,11 @@ async function showDateSelection(
   row3.addComponents(
     new ButtonBuilder()
       .setCustomId("book_date_other")
-      .setLabel("Other date...")
+      .setLabel("Next 2 weeks...")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("book_date_custom")
+      .setLabel("Enter date...")
       .setStyle(ButtonStyle.Secondary),
   );
   rows.push(row3);
@@ -638,7 +651,11 @@ export async function handleBookButton(
     row3.addComponents(
       new ButtonBuilder()
         .setCustomId("book_date_other")
-        .setLabel("Other date...")
+        .setLabel("Next 2 weeks...")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("book_date_custom")
+        .setLabel("Enter date...")
         .setStyle(ButtonStyle.Secondary),
     );
     rows.push(row3);
@@ -865,6 +882,27 @@ export async function handleBookButton(
     return;
   }
 
+  // Custom date button - show modal
+  if (customId === "book_date_custom") {
+    const modal = new ModalBuilder()
+      .setCustomId("book_date_modal")
+      .setTitle("Enter a Date")
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("custom_date")
+            .setLabel("Date (DD/MM/YYYY)")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("e.g., 15/03/2026")
+            .setRequired(true)
+            .setMaxLength(10),
+        ),
+      );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
   // Custom name button - show modal
   if (customId === "book_custom_name") {
     const modal = new ModalBuilder()
@@ -899,7 +937,7 @@ async function showTimeSelection(
   userId: string,
   guildId: string,
 ) {
-  if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
+  if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isModalSubmit()) return;
 
   const state = bookStates.get(userId);
   if (!state || !state.selectedDate) return;
@@ -938,7 +976,7 @@ async function showTimeSelection(
   const timeSlots = getTimeSlots(state.selectedDate, isToday, bookedEvents);
 
   if (timeSlots.length === 0) {
-    await interaction.update({
+    await updateMessage(interaction, {
       content: `${buildSelectionHeader(state, product)}\n${availability}\n\n⚠️ No available time slots left for today. Please select a different date.`,
       components: [
         new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -981,7 +1019,7 @@ async function showTimeSelection(
 
   const header = buildSelectionHeader(state, product);
 
-  await interaction.update({
+  await updateMessage(interaction, {
     content: `${header}\n${availability}\n\n⏰ **Select start time:** (🔴 = booked)`,
     components: [row, navRow],
   });
@@ -1673,6 +1711,72 @@ export async function handleBookModal(
   guildId: string,
 ) {
   if (!interaction.isModalSubmit()) return;
+
+  if (interaction.customId === "book_date_modal") {
+    const state = bookStates.get(userId);
+    if (!state) {
+      await interaction.reply({
+        content: "⚠️ Session expired. Please run /book again.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const dateInput = interaction.fields.getTextInputValue("custom_date").trim();
+    
+    // Parse DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    const match = dateInput.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+    if (!match) {
+      await interaction.reply({
+        content: "❌ Invalid date format. Please use DD/MM/YYYY (e.g., 15/03/2026).",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const [, dayStr, monthStr, yearStr] = match;
+    const day = parseInt(dayStr);
+    const month = parseInt(monthStr);
+    const year = parseInt(yearStr);
+
+    // Validate ranges
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+      await interaction.reply({
+        content: "❌ Invalid date. Please check the day and month.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const selectedDate = new Date(year, month - 1, day);
+    
+    // Check it's a valid date (handles things like Feb 30)
+    if (selectedDate.getDate() !== day || selectedDate.getMonth() !== month - 1) {
+      await interaction.reply({
+        content: "❌ Invalid date. Please check the day and month.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Check it's not in the past
+    const today = getLocalToday();
+    if (selectedDate < today) {
+      await interaction.reply({
+        content: "❌ Can't book in the past. Please enter a future date.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    state.selectedDate = selectedDate;
+    state.step = "time";
+    bookStates.set(userId, state);
+
+    await interaction.deferUpdate();
+    await showTimeSelection(interaction, userId, guildId);
+    return;
+  }
 
   if (interaction.customId === "book_name_modal") {
     const state = bookStates.get(userId);
