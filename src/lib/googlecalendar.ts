@@ -40,6 +40,10 @@ export type CalendarEvent = {
   reminders?: {
     useDefault: boolean;
   };
+  source?: {
+    url: string;
+    title?: string;
+  };
 };
 
 export type ConflictError = {
@@ -301,6 +305,7 @@ export class GoogleCalendarClient {
       description?: string;
       start?: { dateTime: string; timeZone?: string };
       end?: { dateTime: string; timeZone?: string };
+      source?: { url: string; title?: string };
     },
   ): Promise<void> {
     try {

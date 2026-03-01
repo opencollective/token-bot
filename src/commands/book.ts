@@ -1553,7 +1553,7 @@ ${mintInstructions}`,
 Booking TX: ${txHash}
 Booking Chain: ${tokenConfig.chain}`;
 
-      await calendarClient.createEvent(product.calendarId, {
+      const calendarEvent: any = {
         summary: state.name || "Room Booking",
         description: eventDescription,
         start: {
@@ -1564,7 +1564,13 @@ Booking Chain: ${tokenConfig.chain}`;
           dateTime: state.endTime.toISOString(),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
-      });
+      };
+
+      if (state.eventUrl) {
+        calendarEvent.source = { url: state.eventUrl, title: "Event page" };
+      }
+
+      await calendarClient.createEvent(product.calendarId, calendarEvent);
 
       try {
         const nostr = Nostr.getInstance();

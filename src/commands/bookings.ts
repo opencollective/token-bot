@@ -102,9 +102,11 @@ function parseBookingTx(desc?: string): { txHash: string; chain: string } | unde
   return tx && chain ? { txHash: tx[1], chain: chain[1] } : undefined;
 }
 
-function parseEventUrl(desc?: string): string | undefined {
-  if (!desc) return undefined;
-  const m = desc.match(/Event URL: (.+)/);
+function parseEventUrl(event: { description?: string; source?: { url: string } }): string | undefined {
+  // Prefer source.url (structured), fall back to description text
+  if (event.source?.url) return event.source.url;
+  if (!event.description) return undefined;
+  const m = event.description.match(/Event URL: (.+)/);
   return m ? m[1].trim() : undefined;
 }
 
@@ -163,7 +165,7 @@ export async function handleBookingsCommand(
             const durationMinutes = Math.round((end.getTime() - start.getTime()) / 60000);
             const hours = durationMinutes / 60;
             const bookingTx = parseBookingTx(event.description);
-            const eventUrl = parseEventUrl(event.description);
+            const eventUrl = parseEventUrl(event);
 
             // Determine which token was used
             let tokenSymbol = product.price[0]?.token || guildSettings.tokens[0]?.symbol || "tokens";
@@ -1081,24 +1083,32 @@ async function processEdit(
 
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+  // Determine the effective event URL (new value takes priority, fall back to existing)
+  const effectiveUrl = state.newUrl !== undefined ? (state.newUrl || undefined) : booking.eventUrl;
+  const sourceField = effectiveUrl ? { url: effectiveUrl, title: "Event page" } : undefined;
+
   if (newCalendarId !== oldCalendarId) {
     // Moving to different calendar: delete old, create new
     await calendarClient.deleteEvent(oldCalendarId, booking.event.id!);
     await calendarClient.ensureCalendarInList(newCalendarId);
-    await calendarClient.createEvent(newCalendarId, {
+    const newEvent: any = {
       summary: booking.event.summary || "Room Booking",
       description: eventDescription,
       start: { dateTime: newStartTime.toISOString(), timeZone: tz },
       end: { dateTime: newEndTime.toISOString(), timeZone: tz },
-    });
+    };
+    if (sourceField) newEvent.source = sourceField;
+    await calendarClient.createEvent(newCalendarId, newEvent);
   } else {
     // Same calendar: update in place
-    await calendarClient.updateEvent(oldCalendarId, booking.event.id!, {
+    const updatePayload: any = {
       summary: booking.event.summary,
       description: eventDescription,
       start: { dateTime: newStartTime.toISOString(), timeZone: tz },
       end: { dateTime: newEndTime.toISOString(), timeZone: tz },
-    });
+    };
+    if (sourceField) updatePayload.source = sourceField;
+    await calendarClient.updateEvent(oldCalendarId, booking.event.id!, updatePayload);
   }
 
   // Post to transactions channel
