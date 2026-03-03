@@ -12,6 +12,7 @@ import {
   MessageFlags,
   ModalBuilder,
   REST,
+  RoleSelectMenuBuilder,
   Routes,
   StringSelectMenuBuilder,
   TextInputBuilder,
@@ -364,7 +365,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       return handleStringSelect(interaction, userId, guildId);
     }
-    // Role select menus no longer used (roles managed via /roles modals)
+    if (interaction.isRoleSelectMenu()) {
+      return handleRoleSelectMenu(interaction, userId, guildId);
+    }
   } catch (error) {
     console.error("Error handling interaction:", error);
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
@@ -629,54 +632,18 @@ async function handleButton(
 
   const customId = interaction.customId;
 
-  // Roles: Add new role
+  // Roles: Add new role — show role picker
   if (customId === "roles_add") {
-    const modal = new ModalBuilder()
-      .setCustomId("roles_add_modal")
-      .setTitle("Add Role Configuration");
-
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("role_id")
-          .setLabel("Role ID (right-click role → Copy ID)")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true),
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("role_name")
-          .setLabel("Role name (for display)")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true),
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("tokens_to_mint")
-          .setLabel("Tokens to mint (reward, 0 for none)")
-          .setStyle(TextInputStyle.Short)
-          .setValue("0")
-          .setRequired(true),
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("tokens_to_burn")
-          .setLabel("Tokens to burn (cost, 0 for none)")
-          .setStyle(TextInputStyle.Short)
-          .setValue("0")
-          .setRequired(true),
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("frequency")
-          .setLabel("Frequency (daily / weekly / monthly)")
-          .setStyle(TextInputStyle.Short)
-          .setValue("monthly")
-          .setRequired(true),
-      ),
+    const row = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
+      new RoleSelectMenuBuilder()
+        .setCustomId("roles_add_pick")
+        .setPlaceholder("Select a role to configure...")
     );
 
-    await interaction.showModal(modal);
+    await interaction.update({
+      content: "**Select a role to add:**",
+      components: [row],
+    });
     return;
   }
 
@@ -872,6 +839,67 @@ async function handleChannelSelect(
   }
 }
 
+// State to hold the selected role ID between role picker and modal
+const rolesAddState = new Map<string, { roleId: string; roleName: string }>();
+
+async function handleRoleSelectMenu(
+  interaction: Interaction,
+  userId: string,
+  guildId: string,
+) {
+  if (!interaction.isRoleSelectMenu()) return;
+
+  if (interaction.customId === "roles_add_pick") {
+    const role = interaction.roles.first();
+    if (!role) return;
+
+    // Store selected role for the modal
+    rolesAddState.set(userId, { roleId: role.id, roleName: role.name });
+
+    const modal = new ModalBuilder()
+      .setCustomId("roles_add_modal")
+      .setTitle(`Configure: ${role.name}`);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("tokens_to_mint")
+          .setLabel("Tokens to mint (reward, 0 for none)")
+          .setStyle(TextInputStyle.Short)
+          .setValue("0")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("tokens_to_burn")
+          .setLabel("Tokens to burn (cost, 0 for none)")
+          .setStyle(TextInputStyle.Short)
+          .setValue("0")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("frequency")
+          .setLabel("Frequency (daily / weekly / monthly)")
+          .setStyle(TextInputStyle.Short)
+          .setValue("monthly")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("active_only")
+          .setLabel("Only users active in #contributions? (yes/no)")
+          .setStyle(TextInputStyle.Short)
+          .setValue("no")
+          .setRequired(true),
+      ),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+}
+
 async function handleStringSelect(
   interaction: Interaction,
   userId: string,
@@ -990,28 +1018,47 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // Handle roles add modal
   if (interaction.customId === "roles_add_modal") {
-    const roleId = interaction.fields.getTextInputValue("role_id").trim();
-    const roleName = interaction.fields.getTextInputValue("role_name").trim();
+    const state = rolesAddState.get(userId);
+    if (!state) {
+      await interaction.reply({ content: "⚠️ Session expired. Please try again.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    rolesAddState.delete(userId);
+
+    const { roleId, roleName } = state;
     const mint = parseInt(interaction.fields.getTextInputValue("tokens_to_mint")) || 0;
     const burn = parseInt(interaction.fields.getTextInputValue("tokens_to_burn")) || 0;
     const freqRaw = interaction.fields.getTextInputValue("frequency").trim().toLowerCase();
     const frequency = (["daily", "weekly", "monthly"].includes(freqRaw) ? freqRaw : "monthly") as "daily" | "weekly" | "monthly";
+    const activeOnly = interaction.fields.getTextInputValue("active_only").trim().toLowerCase() === "yes";
 
     const roles = await loadRoles(guildId);
-    roles.push({
-      id: roleId,
-      name: roleName,
-      amountToMint: mint,
-      amountToBurn: burn,
-      frequency,
-      rolesToPingIfEmpty: [],
-      onlyToActiveContributors: false,
-    });
+
+    // Update existing or add new
+    const existing = roles.find((r) => r.id === roleId);
+    if (existing) {
+      existing.name = roleName;
+      existing.amountToMint = mint;
+      existing.amountToBurn = burn;
+      existing.frequency = frequency;
+      existing.onlyToActiveContributors = activeOnly;
+    } else {
+      roles.push({
+        id: roleId,
+        name: roleName,
+        amountToMint: mint,
+        amountToBurn: burn,
+        frequency,
+        rolesToPingIfEmpty: [],
+        onlyToActiveContributors: activeOnly,
+      });
+    }
     await saveRoles(guildId, roles);
 
     await interaction.reply({
-      content: `✅ Added <@&${roleId}> (${roleName})\n` +
-        `${mint ? `+${mint.toLocaleString()} tokens ` : ""}${burn ? `-${burn.toLocaleString()} tokens ` : ""}${frequency}\n\n` +
+      content: `✅ ${existing ? "Updated" : "Added"} <@&${roleId}>\n` +
+        `${mint ? `+${mint.toLocaleString()} tokens ` : ""}${burn ? `-${burn.toLocaleString()} tokens ` : ""}${frequency}\n` +
+        `Active only: ${activeOnly ? "Yes" : "No"}\n\n` +
         `Use \`/roles\` to view all roles.`,
       flags: MessageFlags.Ephemeral,
     });
