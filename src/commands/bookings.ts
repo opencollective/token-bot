@@ -425,7 +425,7 @@ export async function handleBookingsButton(
 
   // ── Cancel booking ──────────────────────────────────────────────────────
 
-  if (customId.startsWith("bookings_cancel_")) {
+  if (customId.startsWith("bookings_cancel_") && !customId.startsWith("bookings_cancel_confirm_")) {
     const idx = parseInt(customId.replace("bookings_cancel_", ""));
     const booking = state.bookings[idx];
     if (!booking) {
