@@ -69,7 +69,8 @@ console.log(`hour: ${hour}`);
 console.log(`minutes: ${minutes}`);
 
 const processCommunity = async (guildId: string) => {
-  const roles: RoleSetting[] = await loadRoles(guildId);
+  const allRoles: RoleSetting[] = await loadRoles(guildId);
+  const roles = allRoles.filter((r) => (r.amountToMint || 0) > 0 || (r.amountToBurn || 0) > 0);
   const guildSettings = await loadGuildSettings(guildId);
   if (!guildSettings) {
     console.error(`Guild settings not found for guild ${guildId}`);
