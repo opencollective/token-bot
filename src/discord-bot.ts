@@ -557,8 +557,29 @@ async function handleRolesCommand(
     return;
   }
 
-  // Build role list
-  const lines = roles.map((r, i) => {
+  // Filter out roles with no rewards or costs
+  const activeRoles = roles.filter((r) => (r.amountToMint || 0) > 0 || (r.amountToBurn || 0) > 0);
+
+  if (activeRoles.length === 0) {
+    await interaction.reply({
+      content: "No roles with active rewards or costs configured.\n\nUse the button below to add a role.",
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("roles_add")
+            .setLabel("Add Role")
+            .setStyle(ButtonStyle.Primary),
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Build role list (use original index for edit references)
+  const activeWithIndex = activeRoles.map((r) => ({ role: r, idx: roles.indexOf(r) }));
+
+  const lines = activeWithIndex.map(({ role: r, idx }, i) => {
     const parts: string[] = [];
     if (r.amountToMint) parts.push(`+${r.amountToMint.toLocaleString()} tokens`);
     if (r.amountToBurn) parts.push(`-${r.amountToBurn.toLocaleString()} tokens`);
@@ -570,10 +591,10 @@ async function handleRolesCommand(
     return `${i + 1}. <@&${r.id}> — ${parts.join(", ")} ${freq}${flagStr}`;
   });
 
-  const selectOptions = roles.map((r, i) => ({
+  const selectOptions = activeWithIndex.map(({ role: r, idx }, i) => ({
     label: r.name || `Role #${i + 1}`,
     description: `${r.amountToMint ? `+${r.amountToMint}` : ""}${r.amountToMint && r.amountToBurn ? " / " : ""}${r.amountToBurn ? `-${r.amountToBurn}` : ""} ${r.frequency || "monthly"}`,
-    value: `${i}`,
+    value: `${idx}`,
   }));
 
   const components: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] = [
