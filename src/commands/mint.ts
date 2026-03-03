@@ -89,19 +89,21 @@ export default async function handleMintCommand(
   }
 
   // Get arguments
-  const tokenSymbol = interaction.options.getString("token", true);
+  const tokenSymbol = interaction.options.getString("token");
   const usersInput = interaction.options.getString("users", true);
   const amount = interaction.options.getNumber("amount", true);
   const description = interaction.options.getString("description") || undefined;
 
-  // Find the token
-  const token = mintableTokens.find(
-    (t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase(),
-  );
+  // Find the token (default to only mintable token if not specified)
+  const token = tokenSymbol
+    ? mintableTokens.find((t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase())
+    : mintableTokens.length === 1 ? mintableTokens[0] : null;
   if (!token) {
     const available = mintableTokens.map((t) => `\`${t.symbol}\``).join(", ");
     await interaction.reply({
-      content: `❌ Token \`${tokenSymbol}\` not found. Available: ${available}`,
+      content: tokenSymbol
+        ? `❌ Token \`${tokenSymbol}\` not found. Available: ${available}`
+        : `❌ Multiple tokens available. Please specify one: ${available}`,
       flags: MessageFlags.Ephemeral,
     });
     return;

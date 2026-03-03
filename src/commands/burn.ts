@@ -88,19 +88,21 @@ export default async function handleBurnCommand(
   }
 
   // Get arguments
-  const tokenSymbol = interaction.options.getString("token", true);
+  const tokenSymbol = interaction.options.getString("token");
   const usersInput = interaction.options.getString("users", true);
   const amount = interaction.options.getNumber("amount", true);
   const description = interaction.options.getString("description") || undefined;
 
-  // Find the token
-  const token = burnableTokens.find(
-    (t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase(),
-  );
+  // Find the token (default to only burnable token if not specified)
+  const token = tokenSymbol
+    ? burnableTokens.find((t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase())
+    : burnableTokens.length === 1 ? burnableTokens[0] : null;
   if (!token) {
     const available = burnableTokens.map((t) => `\`${t.symbol}\``).join(", ");
     await interaction.reply({
-      content: `❌ Token \`${tokenSymbol}\` not found. Available: ${available}`,
+      content: tokenSymbol
+        ? `❌ Token \`${tokenSymbol}\` not found. Available: ${available}`
+        : `❌ Multiple tokens available. Please specify one: ${available}`,
       flags: MessageFlags.Ephemeral,
     });
     return;
