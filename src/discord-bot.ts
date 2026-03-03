@@ -12,7 +12,6 @@ import {
   MessageFlags,
   ModalBuilder,
   REST,
-  RoleSelectMenuBuilder,
   Routes,
   StringSelectMenuBuilder,
   TextInputBuilder,
@@ -34,10 +33,8 @@ import type {
   BlockchainAddress,
   Chain,
   ChannelSetupState,
-  CostEditState,
   GuildSettings,
   Product,
-  RewardEditState,
   RoleSetting,
   TokenSetupState,
 } from "./types.ts";
@@ -54,8 +51,7 @@ const CHAIN = Deno.env.get("CHAIN") as SupportedChain || "base_sepolia";
 
 const tokenSetupStates = new Map<string, TokenSetupState>();
 const channelSetupStates = new Map<string, ChannelSetupState>();
-const rewardEditStates = new Map<string, RewardEditState>();
-const costEditStates = new Map<string, CostEditState>();
+// Role editing is now handled via /roles command with modals
 
 import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
@@ -296,11 +292,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "balance") {
         return handleBalanceCommand(interaction, userId, guildId);
       }
-      if (interaction.commandName === "edit-rewards") {
-        return handleEditRewardsCommand(interaction, userId, guildId);
-      }
-      if (interaction.commandName === "edit-costs") {
-        return handleEditCostsCommand(interaction, userId, guildId);
+      if (interaction.commandName === "roles") {
+        return handleRolesCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "book") {
         if (!calendarEnabled) {
@@ -371,9 +364,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       return handleStringSelect(interaction, userId, guildId);
     }
-    if (interaction.isRoleSelectMenu()) {
-      return handleRoleSelect(interaction, userId, guildId);
-    }
+    // Role select menus no longer used (roles managed via /roles modals)
   } catch (error) {
     console.error("Error handling interaction:", error);
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
@@ -541,160 +532,68 @@ async function handleSetupChannelsCommand(
   });
 }
 
-async function handleEditRewardsCommand(
+async function handleRolesCommand(
   interaction: Interaction,
   userId: string,
   guildId: string,
 ) {
   if (!interaction.isChatInputCommand()) return;
 
-  const settings = await loadGuildSettings(guildId);
-  if (!settings) {
+  const roles = await loadRoles(guildId);
+
+  if (roles.length === 0) {
     await interaction.reply({
-      content: "⚠️ Please run `/setup-token` and `/setup-channels` first.",
+      content: "No roles configured yet.\n\nUse the button below to add a role.",
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("roles_add")
+            .setLabel("Add Role")
+            .setStyle(ButtonStyle.Primary),
+        ),
+      ],
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  // Get parameters from command options
-  const roleId = interaction.options.getRole("role")?.id;
-  const amount = interaction.options.getInteger("amount");
-  const frequency = interaction.options.getString("frequency") as "daily" | "weekly" | "monthly";
-
-  if (!roleId || !amount || !frequency) {
-    await interaction.reply({
-      content: "⚠️ Missing required parameters.",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  // Load existing roles configuration
-  let roles: RoleSetting[] = [];
-  try {
-    const rolesContent = await Deno.readTextFile(`./data/${guildId}/roles.json`);
-    roles = JSON.parse(rolesContent);
-  } catch {
-    // No roles file yet, start fresh
-  }
-
-  // Find or create role setting
-  let roleSetting = roles.find((r) => r.id === roleId);
-  if (!roleSetting) {
-    roleSetting = {
-      id: roleId,
-      name: "",
-      amountToMint: amount,
-      amountToBurn: 0,
-      frequency,
-      rolesToPingIfEmpty: [],
-      onlyToActiveContributors: false,
-    };
-    roles.push(roleSetting);
-  } else {
-    roleSetting.amountToMint = amount;
-    roleSetting.frequency = frequency;
-  }
-
-  // Save immediately
-  await saveRoles(guildId, roles);
-
-  // Store state for optional settings updates
-  rewardEditStates.set(userId, {
-    id: roleId,
-    amountToMint: amount,
-    frequency,
-    rolesToPingIfEmpty: roleSetting.rolesToPingIfEmpty,
-    onlyToActiveContributors: roleSetting.onlyToActiveContributors,
+  // Build role list
+  const lines = roles.map((r, i) => {
+    const parts: string[] = [];
+    if (r.amountToMint) parts.push(`+${r.amountToMint.toLocaleString()} tokens`);
+    if (r.amountToBurn) parts.push(`-${r.amountToBurn.toLocaleString()} tokens`);
+    const freq = r.frequency || "monthly";
+    const flags: string[] = [];
+    if (r.onlyToActiveContributors) flags.push("active only");
+    if (r.rolesToPingIfEmpty?.length) flags.push(`pings ${r.rolesToPingIfEmpty.length} role(s) if empty`);
+    const flagStr = flags.length ? ` _(${flags.join(", ")})_` : "";
+    return `${i + 1}. <@&${r.id}> — ${parts.join(", ")} ${freq}${flagStr}`;
   });
+
+  const selectOptions = roles.map((r, i) => ({
+    label: r.name || `Role #${i + 1}`,
+    description: `${r.amountToMint ? `+${r.amountToMint}` : ""}${r.amountToMint && r.amountToBurn ? " / " : ""}${r.amountToBurn ? `-${r.amountToBurn}` : ""} ${r.frequency || "monthly"}`,
+    value: `${i}`,
+  }));
+
+  const components: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("roles_select")
+        .setPlaceholder("Select a role to edit...")
+        .addOptions(selectOptions),
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("roles_add")
+        .setLabel("Add Role")
+        .setStyle(ButtonStyle.Primary),
+    ),
+  ];
 
   await interaction.reply({
-    content: `✅ **Reward settings saved!**
-
-<@&${roleId}> will receive **${amount} tokens ${frequency}**
-
-You can optionally configure:`,
-    components: getRewardEditComponents(),
-    flags: MessageFlags.Ephemeral,
-  });
-}
-
-async function handleEditCostsCommand(
-  interaction: Interaction,
-  userId: string,
-  guildId: string,
-) {
-  if (!interaction.isChatInputCommand()) return;
-
-  const settings = await loadGuildSettings(guildId);
-  if (!settings) {
-    await interaction.reply({
-      content: "⚠️ Please run `/setup-token` and `/setup-channels` first.",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  // Get parameters from command options
-  const roleId = interaction.options.getRole("role")?.id;
-  const amount = interaction.options.getInteger("amount");
-  const frequency = interaction.options.getString("frequency") as "daily" | "weekly" | "monthly";
-
-  if (!roleId || !amount || !frequency) {
-    await interaction.reply({
-      content: "⚠️ Missing required parameters.",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  // Load existing roles configuration
-  let roles: RoleSetting[] = [];
-  try {
-    const rolesContent = await Deno.readTextFile(`./data/${guildId}/roles.json`);
-    roles = JSON.parse(rolesContent);
-  } catch {
-    // No roles file yet, start fresh
-  }
-
-  // Find or create role setting
-  let roleSetting = roles.find((r) => r.id === roleId);
-  if (!roleSetting) {
-    roleSetting = {
-      id: roleId,
-      name: "",
-      amountToMint: 0,
-      amountToBurn: amount,
-      frequency,
-      rolesToPingIfEmpty: [],
-      onlyToActiveContributors: false,
-    };
-    roles.push(roleSetting);
-  } else {
-    roleSetting.amountToBurn = amount;
-    roleSetting.frequency = frequency;
-  }
-
-  // Save immediately
-  await saveRoles(guildId, roles);
-
-  // Store state for optional settings updates
-  costEditStates.set(userId, {
-    id: roleId,
-    amountToBurn: amount,
-    frequency,
-    rolesToPingIfEmpty: roleSetting.rolesToPingIfEmpty,
-    onlyToActiveContributors: roleSetting.onlyToActiveContributors,
-  });
-
-  await interaction.reply({
-    content: `✅ **Cost settings saved!**
-
-<@&${roleId}> will burn **${amount} tokens ${frequency}**
-
-You can optionally configure:`,
-    components: getCostEditComponents(),
+    content: `**⚙️ Role Configuration**\n\n${lines.join("\n")}`,
+    components,
     flags: MessageFlags.Ephemeral,
   });
 }
@@ -708,6 +607,57 @@ async function handleButton(
   if (!interaction.isButton()) return;
 
   const customId = interaction.customId;
+
+  // Roles: Add new role
+  if (customId === "roles_add") {
+    const modal = new ModalBuilder()
+      .setCustomId("roles_add_modal")
+      .setTitle("Add Role Configuration");
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("role_id")
+          .setLabel("Role ID (right-click role → Copy ID)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("role_name")
+          .setLabel("Role name (for display)")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("tokens_to_mint")
+          .setLabel("Tokens to mint (reward, 0 for none)")
+          .setStyle(TextInputStyle.Short)
+          .setValue("0")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("tokens_to_burn")
+          .setLabel("Tokens to burn (cost, 0 for none)")
+          .setStyle(TextInputStyle.Short)
+          .setValue("0")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("frequency")
+          .setLabel("Frequency (daily / weekly / monthly)")
+          .setStyle(TextInputStyle.Short)
+          .setValue("monthly")
+          .setRequired(true),
+      ),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
 
   // Token setup buttons
   if (customId === "token_create_new") {
@@ -910,6 +860,67 @@ async function handleStringSelect(
 
   const customId = interaction.customId;
 
+  // Roles: select a role to edit
+  if (customId === "roles_select") {
+    const idx = parseInt(interaction.values[0]);
+    const roles = await loadRoles(guildId);
+    const role = roles[idx];
+    if (!role) {
+      await interaction.update({ content: "⚠️ Role not found.", components: [] });
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`roles_edit_modal_${idx}`)
+      .setTitle(`Edit: ${role.name || `Role #${idx + 1}`}`);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("role_name")
+          .setLabel("Role name")
+          .setStyle(TextInputStyle.Short)
+          .setValue(role.name || "")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("tokens_to_mint")
+          .setLabel("Tokens to mint (reward, 0 for none)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(String(role.amountToMint || 0))
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("tokens_to_burn")
+          .setLabel("Tokens to burn (cost, 0 for none)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(String(role.amountToBurn || 0))
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("frequency")
+          .setLabel("Frequency (daily / weekly / monthly)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(role.frequency || "monthly")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("active_only")
+          .setLabel("Only active contributors? (yes / no)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(role.onlyToActiveContributors ? "yes" : "no")
+          .setRequired(true),
+      ),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
   // Token chain selection
   if (customId === "token_chain") {
     const state = tokenSetupStates.get(userId);
@@ -934,128 +945,10 @@ async function handleStringSelect(
     return;
   }
 
-  // Reward active contributors
-  if (customId === "reward_active") {
-    const state = rewardEditStates.get(userId);
-    if (!state || !state.id) return;
 
-    state.onlyToActiveContributors = interaction.values[0] === "yes";
-    rewardEditStates.set(userId, state);
-
-    // Update saved settings
-    const roles = await loadRoles(guildId);
-    const roleIndex = roles.findIndex((r) => r.id === state.id);
-    if (roleIndex >= 0) {
-      roles[roleIndex].onlyToActiveContributors = state.onlyToActiveContributors;
-      await saveRoles(guildId, roles);
-    }
-
-    await interaction.update({
-      content: `✅ Updated! Only active contributors: **${
-        state.onlyToActiveContributors ? "Yes" : "No"
-      }**
-
-You can continue to adjust settings:`,
-      components: getRewardEditComponents(),
-    });
-    return;
-  }
-
-  // Cost active contributors
-  if (customId === "cost_active") {
-    const state = costEditStates.get(userId);
-    if (!state || !state.id) return;
-
-    state.onlyToActiveContributors = interaction.values[0] === "yes";
-    costEditStates.set(userId, state);
-
-    // Update saved settings
-    const roles = await loadRoles(guildId);
-    const roleIndex = roles.findIndex((r) => r.id === state.id);
-    if (roleIndex >= 0) {
-      roles[roleIndex].onlyToActiveContributors = state.onlyToActiveContributors;
-      await saveRoles(guildId, roles);
-    }
-
-    await interaction.update({
-      content: `✅ Updated! Only active contributors: **${
-        state.onlyToActiveContributors ? "Yes" : "No"
-      }**
-
-You can continue to adjust settings:`,
-      components: getCostEditComponents(),
-    });
-    return;
-  }
 }
 
-async function handleRoleSelect(
-  interaction: Interaction,
-  userId: string,
-  guildId: string,
-) {
-  if (!interaction.isRoleSelectMenu()) return;
 
-  const customId = interaction.customId;
-
-  // Reward ping roles
-  if (customId === "reward_ping") {
-    const state = rewardEditStates.get(userId);
-    if (!state || !state.id) return;
-
-    state.rolesToPingIfEmpty = interaction.values;
-    rewardEditStates.set(userId, state);
-
-    // Update saved settings
-    const roles = await loadRoles(guildId);
-    const roleIndex = roles.findIndex((r) => r.id === state.id);
-    if (roleIndex >= 0) {
-      roles[roleIndex].rolesToPingIfEmpty = state.rolesToPingIfEmpty;
-      await saveRoles(guildId, roles);
-    }
-
-    const rolesMention = state.rolesToPingIfEmpty.length > 0
-      ? state.rolesToPingIfEmpty.map((r) => `<@&${r}>`).join(", ")
-      : "_none_";
-
-    await interaction.update({
-      content: `✅ Updated! Roles to ping if empty: ${rolesMention}
-
-You can continue to adjust settings:`,
-      components: getRewardEditComponents(),
-    });
-    return;
-  }
-
-  // Cost ping roles
-  if (customId === "cost_ping") {
-    const state = costEditStates.get(userId);
-    if (!state || !state.id) return;
-
-    state.rolesToPingIfEmpty = interaction.values;
-    costEditStates.set(userId, state);
-
-    // Update saved settings
-    const roles = await loadRoles(guildId);
-    const roleIndex = roles.findIndex((r) => r.id === state.id);
-    if (roleIndex >= 0) {
-      roles[roleIndex].rolesToPingIfEmpty = state.rolesToPingIfEmpty;
-      await saveRoles(guildId, roles);
-    }
-
-    const rolesMention = state.rolesToPingIfEmpty.length > 0
-      ? state.rolesToPingIfEmpty.map((r) => `<@&${r}>`).join(", ")
-      : "_none_";
-
-    await interaction.update({
-      content: `✅ Updated! Roles to ping if empty: ${rolesMention}
-
-You can continue to adjust settings:`,
-      components: getCostEditComponents(),
-    });
-    return;
-  }
-}
 
 // Modal submission handler
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -1072,6 +965,65 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // Handle bookings modals
   if (interaction.customId === "bookings_url_modal") {
     return handleBookingsModal(interaction, userId, guildId);
+  }
+
+  // Handle roles add modal
+  if (interaction.customId === "roles_add_modal") {
+    const roleId = interaction.fields.getTextInputValue("role_id").trim();
+    const roleName = interaction.fields.getTextInputValue("role_name").trim();
+    const mint = parseInt(interaction.fields.getTextInputValue("tokens_to_mint")) || 0;
+    const burn = parseInt(interaction.fields.getTextInputValue("tokens_to_burn")) || 0;
+    const freqRaw = interaction.fields.getTextInputValue("frequency").trim().toLowerCase();
+    const frequency = (["daily", "weekly", "monthly"].includes(freqRaw) ? freqRaw : "monthly") as "daily" | "weekly" | "monthly";
+
+    const roles = await loadRoles(guildId);
+    roles.push({
+      id: roleId,
+      name: roleName,
+      amountToMint: mint,
+      amountToBurn: burn,
+      frequency,
+      rolesToPingIfEmpty: [],
+      onlyToActiveContributors: false,
+    });
+    await saveRoles(guildId, roles);
+
+    await interaction.reply({
+      content: `✅ Added <@&${roleId}> (${roleName})\n` +
+        `${mint ? `+${mint.toLocaleString()} tokens ` : ""}${burn ? `-${burn.toLocaleString()} tokens ` : ""}${frequency}\n\n` +
+        `Use \`/roles\` to view all roles.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Handle roles edit modal
+  if (interaction.customId.startsWith("roles_edit_modal_")) {
+    const idx = parseInt(interaction.customId.replace("roles_edit_modal_", ""));
+    const roles = await loadRoles(guildId);
+    const role = roles[idx];
+    if (!role) {
+      await interaction.reply({ content: "⚠️ Role not found.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    role.name = interaction.fields.getTextInputValue("role_name").trim();
+    role.amountToMint = parseInt(interaction.fields.getTextInputValue("tokens_to_mint")) || 0;
+    role.amountToBurn = parseInt(interaction.fields.getTextInputValue("tokens_to_burn")) || 0;
+    const freqRaw = interaction.fields.getTextInputValue("frequency").trim().toLowerCase();
+    role.frequency = (["daily", "weekly", "monthly"].includes(freqRaw) ? freqRaw : "monthly") as "daily" | "weekly" | "monthly";
+    role.onlyToActiveContributors = interaction.fields.getTextInputValue("active_only").trim().toLowerCase() === "yes";
+
+    await saveRoles(guildId, roles);
+
+    await interaction.reply({
+      content: `✅ Updated <@&${role.id}> (${role.name})\n` +
+        `${role.amountToMint ? `+${role.amountToMint.toLocaleString()} tokens ` : ""}${role.amountToBurn ? `-${role.amountToBurn.toLocaleString()} tokens ` : ""}${role.frequency}\n` +
+        `Active only: ${role.onlyToActiveContributors ? "Yes" : "No"}\n\n` +
+        `Use \`/roles\` to view all roles.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
   }
 
   const state = tokenSetupStates.get(userId);
@@ -1221,50 +1173,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // UI helper functions
-function getRewardEditComponents() {
-  const row1 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId("reward_active")
-      .setPlaceholder("Only active contributors?")
-      .addOptions(
-        { label: "Yes - only active contributors", value: "yes" },
-        { label: "No - all role members", value: "no" },
-      ),
-  );
-
-  const row2 = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
-    new RoleSelectMenuBuilder()
-      .setCustomId("reward_ping")
-      .setPlaceholder("Roles to ping if target role is empty (optional)")
-      .setMinValues(0)
-      .setMaxValues(5),
-  );
-
-  return [row1, row2];
-}
-
-function getCostEditComponents() {
-  const row1 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId("cost_active")
-      .setPlaceholder("Only active contributors?")
-      .addOptions(
-        { label: "Yes - only active contributors", value: "yes" },
-        { label: "No - all role members", value: "no" },
-      ),
-  );
-
-  const row2 = new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(
-    new RoleSelectMenuBuilder()
-      .setCustomId("cost_ping")
-      .setPlaceholder("Roles to ping if target role is empty (optional)")
-      .setMinValues(0)
-      .setMaxValues(5),
-  );
-
-  return [row1, row2];
-}
-
 client.on(Events.Error, (error) => {
   console.error("Discord client error:", error);
 });
