@@ -910,7 +910,7 @@ async function handleStringSelect(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("active_only")
-          .setLabel("Only active contributors? (yes / no)")
+          .setLabel("Only users active in #contributions? (yes/no)")
           .setStyle(TextInputStyle.Short)
           .setValue(role.onlyToActiveContributors ? "yes" : "no")
           .setRequired(true),
