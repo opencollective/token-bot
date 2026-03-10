@@ -301,6 +301,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "permissions") {
         return handlePermissionsCommand(interaction, userId, guildId);
       }
+      if (interaction.commandName === "doctor") {
+        return handleDoctorCommand(interaction, userId, guildId);
+      }
       if (interaction.commandName === "book") {
         if (!calendarEnabled) {
           await interaction.reply({
@@ -483,6 +486,144 @@ async function handleListTokensCommand(
   });
 }
 
+async function handleDoctorCommand(
+  interaction: Interaction,
+  _userId: string,
+  guildId: string,
+) {
+  if (!interaction.isChatInputCommand()) return;
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.editReply({ content: "❌ Could not access server." });
+    return;
+  }
+
+  const issues: string[] = [];
+  const fixes: string[] = [];
+  const ok: string[] = [];
+
+  // 1. Check settings exist
+  const settings = await loadGuildSettings(guildId);
+  if (!settings) {
+    await interaction.editReply({
+      content: "❌ **No settings configured.**\n\nRun `/edit-tokens` to add a token first, then `/setup-channels` to configure channels.",
+    });
+    return;
+  }
+
+  // 2. Check tokens
+  if (settings.tokens.length === 0) {
+    issues.push("❌ No tokens configured — run `/edit-tokens`");
+  } else {
+    ok.push(`✅ ${settings.tokens.length} token(s) configured`);
+  }
+
+  // 3. Check channels
+  const channelNames = ["transactions", "contributions", "logs"] as const;
+  for (const name of channelNames) {
+    const channelId = settings.channels?.[name];
+    if (!channelId) {
+      issues.push(`❌ No #${name} channel — run \`/setup-channels\``);
+    } else {
+      try {
+        const channel = await guild.channels.fetch(channelId);
+        if (channel) {
+          ok.push(`✅ #${name}: <#${channelId}>`);
+        } else {
+          issues.push(`⚠️ #${name} channel (${channelId}) not found — run \`/setup-channels\``);
+        }
+      } catch {
+        issues.push(`⚠️ #${name} channel (${channelId}) inaccessible — run \`/setup-channels\``);
+      }
+    }
+  }
+
+  // 4. Check per-token minter roles
+  for (const token of settings.tokens) {
+    if (!token.mintable) continue;
+
+    const expectedRoleName = `${token.symbol}-minter`;
+
+    if (token.minterRoleId) {
+      try {
+        const role = await guild.roles.fetch(token.minterRoleId);
+        if (role) {
+          const members = (await guild.members.fetch()).filter((m) => m.roles.cache.has(token.minterRoleId!));
+          if (members.size > 0) {
+            ok.push(`✅ ${token.symbol}: <@&${token.minterRoleId}> (${members.size} member${members.size > 1 ? "s" : ""})`);
+          } else {
+            issues.push(`⚠️ ${token.symbol}: <@&${token.minterRoleId}> exists but has **0 members** — assign it to people who should mint`);
+          }
+        } else {
+          // Role ID saved but role doesn't exist — recreate
+          const newRole = await guild.roles.create({
+            name: expectedRoleName,
+            reason: `Doctor: recreating missing minter role for ${token.symbol}`,
+          });
+          token.minterRoleId = newRole.id;
+          fixes.push(`🔧 ${token.symbol}: recreated missing \`${expectedRoleName}\` role`);
+        }
+      } catch (error) {
+        issues.push(`⚠️ ${token.symbol}: could not verify minter role`);
+      }
+    } else {
+      // No minter role — create one
+      try {
+        const existingRole = guild.roles.cache.find((r) => r.name === expectedRoleName);
+        if (existingRole) {
+          token.minterRoleId = existingRole.id;
+          fixes.push(`🔧 ${token.symbol}: linked existing \`${expectedRoleName}\` role`);
+        } else {
+          const newRole = await guild.roles.create({
+            name: expectedRoleName,
+            reason: `Doctor: creating minter role for ${token.symbol}`,
+          });
+          token.minterRoleId = newRole.id;
+          fixes.push(`🔧 ${token.symbol}: created \`${expectedRoleName}\` role — assign it to people who should mint`);
+        }
+      } catch (error) {
+        issues.push(`❌ ${token.symbol}: failed to create minter role — check bot permissions`);
+      }
+    }
+  }
+
+  // 5. Check per-token transaction channels
+  for (const token of settings.tokens) {
+    if (token.transactionsChannelId) {
+      try {
+        const channel = await guild.channels.fetch(token.transactionsChannelId);
+        if (!channel) {
+          issues.push(`⚠️ ${token.symbol}: transaction channel (${token.transactionsChannelId}) not found`);
+        }
+      } catch {
+        issues.push(`⚠️ ${token.symbol}: transaction channel inaccessible`);
+      }
+    }
+  }
+
+  // Save any fixes
+  if (fixes.length > 0) {
+    await saveGuildSettings(guildId, settings);
+  }
+
+  // Build report
+  const sections: string[] = [];
+  if (ok.length > 0) sections.push(ok.join("\n"));
+  if (fixes.length > 0) sections.push("**Auto-fixed:**\n" + fixes.join("\n"));
+  if (issues.length > 0) sections.push("**Issues:**\n" + issues.join("\n"));
+
+  const status = issues.length === 0
+    ? (fixes.length > 0 ? "🔧 Fixed some issues" : "✅ Everything looks good!")
+    : `⚠️ ${issues.length} issue${issues.length > 1 ? "s" : ""} found`;
+
+  await interaction.editReply({
+    content: `**🩺 Doctor — ${status}**\n\n${sections.join("\n\n")}`,
+  });
+}
+
 async function handleEditTokensCommand(
   interaction: Interaction,
   userId: string,
@@ -510,13 +651,13 @@ async function handleEditTokensCommand(
       .setStyle(ButtonStyle.Secondary),
   ];
 
-  // Only show "Edit Token" button if tokens exist
+  // Only show "Remove Token" button if tokens exist
   if (hasTokens) {
     buttons.push(
       new ButtonBuilder()
-        .setCustomId("token_edit")
-        .setLabel("Edit Token")
-        .setStyle(ButtonStyle.Secondary)
+        .setCustomId("token_remove")
+        .setLabel("Remove Token")
+        .setStyle(ButtonStyle.Danger)
     );
   }
 
@@ -808,7 +949,8 @@ async function handleButton(
     return;
   }
 
-  if (customId === "token_edit") {
+  // Remove Token — show select menu to pick which token
+  if (customId === "token_remove") {
     const settings = await loadGuildSettings(guildId);
     if (!settings || settings.tokens.length === 0) {
       await interaction.reply({
@@ -828,47 +970,14 @@ async function handleButton(
 
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId("token_edit_select")
-        .setPlaceholder("Select a token to edit")
-        .addOptions(options.slice(0, 25)), // Discord limit
+        .setCustomId("token_remove_select")
+        .setPlaceholder("Select a token to remove")
+        .addOptions(options.slice(0, 25)),
     );
 
     await interaction.editReply({
-      content: "**🪙 Edit Token**\n\nSelect a token to edit:",
+      content: "**🗑️ Remove Token**\n\nSelect a token to remove:",
       components: [row],
-    });
-    return;
-  }
-
-  // Token remove button
-  if (customId.startsWith("token_remove_")) {
-    const tokenIndex = parseInt(customId.replace("token_remove_", ""));
-    const settings = await loadGuildSettings(guildId);
-    
-    if (!settings || !settings.tokens[tokenIndex]) {
-      await interaction.reply({
-        content: "❌ Token not found.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const token = settings.tokens[tokenIndex];
-    
-    await interaction.update({
-      content: `⚠️ **Remove Token?**\n\nAre you sure you want to remove **${token.name} (${token.symbol})** from this server?\n\n⚠️ This action cannot be undone!`,
-      components: [
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`token_remove_confirm_${tokenIndex}`)
-            .setLabel("Yes, Remove Token")
-            .setStyle(ButtonStyle.Danger),
-          new ButtonBuilder()
-            .setCustomId("token_remove_cancel")
-            .setLabel("Cancel")
-            .setStyle(ButtonStyle.Secondary),
-        )
-      ],
     });
     return;
   }
@@ -887,11 +996,24 @@ async function handleButton(
     }
 
     const token = settings.tokens[tokenIndex];
+
+    // Delete the associated minter role if it exists
+    if (token.minterRoleId && interaction.guild) {
+      try {
+        const role = await interaction.guild.roles.fetch(token.minterRoleId);
+        if (role) {
+          await role.delete(`Removing minter role for deleted token ${token.symbol}`);
+        }
+      } catch (error) {
+        console.error("Error deleting minter role:", error);
+      }
+    }
+
     settings.tokens.splice(tokenIndex, 1);
     await saveGuildSettings(guildId, settings);
 
     await interaction.update({
-      content: `✅ Removed token: **${token.name} (${token.symbol})**`,
+      content: `✅ Removed token **${token.name} (${token.symbol})**${token.minterRoleId ? " and its minter role" : ""}.`,
       components: [],
     });
     return;
@@ -949,21 +1071,34 @@ async function handleChannelSelect(
 
   // Auto-save when all channels are set
   if (state.transactions && state.contributions && state.logs) {
-    const settings = await loadGuildSettings(guildId);
-    if (settings) {
-      settings.channels = {
-        transactions: state.transactions,
-        contributions: state.contributions,
-        logs: state.logs,
-      };
-      await saveGuildSettings(guildId, settings);
-      channelSetupStates.delete(userId);
+    const settings: GuildSettings = (await loadGuildSettings(guildId)) || {
+      tokens: [],
+      guild: {
+        id: guildId,
+        name: interaction.guild?.name || "Unknown",
+        icon: interaction.guild?.icon || null,
+      },
+      creator: {
+        id: interaction.user.id,
+        username: interaction.user.username,
+        globalName: interaction.user.globalName,
+        avatar: interaction.user.avatar,
+      },
+      channels: { transactions: "", contributions: "", logs: "" },
+    };
 
-      await interaction.update({
-        content: "✅ **Channels Configured!**\n\nAll channels have been set up successfully.",
-        components: [],
-      });
-    }
+    settings.channels = {
+      transactions: state.transactions,
+      contributions: state.contributions,
+      logs: state.logs,
+    };
+    await saveGuildSettings(guildId, settings);
+    channelSetupStates.delete(userId);
+
+    await interaction.update({
+      content: "✅ **Channels Configured!**\n\nAll channels have been set up successfully.",
+      components: [],
+    });
   } else {
     // Just acknowledge the interaction without updating the message
     // User can see their selections in the dropdowns
@@ -1126,8 +1261,8 @@ async function handleStringSelect(
     return;
   }
 
-  // Token edit selection — show modal (must NOT deferUpdate before showModal)
-  if (customId === "token_edit_select") {
+  // Token remove selection — show confirmation
+  if (customId === "token_remove_select") {
     const settings = await loadGuildSettings(guildId);
     if (!settings || settings.tokens.length === 0) {
       await interaction.reply({
@@ -1148,30 +1283,23 @@ async function handleStringSelect(
       return;
     }
 
-    const modal = new ModalBuilder()
-      .setCustomId(`token_edit_modal_${tokenIndex}`)
-      .setTitle(`Edit ${token.symbol}`);
+    const minterNote = token.minterRoleId ? `\nThe <@&${token.minterRoleId}> role will also be deleted.` : "";
 
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("token_name")
-          .setLabel("Token Name")
-          .setStyle(TextInputStyle.Short)
-          .setValue(token.name)
-          .setRequired(true),
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("token_symbol")
-          .setLabel("Token Symbol")
-          .setStyle(TextInputStyle.Short)
-          .setValue(token.symbol)
-          .setRequired(true),
-      ),
-    );
-
-    await interaction.showModal(modal);
+    await interaction.update({
+      content: `⚠️ **Remove Token?**\n\nAre you sure you want to remove **${token.name} (${token.symbol})**?${minterNote}\n\n⚠️ This cannot be undone!`,
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`token_remove_confirm_${tokenIndex}`)
+            .setLabel("Yes, Remove Token")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId("token_remove_cancel")
+            .setLabel("Cancel")
+            .setStyle(ButtonStyle.Secondary),
+        ),
+      ],
+    });
     return;
   }
 
@@ -1270,86 +1398,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `${role.amountToMint ? `+${role.amountToMint.toLocaleString()} tokens ` : ""}${role.amountToBurn ? `-${role.amountToBurn.toLocaleString()} tokens ` : ""}${role.frequency}\n` +
         `Active only: ${role.onlyToActiveContributors ? "Yes" : "No"}\n\n` +
         `Use \`/roles\` to view all roles.`,
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  // Handle token edit modal
-  if (interaction.customId.startsWith("token_edit_modal_")) {
-    const tokenIndex = parseInt(interaction.customId.replace("token_edit_modal_", ""));
-    const settings = await loadGuildSettings(guildId);
-    
-    if (!settings || !settings.tokens[tokenIndex]) {
-      await interaction.reply({
-        content: "❌ Token not found.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const oldToken = settings.tokens[tokenIndex];
-    const newName = interaction.fields.getTextInputValue("token_name");
-    const newSymbol = interaction.fields.getTextInputValue("token_symbol");
-
-    // Update token
-    settings.tokens[tokenIndex] = {
-      ...oldToken,
-      name: newName,
-      symbol: newSymbol,
-    };
-
-    // If token is mintable, handle minter role
-    if (oldToken.mintable) {
-      try {
-        let minterRoleId = oldToken.minterRoleId;
-        
-        if (minterRoleId) {
-          // Try to rename existing role
-          const role = await interaction.guild!.roles.fetch(minterRoleId);
-          if (role) {
-            await role.setName(`${newSymbol}-minter`);
-          } else {
-            // Role doesn't exist, create new one
-            const newRole = await interaction.guild!.roles.create({
-              name: `${newSymbol}-minter`,
-              reason: `Minter role for ${newSymbol} token`,
-            });
-            minterRoleId = newRole.id;
-          }
-        } else {
-          // Create new minter role
-          const newRole = await interaction.guild!.roles.create({
-            name: `${newSymbol}-minter`,
-            reason: `Minter role for ${newSymbol} token`,
-          });
-          minterRoleId = newRole.id;
-        }
-        
-        settings.tokens[tokenIndex].minterRoleId = minterRoleId;
-      } catch (error) {
-        console.error("Error handling minter role:", error);
-      }
-    }
-
-    await saveGuildSettings(guildId, settings);
-
-    let successMessage = `✅ Updated token: **${newName} (${newSymbol})**`;
-    if (oldToken.mintable && settings.tokens[tokenIndex].minterRoleId) {
-      successMessage += `\n\n📝 Assign the <@&${settings.tokens[tokenIndex].minterRoleId}> role to people who should be able to mint this token.`;
-    }
-
-    // Show updated tokens with remove button
-    const removeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`token_remove_${tokenIndex}`)
-        .setLabel("Remove Token")
-        .setStyle(ButtonStyle.Danger),
-    );
-
-    await interaction.reply({
-      content: successMessage,
-      components: [removeRow],
       flags: MessageFlags.Ephemeral,
     });
     return;

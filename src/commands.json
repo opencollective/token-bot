@@ -137,5 +137,10 @@
   {
     "name": "permissions",
     "description": "Show who can mint/burn tokens on this server"
+  },
+  {
+    "name": "doctor",
+    "description": "Check bot configuration and fix issues (admin only)",
+    "default_member_permissions": "8"
   }
 ]
