@@ -37,6 +37,7 @@ export type GuildSettings = {
     contributions: string;
     logs: string;
   };
+  mintRoleId?: string; // Role that can use /mint and /burn commands (in addition to admins)
 };
 
 export type RoleSetting = {

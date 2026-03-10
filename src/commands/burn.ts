@@ -1,5 +1,6 @@
 import {
   AutocompleteInteraction,
+  GuildMember,
   Interaction,
   MessageFlags,
   TextChannel,
@@ -10,6 +11,7 @@ import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { Token } from "../types.ts";
+import { hasTokenPermission } from "./mint.ts";
 
 // Parse user mentions from a string, returns array of user IDs
 function parseUserMentions(input: string): string[] {
@@ -72,6 +74,16 @@ export default async function handleBurnCommand(
   if (!guildSettings || guildSettings.tokens.length === 0) {
     await interaction.reply({
       content: "❌ No tokens configured. Run `/add-token` first.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check permission
+  const member = interaction.member as GuildMember;
+  if (!hasTokenPermission(member, guildSettings.mintRoleId)) {
+    await interaction.reply({
+      content: "❌ You don't have permission to burn tokens.",
       flags: MessageFlags.Ephemeral,
     });
     return;

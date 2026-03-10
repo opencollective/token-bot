@@ -57,6 +57,7 @@ const channelSetupStates = new Map<string, ChannelSetupState>();
 import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
+import handlePermissionsCommand from "./commands/permissions.ts";
 import handleSendCommand, { handleSendInteraction, sendStates } from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
@@ -295,6 +296,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "roles") {
         return handleRolesCommand(interaction, userId, guildId);
+      }
+      if (interaction.commandName === "permissions") {
+        return handlePermissionsCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "book") {
         if (!calendarEnabled) {

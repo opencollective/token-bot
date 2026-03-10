@@ -133,5 +133,9 @@
     "name": "roles",
     "description": "List configured roles and their token rewards/costs",
     "default_member_permissions": "8"
+  },
+  {
+    "name": "permissions",
+    "description": "Show who can mint/burn tokens on this server"
   }
 ]

@@ -1,7 +1,9 @@
 import {
   AutocompleteInteraction,
+  GuildMember,
   Interaction,
   MessageFlags,
+  PermissionsBitField,
   TextChannel,
 } from "discord.js";
 import { mintTokens, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
@@ -10,6 +12,19 @@ import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { Token } from "../types.ts";
+
+// Check if user has permission to mint/burn (admin or mintRoleId)
+export function hasTokenPermission(member: GuildMember, mintRoleId?: string): boolean {
+  // Admins always have permission
+  if (member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    return true;
+  }
+  // Check if user has the mint role
+  if (mintRoleId && member.roles.cache.has(mintRoleId)) {
+    return true;
+  }
+  return false;
+}
 
 // Parse user mentions from a string, returns array of user IDs
 function parseUserMentions(input: string): string[] {
@@ -72,6 +87,16 @@ export default async function handleMintCommand(
   if (!guildSettings || guildSettings.tokens.length === 0) {
     await interaction.reply({
       content: "❌ No tokens configured. Run `/add-token` first.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check permission
+  const member = interaction.member as GuildMember;
+  if (!hasTokenPermission(member, guildSettings.mintRoleId)) {
+    await interaction.reply({
+      content: "❌ You don't have permission to mint tokens.",
       flags: MessageFlags.Ephemeral,
     });
     return;
