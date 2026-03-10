@@ -660,7 +660,7 @@ async function handleRolesCommand(
 async function handleButton(
   interaction: Interaction,
   userId: string,
-  _guildId: string,
+  guildId: string,
 ) {
   if (!interaction.isButton()) return;
 
@@ -809,9 +809,6 @@ async function handleButton(
   }
 
   if (customId === "token_edit") {
-    const state = tokenSetupStates.get(userId);
-    if (!state) return;
-
     const settings = await loadGuildSettings(guildId);
     if (!settings || settings.tokens.length === 0) {
       await interaction.reply({
