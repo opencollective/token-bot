@@ -552,6 +552,46 @@ async function handleDoctorCommand(
 
     const expectedRoleName = `${token.symbol}-minter`;
 
+    // Helper: find or create a role by name, never duplicate
+    async function findOrCreateMinterRole(): Promise<{ id: string; action: "found" | "created" } | null> {
+      // Always check by name first to avoid duplicates
+      await guild.roles.fetch(); // refresh cache
+      const existing = guild.roles.cache.find((r) => r.name === expectedRoleName);
+      if (existing) return { id: existing.id, action: "found" };
+      try {
+        const created = await guild.roles.create({
+          name: expectedRoleName,
+          reason: `Doctor: minter role for ${token.symbol}`,
+        });
+        return { id: created.id, action: "created" };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Also clean up duplicate roles with the same name
+    await guild.roles.fetch();
+    const dupeRoles = guild.roles.cache.filter((r) => r.name === expectedRoleName);
+    if (dupeRoles.size > 1) {
+      // Keep the one with members, or the oldest one
+      const sorted = [...dupeRoles.values()].sort((a, b) => {
+        const aMembers = guild.members.cache.filter((m) => m.roles.cache.has(a.id)).size;
+        const bMembers = guild.members.cache.filter((m) => m.roles.cache.has(b.id)).size;
+        if (aMembers !== bMembers) return bMembers - aMembers; // prefer one with members
+        return a.createdTimestamp - b.createdTimestamp; // prefer older
+      });
+      const keep = sorted[0];
+      for (const dupe of sorted.slice(1)) {
+        try {
+          await dupe.delete(`Doctor: removing duplicate ${expectedRoleName} role`);
+          fixes.push(`🔧 ${token.symbol}: removed duplicate \`${expectedRoleName}\` role`);
+        } catch (e) {
+          console.error(`Error deleting duplicate role ${dupe.id}:`, e);
+        }
+      }
+      token.minterRoleId = keep.id;
+    }
+
     if (token.minterRoleId) {
       try {
         const role = await guild.roles.fetch(token.minterRoleId);
@@ -563,45 +603,33 @@ async function handleDoctorCommand(
             issues.push(`⚠️ ${token.symbol}: <@&${token.minterRoleId}> exists but has **0 members** — assign it to people who should mint`);
           }
         } else {
-          // Role ID saved but role doesn't exist — recreate
-          const newRole = await guild.roles.create({
-            name: expectedRoleName,
-            reason: `Doctor: recreating missing minter role for ${token.symbol}`,
-          });
-          token.minterRoleId = newRole.id;
-          fixes.push(`🔧 ${token.symbol}: recreated missing \`${expectedRoleName}\` role`);
+          // Role ID saved but role gone — find or create
+          const result = await findOrCreateMinterRole();
+          if (result) {
+            token.minterRoleId = result.id;
+            fixes.push(`🔧 ${token.symbol}: ${result.action === "found" ? "linked" : "created"} \`${expectedRoleName}\` role`);
+          } else {
+            issues.push(`❌ ${token.symbol}: couldn't create minter role — bot needs **Manage Roles** permission`);
+          }
         }
       } catch (error) {
         console.error(`Error verifying minter role for ${token.symbol} (roleId: ${token.minterRoleId}):`, error);
-        // Role fetch failed — try to recreate
-        try {
-          const newRole = await guild.roles.create({
-            name: expectedRoleName,
-            reason: `Doctor: recreating inaccessible minter role for ${token.symbol}`,
-          });
-          token.minterRoleId = newRole.id;
-          fixes.push(`🔧 ${token.symbol}: recreated inaccessible minter role as \`${expectedRoleName}\``);
-        } catch (createErr) {
-          issues.push(`❌ ${token.symbol}: minter role (${token.minterRoleId}) inaccessible and couldn't recreate — bot needs **Manage Roles** permission`);
+        const result = await findOrCreateMinterRole();
+        if (result) {
+          token.minterRoleId = result.id;
+          fixes.push(`🔧 ${token.symbol}: ${result.action === "found" ? "linked" : "recreated"} \`${expectedRoleName}\` role`);
+        } else {
+          issues.push(`❌ ${token.symbol}: minter role inaccessible and couldn't recreate — bot needs **Manage Roles** permission`);
         }
       }
     } else {
-      // No minter role — create one
-      try {
-        const existingRole = guild.roles.cache.find((r) => r.name === expectedRoleName);
-        if (existingRole) {
-          token.minterRoleId = existingRole.id;
-          fixes.push(`🔧 ${token.symbol}: linked existing \`${expectedRoleName}\` role`);
-        } else {
-          const newRole = await guild.roles.create({
-            name: expectedRoleName,
-            reason: `Doctor: creating minter role for ${token.symbol}`,
-          });
-          token.minterRoleId = newRole.id;
-          fixes.push(`🔧 ${token.symbol}: created \`${expectedRoleName}\` role — assign it to people who should mint`);
-        }
-      } catch (error) {
-        issues.push(`❌ ${token.symbol}: failed to create minter role — check bot permissions`);
+      // No minter role — find or create
+      const result = await findOrCreateMinterRole();
+      if (result) {
+        token.minterRoleId = result.id;
+        fixes.push(`🔧 ${token.symbol}: ${result.action === "found" ? "linked existing" : "created"} \`${expectedRoleName}\` role`);
+      } else {
+        issues.push(`❌ ${token.symbol}: failed to create minter role — bot needs **Manage Roles** permission`);
       }
     }
   }
