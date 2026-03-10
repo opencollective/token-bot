@@ -384,8 +384,11 @@ export async function handleSendInteraction(
         try {
           const ch = await interaction.client.channels.fetch(txChannelId) as TextChannel;
           if (ch) {
-            let msg = `💸 <@${userId}> sent ${state.amount.toLocaleString("en-US")} ${token.symbol} to <@${state.recipientId}>`;
-            if (state.description) msg += `: ${state.description}`;
+            const tokenUrl = `https://txinfo.xyz/${chain}/token/${token.address}`;
+            const tokenLink = `[${token.symbol}](<${tokenUrl}>)`;
+            const txUrl = `https://txinfo.xyz/${chain}/tx/${hash}`;
+            let msg = `💸 <@${userId}> sent ${state.amount.toLocaleString("en-US")} ${tokenLink} to <@${state.recipientId}> [[tx]](<${txUrl}>)`;
+            if (state.description) msg += `\n📝 ${state.description}`;
             await ch.send(msg);
           }
         } catch (err) {

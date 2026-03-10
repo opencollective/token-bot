@@ -445,6 +445,11 @@ async function formatTokenList(settings: GuildSettings | null, guild: any = null
       tokenInfo += ` · ${stats.holders.toLocaleString("en-US")} holders`;
     }
 
+    // Show transaction channel
+    if (token.transactionsChannelId) {
+      tokenInfo += `\n• Transactions: <#${token.transactionsChannelId}>`;
+    }
+
     // Show minters for mintable tokens
     if (token.mintable && token.minterRoleId && guild) {
       try {
@@ -590,16 +595,51 @@ async function handleDoctorCommand(
     }
   }
 
-  // 5. Check per-token transaction channels
+  // 5. Check per-token transaction channels — create if missing
   for (const token of settings.tokens) {
+    const channelName = `${token.symbol.toLowerCase()}-transactions`;
     if (token.transactionsChannelId) {
       try {
         const channel = await guild.channels.fetch(token.transactionsChannelId);
-        if (!channel) {
-          issues.push(`⚠️ ${token.symbol}: transaction channel (${token.transactionsChannelId}) not found`);
+        if (channel) {
+          ok.push(`✅ ${token.symbol}: transactions → <#${token.transactionsChannelId}>`);
+        } else {
+          // Channel ID saved but channel gone — try to recreate
+          try {
+            const newChannel = await guild.channels.create({
+              name: channelName,
+              type: ChannelType.GuildText,
+              reason: `Doctor: recreating missing transactions channel for ${token.symbol}`,
+            });
+            token.transactionsChannelId = newChannel.id;
+            fixes.push(`🔧 ${token.symbol}: recreated missing \`#${channelName}\` → <#${newChannel.id}>`);
+          } catch (createErr) {
+            issues.push(`❌ ${token.symbol}: transaction channel deleted and couldn't recreate — bot needs **Manage Channels** permission.\n  → Go to Server Settings → Roles → find the bot role → enable "Manage Channels"`);
+          }
         }
       } catch {
         issues.push(`⚠️ ${token.symbol}: transaction channel inaccessible`);
+      }
+    } else {
+      // No transaction channel — try to find or create one
+      const existing = guild.channels.cache.find(
+        (c) => c.name === channelName && c.type === ChannelType.GuildText
+      );
+      if (existing) {
+        token.transactionsChannelId = existing.id;
+        fixes.push(`🔧 ${token.symbol}: linked existing \`#${channelName}\` → <#${existing.id}>`);
+      } else {
+        try {
+          const newChannel = await guild.channels.create({
+            name: channelName,
+            type: ChannelType.GuildText,
+            reason: `Doctor: creating transactions channel for ${token.symbol}`,
+          });
+          token.transactionsChannelId = newChannel.id;
+          fixes.push(`🔧 ${token.symbol}: created \`#${channelName}\` → <#${newChannel.id}>`);
+        } catch (createErr) {
+          issues.push(`❌ ${token.symbol}: no transaction channel and couldn't create one — bot needs **Manage Channels** permission.\n  → Go to Server Settings → Roles → find the bot role → enable "Manage Channels"`);
+        }
       }
     }
   }
@@ -1444,7 +1484,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (tokenInfo.mintable && interaction.guild) {
       try {
         const roleName = `${tokenInfo.symbol}-minter`;
-        // Check if role already exists
         const existingRole = interaction.guild.roles.cache.find((r) => r.name === roleName);
         if (existingRole) {
           newToken.minterRoleId = existingRole.id;
@@ -1457,6 +1496,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       } catch (error) {
         console.error("Error creating minter role:", error);
+      }
+    }
+
+    // Auto-create transactions channel for this token
+    if (interaction.guild) {
+      const channelName = `${tokenInfo.symbol.toLowerCase()}-transactions`;
+      try {
+        const existingChannel = interaction.guild.channels.cache.find(
+          (c) => c.name === channelName && c.type === ChannelType.GuildText
+        );
+        if (existingChannel) {
+          newToken.transactionsChannelId = existingChannel.id;
+        } else {
+          const channel = await interaction.guild.channels.create({
+            name: channelName,
+            type: ChannelType.GuildText,
+            reason: `Transactions channel for ${tokenInfo.symbol} token`,
+          });
+          newToken.transactionsChannelId = channel.id;
+        }
+      } catch (error) {
+        console.error("Error creating transactions channel:", error);
       }
     }
 
@@ -1496,10 +1557,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `**Token:** ${tokenName} (${tokenSymbol})`,
         `**Address:** [gnosis:${shortAddr}](<${explorerUrl}>)`,
       ];
+      if (addedToken.transactionsChannelId) {
+        lines.push(`**Transactions:** <#${addedToken.transactionsChannelId}>`);
+      }
       if (addedToken.minterRoleId) {
         lines.push("", `📝 Assign the <@&${addedToken.minterRoleId}> role to people who should be able to mint it.`);
       }
-      lines.push("", "Next, run `/setup-channels` to configure the channels!");
+      lines.push("", "Next, run `/setup-channels` to configure the global channels!");
       
       await interaction.editReply({ content: lines.join("\n") });
     } catch (error) {
@@ -1560,10 +1624,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `**Mintable:** ${mintable ? "Yes ✅" : "No ❌"}`,
         mintableNote,
       ];
+      if (addedToken.transactionsChannelId) {
+        lines.push(`**Transactions:** <#${addedToken.transactionsChannelId}>`);
+      }
       if (addedToken.minterRoleId) {
         lines.push("", `📝 Assign the <@&${addedToken.minterRoleId}> role to people who should be able to mint it.`);
       }
-      lines.push("", "Next, run `/setup-channels` to configure the channels!");
+      lines.push("", "Next, run `/setup-channels` to configure the global channels!");
 
       await interaction.editReply({ content: lines.join("\n") });
     } catch (error) {
