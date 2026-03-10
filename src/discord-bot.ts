@@ -572,7 +572,18 @@ async function handleDoctorCommand(
           fixes.push(`🔧 ${token.symbol}: recreated missing \`${expectedRoleName}\` role`);
         }
       } catch (error) {
-        issues.push(`⚠️ ${token.symbol}: could not verify minter role`);
+        console.error(`Error verifying minter role for ${token.symbol} (roleId: ${token.minterRoleId}):`, error);
+        // Role fetch failed — try to recreate
+        try {
+          const newRole = await guild.roles.create({
+            name: expectedRoleName,
+            reason: `Doctor: recreating inaccessible minter role for ${token.symbol}`,
+          });
+          token.minterRoleId = newRole.id;
+          fixes.push(`🔧 ${token.symbol}: recreated inaccessible minter role as \`${expectedRoleName}\``);
+        } catch (createErr) {
+          issues.push(`❌ ${token.symbol}: minter role (${token.minterRoleId}) inaccessible and couldn't recreate — bot needs **Manage Roles** permission`);
+        }
       }
     } else {
       // No minter role — create one
