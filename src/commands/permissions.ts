@@ -49,71 +49,57 @@ export default async function handlePermissionsCommand(
     return;
   }
 
-  // Build token list
-  const tokenLines = mintableTokens.map((t) => {
-    const explorerUrl = getExplorerUrl(t.chain, t.address);
-    return `• ${t.name} (${t.symbol}) [[inspect]](<${explorerUrl}>)`;
-  });
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.editReply({ content: "❌ Could not access server." });
+    return;
+  }
 
-  // Get users with mint permission
-  const mintRoleId = guildSettings.mintRoleId;
-  let permissionMessage = "";
+  // Fetch all members once
+  const members = await guild.members.fetch();
+  const adminMembers = members.filter((m) =>
+    m.permissions.has(PermissionsBitField.Flags.Administrator)
+  );
 
-  if (mintRoleId) {
-    try {
-      const guild = interaction.guild;
-      if (guild) {
-        const role = await guild.roles.fetch(mintRoleId);
+  // Build per-token permission info
+  const tokenSections: string[] = [];
+
+  for (const token of mintableTokens) {
+    const explorerUrl = getExplorerUrl(token.chain, token.address);
+    let section = `**${token.name} (${token.symbol})** [[inspect]](<${explorerUrl}>)`;
+
+    if (token.minterRoleId) {
+      try {
+        const role = await guild.roles.fetch(token.minterRoleId);
         if (role) {
-          // Fetch members with this role
-          const members = await guild.members.fetch();
-          const roleMembers = members.filter((m) => m.roles.cache.has(mintRoleId));
-          const adminMembers = members.filter(
-            (m) =>
-              m.permissions.has(PermissionsBitField.Flags.Administrator) &&
-              !roleMembers.has(m.id)
-          );
-
-          const roleMemberMentions = roleMembers.map((m) => `<@${m.id}>`).join(", ");
-          const adminMentions = adminMembers.map((m) => `<@${m.id}>`).join(", ");
-
+          const roleMembers = members.filter((m) => m.roles.cache.has(token.minterRoleId!));
           if (roleMembers.size > 0) {
-            permissionMessage = `**People with the ${role.name} role** (${roleMemberMentions}) can mint/burn the following tokens:\n${tokenLines.join("\n")}`;
+            const mentions = roleMembers.map((m) => `<@${m.id}>`).join(", ");
+            section += `\n• <@&${token.minterRoleId}>: ${mentions}`;
           } else {
-            permissionMessage = `**No users currently have the ${role.name} role.**\n\nThe following tokens are configured for minting:\n${tokenLines.join("\n")}`;
-          }
-
-          if (adminMembers.size > 0) {
-            permissionMessage += `\n\n**Server administrators** (${adminMentions}) can also mint/burn tokens.`;
+            section += `\n• <@&${token.minterRoleId}>: _no members assigned_`;
           }
         } else {
-          permissionMessage = `⚠️ Mint role (ID: ${mintRoleId}) not found.\n\nOnly server administrators can mint/burn tokens:\n${tokenLines.join("\n")}`;
+          section += `\n• ⚠️ Minter role not found (ID: ${token.minterRoleId})`;
         }
+      } catch (error) {
+        console.error("Error fetching minter role:", error);
+        section += `\n• ⚠️ Could not fetch minter role`;
       }
-    } catch (error) {
-      console.error("Error fetching role members:", error);
-      permissionMessage = `⚠️ Could not fetch role members.\n\nTokens configured for minting:\n${tokenLines.join("\n")}`;
+    } else {
+      section += `\n• _No minter role configured — only admins can mint/burn_`;
     }
-  } else {
-    // No mint role configured, only admins can mint
-    try {
-      const guild = interaction.guild;
-      if (guild) {
-        const members = await guild.members.fetch();
-        const adminMembers = members.filter((m) =>
-          m.permissions.has(PermissionsBitField.Flags.Administrator)
-        );
-        const adminMentions = adminMembers.map((m) => `<@${m.id}>`).join(", ");
 
-        permissionMessage = `**No mint role configured.** Only server administrators (${adminMentions}) can mint/burn the following tokens:\n${tokenLines.join("\n")}\n\nTo configure a mint role, add \`mintRoleId\` to your server settings.`;
-      }
-    } catch (error) {
-      console.error("Error fetching admin members:", error);
-      permissionMessage = `**No mint role configured.** Only server administrators can mint/burn the following tokens:\n${tokenLines.join("\n")}`;
-    }
+    tokenSections.push(section);
+  }
+
+  const adminMentions = adminMembers.map((m) => `<@${m.id}>`).join(", ");
+  let message = tokenSections.join("\n\n");
+  if (adminMembers.size > 0) {
+    message += `\n\n**Server administrators** (${adminMentions}) can always mint/burn all tokens.`;
   }
 
   await interaction.editReply({
-    content: `**🔐 Token Permissions**\n\n${permissionMessage}`,
+    content: `**🔐 Token Permissions**\n\n${message}`,
   });
 }

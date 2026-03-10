@@ -103,6 +103,14 @@ function migrateSettings(raw: any): GuildSettings {
     }
   }
 
+  // Migrate guild-level mintRoleId to per-token minterRoleId
+  if (raw.mintRoleId) {
+    const firstMintable = tokens.find((t) => t.mintable === true);
+    if (firstMintable && !firstMintable.minterRoleId) {
+      firstMintable.minterRoleId = raw.mintRoleId;
+    }
+  }
+
   return {
     tokens,
     guild: raw.guild,

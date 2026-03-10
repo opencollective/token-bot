@@ -16,6 +16,7 @@ export type Token = {
   // citizenwallet-specific:
   cardManagerAddress?: BlockchainAddress;
   cardManagerInstanceId?: string;
+  minterRoleId?: string; // Role that can mint/burn this token (in addition to admins)
 };
 
 export type GuildSettings = {
@@ -37,7 +38,6 @@ export type GuildSettings = {
     contributions: string;
     logs: string;
   };
-  mintRoleId?: string; // Role that can use /mint and /burn commands (in addition to admins)
 };
 
 export type RoleSetting = {

@@ -5,8 +5,8 @@
     "default_member_permissions": "8"
   },
   {
-    "name": "add-token",
-    "description": "Add or update a token for your server (admin only)",
+    "name": "edit-tokens",
+    "description": "Manage tokens for your server (admin only)",
     "default_member_permissions": "8"
   },
   {

@@ -86,28 +86,20 @@ export default async function handleMintCommand(
   const guildSettings = await loadGuildSettings(guildId);
   if (!guildSettings || guildSettings.tokens.length === 0) {
     await interaction.reply({
-      content: "❌ No tokens configured. Run `/add-token` first.",
+      content: "❌ No tokens configured. Run `/edit-tokens` first.",
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  // Check permission
   const member = interaction.member as GuildMember;
-  if (!hasTokenPermission(member, guildSettings.mintRoleId)) {
-    await interaction.reply({
-      content: "❌ You don't have permission to mint tokens.",
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
 
   const mintableTokens = getMintableTokens(guildSettings.tokens);
 
   if (mintableTokens.length === 0) {
     await interaction.reply({
       content:
-        "❌ No mintable tokens configured. Add a token with `/add-token` first.",
+        "❌ No mintable tokens configured. Add a token with `/edit-tokens` first.",
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -129,6 +121,15 @@ export default async function handleMintCommand(
       content: tokenSymbol
         ? `❌ Token \`${tokenSymbol}\` not found. Available: ${available}`
         : `❌ Multiple tokens available. Please specify one: ${available}`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Check permission using per-token minter role
+  if (!hasTokenPermission(member, token.minterRoleId)) {
+    await interaction.reply({
+      content: "❌ You don't have permission to mint tokens.",
       flags: MessageFlags.Ephemeral,
     });
     return;

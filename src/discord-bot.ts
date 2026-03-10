@@ -37,6 +37,7 @@ import type {
   GuildSettings,
   Product,
   RoleSetting,
+  Token,
   TokenSetupState,
 } from "./types.ts";
 import { deployTokenContract } from "./lib/blockchain.ts";
@@ -276,8 +277,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "list-tokens") {
         return handleListTokensCommand(interaction, userId, guildId);
       }
-      if (interaction.commandName === "add-token") {
-        return handleAddTokenCommand(interaction, userId, guildId);
+      if (interaction.commandName === "edit-tokens") {
+        return handleEditTokensCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "setup-channels") {
         return handleSetupChannelsCommand(interaction, userId, guildId);
@@ -421,7 +422,7 @@ async function fetchTokenStats(chain: Chain, address: string, decimals: number):
 }
 
 // Helper function to format token list
-async function formatTokenList(settings: GuildSettings | null): Promise<string> {
+async function formatTokenList(settings: GuildSettings | null, guild: any = null): Promise<string> {
   if (!settings || settings.tokens.length === 0) {
     return "No tokens configured yet.";
   }
@@ -441,6 +442,23 @@ async function formatTokenList(settings: GuildSettings | null): Promise<string> 
       tokenInfo += ` · ${stats.holders.toLocaleString("en-US")} holders`;
     }
 
+    // Show minters for mintable tokens
+    if (token.mintable && token.minterRoleId && guild) {
+      try {
+        const role = await guild.roles.fetch(token.minterRoleId);
+        if (role) {
+          const members = await guild.members.fetch();
+          const roleMembers = members.filter((m: any) => m.roles.cache.has(token.minterRoleId));
+          if (roleMembers.size > 0) {
+            const minterNames = roleMembers.map((m: any) => `@${m.displayName}`).join(", ");
+            tokenInfo += `\n• Minters: ${minterNames}`;
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching minter role members:", error);
+      }
+    }
+
     tokenLines.push(tokenInfo);
   }
 
@@ -458,14 +476,14 @@ async function handleListTokensCommand(
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const settings = await loadGuildSettings(guildId);
-  const tokenList = await formatTokenList(settings);
+  const tokenList = await formatTokenList(settings, interaction.guild);
 
   await interaction.editReply({
     content: `**🪙 Configured Tokens**\n\n${tokenList}\n\n🪙 = mintable`,
   });
 }
 
-async function handleAddTokenCommand(
+async function handleEditTokensCommand(
   interaction: Interaction,
   userId: string,
   guildId: string,
@@ -476,25 +494,37 @@ async function handleAddTokenCommand(
 
   // Show existing tokens first
   const settings = await loadGuildSettings(guildId);
-  const tokenList = await formatTokenList(settings);
+  const tokenList = await formatTokenList(settings, interaction.guild);
   const hasTokens = settings && settings.tokens.length > 0;
 
   tokenSetupStates.set(userId, { step: "choice" });
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const buttons = [
     new ButtonBuilder()
       .setCustomId("token_create_new")
       .setLabel("Create New Token")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId("token_use_existing")
-      .setLabel("Use Existing Token")
+      .setLabel("Add Existing Token")
       .setStyle(ButtonStyle.Secondary),
-  );
+  ];
+
+  // Only show "Edit Token" button if tokens exist
+  if (hasTokens) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId("token_edit")
+        .setLabel("Edit Token")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 
   const header = hasTokens
-    ? `**🪙 Current Tokens**\n\n${tokenList}\n\n---\n\n**Add Token**\n\nWould you like to create a new token or use an existing one?`
-    : "**🪙 Token Setup**\n\nNo tokens configured yet.\n\nWould you like to create a new token or use an existing one?";
+    ? `**🪙 Current Tokens**\n\n${tokenList}\n\n---\n\n**Manage Tokens**\n\nChoose an action:`
+    : "**🪙 Token Setup**\n\nNo tokens configured yet.\n\nChoose an action:";
 
   await interaction.editReply({
     content: header,
@@ -778,6 +808,107 @@ async function handleButton(
     return;
   }
 
+  if (customId === "token_edit") {
+    const state = tokenSetupStates.get(userId);
+    if (!state) return;
+
+    const settings = await loadGuildSettings(guildId);
+    if (!settings || settings.tokens.length === 0) {
+      await interaction.reply({
+        content: "❌ No tokens configured yet.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferUpdate();
+
+    const options = settings.tokens.map((token, index) => ({
+      label: `${token.name} (${token.symbol})`,
+      value: index.toString(),
+      description: `${token.chain}: ${token.address.slice(0, 6)}...${token.address.slice(-4)}`,
+    }));
+
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("token_edit_select")
+        .setPlaceholder("Select a token to edit")
+        .addOptions(options.slice(0, 25)), // Discord limit
+    );
+
+    await interaction.editReply({
+      content: "**🪙 Edit Token**\n\nSelect a token to edit:",
+      components: [row],
+    });
+    return;
+  }
+
+  // Token remove button
+  if (customId.startsWith("token_remove_")) {
+    const tokenIndex = parseInt(customId.replace("token_remove_", ""));
+    const settings = await loadGuildSettings(guildId);
+    
+    if (!settings || !settings.tokens[tokenIndex]) {
+      await interaction.reply({
+        content: "❌ Token not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const token = settings.tokens[tokenIndex];
+    
+    await interaction.update({
+      content: `⚠️ **Remove Token?**\n\nAre you sure you want to remove **${token.name} (${token.symbol})** from this server?\n\n⚠️ This action cannot be undone!`,
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`token_remove_confirm_${tokenIndex}`)
+            .setLabel("Yes, Remove Token")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId("token_remove_cancel")
+            .setLabel("Cancel")
+            .setStyle(ButtonStyle.Secondary),
+        )
+      ],
+    });
+    return;
+  }
+
+  // Token remove confirmation
+  if (customId.startsWith("token_remove_confirm_")) {
+    const tokenIndex = parseInt(customId.replace("token_remove_confirm_", ""));
+    const settings = await loadGuildSettings(guildId);
+    
+    if (!settings || !settings.tokens[tokenIndex]) {
+      await interaction.update({
+        content: "❌ Token not found.",
+        components: [],
+      });
+      return;
+    }
+
+    const token = settings.tokens[tokenIndex];
+    settings.tokens.splice(tokenIndex, 1);
+    await saveGuildSettings(guildId, settings);
+
+    await interaction.update({
+      content: `✅ Removed token: **${token.name} (${token.symbol})**`,
+      components: [],
+    });
+    return;
+  }
+
+  // Token remove cancel
+  if (customId === "token_remove_cancel") {
+    await interaction.update({
+      content: "❌ Token removal cancelled.",
+      components: [],
+    });
+    return;
+  }
+
   if (customId === "token_enter_address") {
     const modal = new ModalBuilder()
       .setCustomId("token_address_modal")
@@ -998,6 +1129,55 @@ async function handleStringSelect(
     return;
   }
 
+  // Token edit selection — show modal (must NOT deferUpdate before showModal)
+  if (customId === "token_edit_select") {
+    const settings = await loadGuildSettings(guildId);
+    if (!settings || settings.tokens.length === 0) {
+      await interaction.reply({
+        content: "❌ No tokens configured yet.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const tokenIndex = parseInt(interaction.values[0]);
+    const token = settings.tokens[tokenIndex];
+    
+    if (!token) {
+      await interaction.reply({
+        content: "❌ Token not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`token_edit_modal_${tokenIndex}`)
+      .setTitle(`Edit ${token.symbol}`);
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("token_name")
+          .setLabel("Token Name")
+          .setStyle(TextInputStyle.Short)
+          .setValue(token.name)
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("token_symbol")
+          .setLabel("Token Symbol")
+          .setStyle(TextInputStyle.Short)
+          .setValue(token.symbol)
+          .setRequired(true),
+      ),
+    );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
 
 }
 
@@ -1098,6 +1278,86 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  // Handle token edit modal
+  if (interaction.customId.startsWith("token_edit_modal_")) {
+    const tokenIndex = parseInt(interaction.customId.replace("token_edit_modal_", ""));
+    const settings = await loadGuildSettings(guildId);
+    
+    if (!settings || !settings.tokens[tokenIndex]) {
+      await interaction.reply({
+        content: "❌ Token not found.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const oldToken = settings.tokens[tokenIndex];
+    const newName = interaction.fields.getTextInputValue("token_name");
+    const newSymbol = interaction.fields.getTextInputValue("token_symbol");
+
+    // Update token
+    settings.tokens[tokenIndex] = {
+      ...oldToken,
+      name: newName,
+      symbol: newSymbol,
+    };
+
+    // If token is mintable, handle minter role
+    if (oldToken.mintable) {
+      try {
+        let minterRoleId = oldToken.minterRoleId;
+        
+        if (minterRoleId) {
+          // Try to rename existing role
+          const role = await interaction.guild!.roles.fetch(minterRoleId);
+          if (role) {
+            await role.setName(`${newSymbol}-minter`);
+          } else {
+            // Role doesn't exist, create new one
+            const newRole = await interaction.guild!.roles.create({
+              name: `${newSymbol}-minter`,
+              reason: `Minter role for ${newSymbol} token`,
+            });
+            minterRoleId = newRole.id;
+          }
+        } else {
+          // Create new minter role
+          const newRole = await interaction.guild!.roles.create({
+            name: `${newSymbol}-minter`,
+            reason: `Minter role for ${newSymbol} token`,
+          });
+          minterRoleId = newRole.id;
+        }
+        
+        settings.tokens[tokenIndex].minterRoleId = minterRoleId;
+      } catch (error) {
+        console.error("Error handling minter role:", error);
+      }
+    }
+
+    await saveGuildSettings(guildId, settings);
+
+    let successMessage = `✅ Updated token: **${newName} (${newSymbol})**`;
+    if (oldToken.mintable && settings.tokens[tokenIndex].minterRoleId) {
+      successMessage += `\n\n📝 Assign the <@&${settings.tokens[tokenIndex].minterRoleId}> role to people who should be able to mint this token.`;
+    }
+
+    // Show updated tokens with remove button
+    const removeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`token_remove_${tokenIndex}`)
+        .setLabel("Remove Token")
+        .setStyle(ButtonStyle.Danger),
+    );
+
+    await interaction.reply({
+      content: successMessage,
+      components: [removeRow],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   const state = tokenSetupStates.get(userId);
   if (!state) return;
 
@@ -1126,16 +1386,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
     };
 
     // Add to tokens array
-    settings.tokens.push({
+    const newToken: Token = {
       name: tokenInfo.name,
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
       chain: tokenInfo.chain,
       address: tokenInfo.address,
       mintable: tokenInfo.mintable,
-    });
+    };
 
+    // Auto-create minter role for mintable tokens
+    if (tokenInfo.mintable && interaction.guild) {
+      try {
+        const roleName = `${tokenInfo.symbol}-minter`;
+        // Check if role already exists
+        const existingRole = interaction.guild.roles.cache.find((r) => r.name === roleName);
+        if (existingRole) {
+          newToken.minterRoleId = existingRole.id;
+        } else {
+          const role = await interaction.guild.roles.create({
+            name: roleName,
+            reason: `Minter role for ${tokenInfo.symbol} token`,
+          });
+          newToken.minterRoleId = role.id;
+        }
+      } catch (error) {
+        console.error("Error creating minter role:", error);
+      }
+    }
+
+    settings.tokens.push(newToken);
     await saveGuildSettings(guildId, settings);
+
+    return newToken;
   }
 
   if (interaction.customId === "token_create_modal") {
@@ -1150,7 +1433,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       console.log(">>> deployed token", tokenName, tokenSymbol, "at", tokenAddress);
 
       tokenSetupStates.delete(userId);
-      await addTokenToSettings(guildId, {
+      const addedToken = await addTokenToSettings(guildId, {
         name: tokenName,
         symbol: tokenSymbol,
         decimals: 6,
@@ -1162,16 +1445,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const explorerUrl = `https://gnosisscan.io/token/${tokenAddress}`;
       const shortAddr = `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}`;
       
-      await interaction.editReply({
-        content: [
-          "✅ **Token deployed successfully!**",
-          "",
-          `**Token:** ${tokenName} (${tokenSymbol})`,
-          `**Address:** [gnosis:${shortAddr}](<${explorerUrl}>)`,
-          "",
-          "Next, run `/setup-channels` to configure the channels!",
-        ].join("\n"),
-      });
+      const lines = [
+        "✅ **Token deployed successfully!**",
+        "",
+        `**Token:** ${tokenName} (${tokenSymbol})`,
+        `**Address:** [gnosis:${shortAddr}](<${explorerUrl}>)`,
+      ];
+      if (addedToken.minterRoleId) {
+        lines.push("", `📝 Assign the <@&${addedToken.minterRoleId}> role to people who should be able to mint it.`);
+      }
+      lines.push("", "Next, run `/setup-channels` to configure the channels!");
+      
+      await interaction.editReply({ content: lines.join("\n") });
     } catch (error) {
       console.error("Error deploying token:", error);
       await interaction.editReply({
@@ -1208,7 +1493,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         mintableNote = `\n\n⚠️ **Not mintable** — Bot doesn't have MINTER role.\nTo make it mintable, grant MINTER role to: \`${botAddress}\``;
       }
 
-      await addTokenToSettings(guildId, {
+      const addedToken = await addTokenToSettings(guildId, {
         name: tokenInfo.name,
         symbol: tokenInfo.symbol,
         decimals: tokenInfo.decimals,
@@ -1222,18 +1507,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const explorerUrl = getExplorerUrl(state.chain, tokenAddress);
       const shortAddr = `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}`;
 
-      await interaction.editReply({
-        content: [
-          "✅ **Token Added!**",
-          "",
-          `**Token:** ${tokenInfo.name} (${tokenInfo.symbol})`,
-          `**Address:** [${state.chain}:${shortAddr}](<${explorerUrl}>)`,
-          `**Mintable:** ${mintable ? "Yes ✅" : "No ❌"}`,
-          mintableNote,
-          "",
-          "Next, run `/setup-channels` to configure the channels!",
-        ].join("\n"),
-      });
+      const lines = [
+        "✅ **Token Added!**",
+        "",
+        `**Token:** ${tokenInfo.name} (${tokenInfo.symbol})`,
+        `**Address:** [${state.chain}:${shortAddr}](<${explorerUrl}>)`,
+        `**Mintable:** ${mintable ? "Yes ✅" : "No ❌"}`,
+        mintableNote,
+      ];
+      if (addedToken.minterRoleId) {
+        lines.push("", `📝 Assign the <@&${addedToken.minterRoleId}> role to people who should be able to mint it.`);
+      }
+      lines.push("", "Next, run `/setup-channels` to configure the channels!");
+
+      await interaction.editReply({ content: lines.join("\n") });
     } catch (error) {
       console.error("Error fetching token info:", error);
       await interaction.editReply({
