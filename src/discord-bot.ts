@@ -1596,21 +1596,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     try {
       const tokenInfo = await fetchTokenInfo(state.chain, tokenAddress);
 
-      // Check if bot has MINTER role on this token
+      // Check if bot has on-chain MINTER_ROLE
       const botAddress = botWallet.account?.address as string;
-      let mintable = false;
+      let hasOnChainMintRole = false;
       let mintableNote = "";
       
       try {
-        mintable = await hasRole(state.chain as SupportedChain, tokenAddress, MINTER_ROLE, botAddress) as boolean;
+        hasOnChainMintRole = await hasRole(state.chain as SupportedChain, tokenAddress, MINTER_ROLE, botAddress) as boolean;
       } catch (e) {
-        // Token might not have AccessControl, assume not mintable
-        mintable = false;
+        // Token might not have AccessControl
       }
 
-      if (!mintable) {
+      // Always set mintable=true — the user is adding this token to manage it.
+      // Minting can work via on-chain MINTER_ROLE or via SDK (e.g. OpenCollective token factory).
+      const mintable = true;
+
+      if (!hasOnChainMintRole) {
         const shortBotAddr = `${botAddress.slice(0, 6)}…${botAddress.slice(-4)}`;
-        mintableNote = `\n\n⚠️ **Not mintable** — Bot doesn't have MINTER role.\nTo make it mintable, grant MINTER role to: \`${botAddress}\``;
+        mintableNote = `\n\nℹ️ Bot doesn't have on-chain MINTER role. If minting fails, grant MINTER role to: \`${botAddress}\`\nOr set \`walletManager: "opencollective"\` in settings if using OC token factory.`;
       }
 
       const addedToken = await addTokenToSettings(guildId, {
