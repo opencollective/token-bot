@@ -16,8 +16,7 @@
   },
   {
     "name": "mint",
-    "description": "Mint tokens for users (admin only)",
-    "default_member_permissions": "8",
+    "description": "Mint tokens for users",
     "options": [
       {
         "name": "users",
@@ -49,8 +48,7 @@
   },
   {
     "name": "burn",
-    "description": "Burn tokens from users (admin only)",
-    "default_member_permissions": "8",
+    "description": "Burn tokens from users",
     "options": [
       {
         "name": "users",
