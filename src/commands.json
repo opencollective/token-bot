@@ -20,13 +20,6 @@
     "default_member_permissions": "8",
     "options": [
       {
-        "name": "token",
-        "description": "Token to mint",
-        "type": 3,
-        "required": false,
-        "autocomplete": true
-      },
-      {
         "name": "users",
         "description": "Users to mint for (mention with @)",
         "type": 3,
@@ -38,6 +31,13 @@
         "type": 10,
         "required": true,
         "min_value": 0.01
+      },
+      {
+        "name": "token",
+        "description": "Token to mint",
+        "type": 3,
+        "required": false,
+        "autocomplete": true
       },
       {
         "name": "description",
@@ -53,13 +53,6 @@
     "default_member_permissions": "8",
     "options": [
       {
-        "name": "token",
-        "description": "Token to burn",
-        "type": 3,
-        "required": false,
-        "autocomplete": true
-      },
-      {
         "name": "users",
         "description": "Users to burn from (mention with @)",
         "type": 3,
@@ -71,6 +64,13 @@
         "type": 10,
         "required": true,
         "min_value": 0.01
+      },
+      {
+        "name": "token",
+        "description": "Token to burn",
+        "type": 3,
+        "required": false,
+        "autocomplete": true
       },
       {
         "name": "description",
