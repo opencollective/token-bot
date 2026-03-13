@@ -9,19 +9,18 @@ import {
 } from "discord.js";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
-import { keccak256, toUtf8Bytes, Wallet } from "ethers";
+import { Contract, JsonRpcProvider, keccak256, toUtf8Bytes, Wallet } from "ethers";
 import {
   BundlerService,
   CommunityConfig,
   callOnCardCallData,
-  getAccountAddress,
   tokenTransferCallData,
   tokenTransferEventTopic,
   type UserOpData,
   type UserOpExtraData,
 } from "@citizenwallet/sdk";
 import { formatUnits, parseUnits } from "@wevm/viem";
-import { SupportedChain, ChainConfig, getBalance } from "../lib/blockchain.ts";
+import { SupportedChain, ChainConfig, RPC_URLS, getBalance } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId, getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { GuildSettings, Token } from "../types.ts";
 
@@ -78,7 +77,7 @@ function buildCommunityConfig(guildSettings: GuildSettings, token: Token): any {
     chains: {
       [chainId.toString()]: {
         id: chainId,
-        node: { url: `https://${chainId}.engine.citizenwallet.xyz`, ws_url: `wss://${chainId}.engine.citizenwallet.xyz` },
+        node: { url: RPC_URLS[chain] || `https://${chainId}.engine.citizenwallet.xyz` },
       },
     },
   };
@@ -402,7 +401,25 @@ export async function handleSendInteraction(
         }
 
         const signer = new Wallet(privateKey);
-        const signerAccountAddress = await getAccountAddress(community, signer.address);
+
+        // Resolve the bot signer's smart account address directly via standard RPC
+        // (the CW engine URL may be unavailable, but the account factory is a regular contract)
+        const accountFactoryAddress = "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2";
+        const rpcUrl = RPC_URLS[chain];
+        const rpc = new JsonRpcProvider(rpcUrl);
+        let signerAccountAddress: string | null = null;
+        try {
+          const factory = new Contract(
+            accountFactoryAddress,
+            [{ type: "function", name: "getAddress", inputs: [{ name: "owner", type: "address" }, { name: "salt", type: "uint256" }], outputs: [{ name: "", type: "address" }], stateMutability: "view" }],
+            rpc,
+          );
+          signerAccountAddress = await factory.getFunction("getAddress")(signer.address, BigInt(0));
+        } catch (err) {
+          console.error("[send] Error resolving signer account address:", err);
+        } finally {
+          rpc.destroy();
+        }
         if (!signerAccountAddress) {
           await interaction.editReply({ content: "❌ Could not find bot's account address." });
           sendStates.delete(userId);
