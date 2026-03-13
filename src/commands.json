@@ -108,6 +108,13 @@
         "min_value": 0.01
       },
       {
+        "name": "token",
+        "description": "Token to send",
+        "type": 3,
+        "required": false,
+        "autocomplete": true
+      },
+      {
         "name": "description",
         "description": "Reason for sending",
         "type": 3,

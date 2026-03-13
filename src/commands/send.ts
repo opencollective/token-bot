@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AutocompleteInteraction,
   ButtonBuilder,
   ButtonStyle,
   Interaction,
@@ -89,6 +90,35 @@ function fmtBal(balance: bigint, decimals: number): string {
   return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
+// ── Autocomplete ────────────────────────────────────────────────────────────
+
+export async function handleSendAutocomplete(
+  interaction: AutocompleteInteraction,
+  guildId: string,
+) {
+  const guildSettings = await loadGuildSettings(guildId);
+  if (!guildSettings) {
+    await interaction.respond([]);
+    return;
+  }
+
+  const focused = interaction.options.getFocused().toLowerCase();
+
+  const choices = guildSettings.tokens
+    .filter(
+      (t) =>
+        t.symbol.toLowerCase().includes(focused) ||
+        t.name.toLowerCase().includes(focused),
+    )
+    .map((t) => ({
+      name: `${t.symbol} (${t.name})`,
+      value: t.symbol,
+    }))
+    .slice(0, 25);
+
+  await interaction.respond(choices);
+}
+
 // ── Step 1: /send @user amount description ──────────────────────────────────
 
 export default async function handleSendCommand(
@@ -100,6 +130,7 @@ export default async function handleSendCommand(
 
   const recipientUser = interaction.options.getUser("user");
   const amount = interaction.options.getNumber("amount");
+  const tokenSymbol = interaction.options.getString("token");
   const description = interaction.options.getString("description") || undefined;
 
   if (!recipientUser || !amount) {
@@ -146,13 +177,6 @@ export default async function handleSendCommand(
     }
     console.log(`[send] Tokens with positive balance: ${tokensWithBalance.map(i => guildSettings.tokens[i].symbol).join(", ") || "none"}`);
 
-    if (tokensWithBalance.length === 0) {
-      await interaction.editReply({
-        content: `❌ You don't have any token balance.`,
-      });
-      return;
-    }
-
     const state: SendState = {
       recipientId: recipientUser.id,
       recipientName: recipientUser.username,
@@ -160,6 +184,43 @@ export default async function handleSendCommand(
       amount, description, balances, addresses,
     };
     sendStates.set(userId, state);
+
+    // If a token was specified via the command option, use it directly
+    if (tokenSymbol) {
+      const idx = guildSettings.tokens.findIndex(
+        (t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase(),
+      );
+      if (idx === -1) {
+        const available = guildSettings.tokens.map((t) => t.symbol).join(", ");
+        await interaction.editReply({
+          content: `❌ Token \`${tokenSymbol}\` not found. Available: ${available}`,
+        });
+        sendStates.delete(userId);
+        return;
+      }
+      const address = addresses.get(idx);
+      const balance = balances.get(idx) ?? 0n;
+      if (!address || balance <= 0n) {
+        await interaction.editReply({
+          content: `❌ You don't have any ${guildSettings.tokens[idx].symbol} balance.`,
+        });
+        sendStates.delete(userId);
+        return;
+      }
+      state.tokenIndex = idx;
+      state.token = guildSettings.tokens[idx];
+      state.senderAddress = address;
+      await showConfirmation(interaction, state);
+      return;
+    }
+
+    if (tokensWithBalance.length === 0) {
+      await interaction.editReply({
+        content: `❌ You don't have any token balance.`,
+      });
+      sendStates.delete(userId);
+      return;
+    }
 
     // If only one token has sufficient balance → go straight to confirmation
     if (tokensWithBalance.length === 1) {

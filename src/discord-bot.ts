@@ -59,7 +59,7 @@ import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient,
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
-import handleSendCommand, { handleSendInteraction, sendStates } from "./commands/send.ts";
+import handleSendCommand, { handleSendAutocomplete, handleSendInteraction, sendStates } from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
@@ -268,6 +268,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "burn") {
         return handleBurnAutocomplete(interaction, guildId);
+      }
+      if (interaction.commandName === "send") {
+        return handleSendAutocomplete(interaction, guildId);
       }
       return;
     }
