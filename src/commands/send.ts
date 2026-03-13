@@ -15,7 +15,6 @@ import {
   CommunityConfig,
   callOnCardCallData,
   getAccountAddress,
-  getCardAddress,
   tokenTransferCallData,
   tokenTransferEventTopic,
   type UserOpData,
@@ -385,8 +384,9 @@ export async function handleSendInteraction(
         // Citizen Wallet bundler-based transfer
         const community = new CommunityConfig(buildCommunityConfig(guildSettings, token));
         const senderHashedUserId = keccak256(toUtf8Bytes(state.senderId));
-        const recipientHashedUserId = keccak256(toUtf8Bytes(state.recipientId));
-        const recipientAddress = await getCardAddress(community, recipientHashedUserId);
+
+        // Resolve recipient address using the same method as sender (respects per-token wallet manager/chain)
+        const recipientAddress = await getAccountAddressForToken(state.recipientId, token);
 
         if (!recipientAddress) {
           await interaction.editReply({ content: "❌ Could not find recipient's account." });
