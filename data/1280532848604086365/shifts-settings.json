@@ -1,0 +1,17 @@
+{
+  "calendarId": "c_a29d527434d56287ac6913ce483525d79f14ff053d483c2b21297f1a2df479aa@group.calendar.google.com",
+  "description": "Sign up for a caretaking shift to take care of our common space and help hosting events",
+  "reward": "1 CHT per hour",
+  "rewardTokenSymbol": "CHT",
+  "rewardAmountPerHour": 1,
+  "maxSignupsPerSlot": 3,
+  "shiftsMasterRoleId": "1384167297068957806",
+  "slots": [
+    { "start": "08:30", "end": "11:30" },
+    { "start": "11:30", "end": "14:30" },
+    { "start": "14:30", "end": "17:30" },
+    { "start": "17:30", "end": "20:30" },
+    { "start": "20:30", "end": "22:30" }
+  ],
+  "timezone": "Europe/Brussels"
+}

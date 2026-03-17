@@ -147,5 +147,9 @@
     "name": "doctor",
     "description": "Check bot configuration and fix issues (admin only)",
     "default_member_permissions": "8"
+  },
+  {
+    "name": "shifts",
+    "description": "View and sign up for caretaking shifts"
   }
 ]

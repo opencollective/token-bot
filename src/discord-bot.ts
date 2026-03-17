@@ -64,6 +64,7 @@ import handleBalanceCommand from "./commands/balance.ts";
 import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 import { handleBookingsButton, handleBookingsCommand, handleBookingsModal, handleBookingsSelect } from "./commands/bookings.ts";
+import { handleShiftsButton, handleShiftsCommand, handleShiftsModal, handleShiftsSelect } from "./commands/shifts.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 import { setDiscordClient, startApiServer } from "./api.ts";
 
@@ -337,6 +338,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         return handleBookingsCommand(interaction, userId, guildId);
       }
+      if (interaction.commandName === "shifts") {
+        if (!calendarEnabled) {
+          await interaction.reply({
+            content: "⚠️ Calendar features are disabled. Google Calendar credentials not found.",
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+        return handleShiftsCommand(interaction, userId, guildId);
+      }
     }
 
     // Handle component interactions
@@ -356,6 +367,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.customId.startsWith("bookings_")) {
         return handleBookingsButton(interaction, userId, guildId);
       }
+      if (interaction.customId.startsWith("shifts_")) {
+        return handleShiftsButton(interaction, userId, guildId);
+      }
       return handleButton(interaction, userId, guildId);
     }
     if (interaction.isChannelSelectMenu()) {
@@ -370,6 +384,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId.startsWith("bookings_")) {
         return handleBookingsSelect(interaction, userId, guildId);
+      }
+      if (interaction.customId.startsWith("shifts_")) {
+        return handleShiftsSelect(interaction, userId, guildId);
       }
       if (interaction.customId === "send_token_select") {
         return handleSendInteraction(interaction, userId, guildId);
@@ -1405,6 +1422,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // Handle bookings modals
   if (interaction.customId === "bookings_url_modal") {
     return handleBookingsModal(interaction, userId, guildId);
+  }
+
+  // Handle shifts modals
+  if (interaction.customId === "shifts_email_modal") {
+    return handleShiftsModal(interaction, userId, guildId);
   }
 
   // Handle roles add modal
