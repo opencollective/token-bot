@@ -212,6 +212,7 @@ async function fetchTokenInfo(chain: Chain, address: BlockchainAddress) {
 // Initialize room events cache from all guild product calendars
 async function initRoomEventsCacheFromProducts() {
   const dataDir = Deno.env.get("DATA_DIR") || "./data";
+  console.log(`[room-events-cache] Scanning data dir: ${dataDir}`);
   const calIdToRoom = new Map<string, string>();
 
   try {
@@ -234,8 +235,14 @@ async function initRoomEventsCacheFromProducts() {
     console.warn("⚠️  Could not read data dir for room events cache:", error);
   }
 
+  console.log(`[room-events-cache] Found ${calIdToRoom.size} room calendars from products`);
   if (calIdToRoom.size > 0) {
+    for (const [id, name] of calIdToRoom) {
+      console.log(`  📅 ${name}: ${id.substring(0, 20)}...`);
+    }
     await initRoomEventsCache(calIdToRoom);
+  } else {
+    console.warn("[room-events-cache] No room calendars found — cache will be empty");
   }
 }
 
