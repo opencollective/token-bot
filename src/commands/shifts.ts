@@ -15,6 +15,7 @@ import {
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { getRoomEventsCache, invalidateRoomEventsCache, ensureRoomEventsCacheReady } from "../lib/room-events-cache.ts";
+import { getUserEmail, setUserEmail } from "../lib/user-emails.ts";
 import { mintTokens } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { formatUnits } from "@wevm/viem";
@@ -610,9 +611,30 @@ export async function handleShiftsButton(
     return;
   }
 
+  // Add/change email for calendar invite
+  if (customId === "shifts_add_email") {
+    const modal = new ModalBuilder()
+      .setCustomId("shifts_email_modal")
+      .setTitle("Email for Calendar Invite")
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("email")
+            .setLabel("Email address (optional)")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("your@email.com")
+            .setRequired(false)
+            .setMaxLength(100)
+            .setValue(state.email || ""),
+        ),
+      );
+    await interaction.showModal(modal);
+    return;
+  }
+
   // Confirm signup
   if (customId === "shifts_confirm_signup") {
-    await processSignup(interaction, userId, settings, state);
+    await processSignup(interaction, userId, guildId, settings, state);
     return;
   }
 
@@ -704,33 +726,14 @@ export async function handleShiftsSelect(
     
     state.selectedSlot = selectedSlot;
     state.step = "confirm";
+    
+    // Pre-fill email from saved user data
+    const savedEmail = getUserEmail(guildId, userId);
+    if (savedEmail) state.email = savedEmail;
+    
     shiftsStates.set(userId, state);
 
-    // Show confirmation directly (skip email modal to avoid interaction issues)
-    const durationHours = parseInt(selectedSlot.end.split(':')[0]) - parseInt(selectedSlot.start.split(':')[0]);
-    const selectedDate = state.selectedDate!;
-
-    let content = `📋 **Confirm your shift signup**\n\n`;
-    content += `**Date:** ${formatDate(selectedDate)}\n`;
-    content += `**Time:** ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}\n`;
-    content += `**Reward:** ${durationHours * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n`;
-    content += `\n💡 You'll be added to a calendar event for this shift.`;
-
-    await interaction.update({
-      content,
-      components: [
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId("shifts_confirm_signup")
-            .setLabel("Confirm signup")
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId("shifts_signup")
-            .setLabel("← Back")
-            .setStyle(ButtonStyle.Secondary),
-        )
-      ],
-    });
+    await showSignupConfirmation(interaction, state, settings, guildId, userId);
     return;
   }
 
@@ -934,36 +937,14 @@ export async function handleShiftsModal(
     state.step = "confirm";
     shiftsStates.set(userId, state);
 
-    await interaction.deferUpdate();
-
-    // Show confirmation
-    const selectedDate = state.selectedDate!;
-    const selectedSlot = state.selectedSlot!;
-    
-    let content = `📋 **Confirm your shift signup**\n\n`;
-    content += `**Date:** ${formatDate(selectedDate)}\n`;
-    content += `**Time:** ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}\n`;
-    content += `**Reward:** ${settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}/hour\n`;
+    // Save email for future use
     if (email) {
-      content += `**Email:** ${email}\n`;
+      await setUserEmail(guildId, userId, email);
     }
-    content += `\n💡 You'll be added to a calendar event for this shift.`;
 
-    await interaction.editReply({
-      content,
-      components: [
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId("shifts_confirm_signup")
-            .setLabel("Confirm signup")
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId("shifts_back_main")
-            .setLabel("← Back")
-            .setStyle(ButtonStyle.Secondary),
-        )
-      ],
-    });
+    await interaction.deferUpdate();
+    const { content, components } = buildSignupConfirmation(state, settings);
+    await interaction.editReply({ content, components });
   }
 }
 
@@ -990,6 +971,53 @@ async function showSlotSelectionDeferred(interaction: Interaction, userId: strin
       });
     }
   }
+}
+
+// Build signup confirmation view
+function buildSignupConfirmation(state: ShiftsState, settings: ShiftsSettings): { content: string; components: any[] } {
+  const selectedDate = state.selectedDate!;
+  const selectedSlot = state.selectedSlot!;
+  const durationHours = parseInt(selectedSlot.end.split(':')[0]) - parseInt(selectedSlot.start.split(':')[0]);
+
+  let content = `📋 **Confirm your shift signup**\n\n`;
+  content += `**Date:** ${formatDate(selectedDate)}\n`;
+  content += `**Time:** ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}\n`;
+  content += `**Reward:** ${durationHours * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n`;
+  if (state.email) {
+    content += `**Email:** ${state.email} _(calendar invite will be sent)_\n`;
+  }
+
+  const buttons = [
+    new ButtonBuilder()
+      .setCustomId("shifts_confirm_signup")
+      .setLabel("✅ Confirm signup")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("shifts_add_email")
+      .setLabel(state.email ? "✏️ Change email" : "📧 Add email")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("shifts_signup")
+      .setLabel("← Back")
+      .setStyle(ButtonStyle.Secondary),
+  ];
+
+  return {
+    content,
+    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)],
+  };
+}
+
+// Show signup confirmation (used from select menu and button handlers)
+async function showSignupConfirmation(
+  interaction: Interaction,
+  state: ShiftsState,
+  settings: ShiftsSettings,
+  guildId: string,
+  userId: string,
+) {
+  const { content, components } = buildSignupConfirmation(state, settings);
+  await updateMessage(interaction, { content, components });
 }
 
 // Build slot selection data (shared by immediate and deferred versions)
@@ -1112,7 +1140,7 @@ async function showSlotSelection(interaction: Interaction, userId: string, setti
 }
 
 // Process signup
-async function processSignup(interaction: ButtonInteraction, userId: string, settings: ShiftsSettings, state: ShiftsState) {
+async function processSignup(interaction: ButtonInteraction, userId: string, guildId: string, settings: ShiftsSettings, state: ShiftsState) {
   await interaction.update({
     content: "⏳ Creating your shift signup...",
     components: [],

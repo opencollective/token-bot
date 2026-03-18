@@ -67,6 +67,7 @@ import { handleBookingsButton, handleBookingsCommand, handleBookingsModal, handl
 import { handleShiftsButton, handleShiftsCommand, handleShiftsModal, handleShiftsSelect } from "./commands/shifts.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 import { initRoomEventsCache } from "./lib/room-events-cache.ts";
+import { initUserEmails } from "./lib/user-emails.ts";
 import { setDiscordClient, startApiServer } from "./api.ts";
 
 // Display server startup time and timezone
@@ -278,7 +279,8 @@ client.on(Events.ClientReady, async (readyClient) => {
   console.log(`✅ Discord bot logged in as ${readyClient.user.tag}`);
   await registerCommands();
   
-  // Initialize room events cache first — must be ready before handling interactions
+  // Initialize caches — must be ready before handling interactions
+  await initUserEmails().catch(err => console.error("User emails init failed:", err));
   if (calendarEnabled) {
     await initRoomEventsCacheFromProducts().catch(err => console.error("Room events cache init failed:", err));
   }
