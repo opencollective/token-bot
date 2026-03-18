@@ -186,24 +186,30 @@ function parseShiftSignups(description: string): ShiftSignup[] {
   if (!description) return signups;
   
   const lines = description.split('\n');
+  const cancelledUsernames = new Set<string>();
+
   for (const line of lines) {
-    // Support both old format (signup: discord:id:username:email) and new (signup: discord:id:username)
-    const match = line.match(/^signup:\s*discord:(\d+):([^:\n]+)(?::(.+))?$/);
-    if (match) {
-      signups.push({
-        discordUserId: match[1],
-        username: match[2],
-        email: match[3] || undefined
-      });
+    // Old format: signup: discord:id:username(:email)
+    const oldMatch = line.match(/^signup:\s*discord:(\d+):([^:\n]+)(?::(.+))?$/);
+    if (oldMatch) {
+      signups.push({ discordUserId: oldMatch[1], username: oldMatch[2], email: oldMatch[3] || undefined });
+      continue;
     }
+    // New format: DD/MM/YYYY HH:MM: @username signed up (discord:id)
+    const newMatch = line.match(/@(\S+) signed up \(discord:(\d+)\)/);
+    if (newMatch) {
+      signups.push({ discordUserId: newMatch[2], username: newMatch[1] });
+      continue;
+    }
+    // Cancellation: DD/MM/YYYY HH:MM: @username cancelled
+    const cancelMatch = line.match(/@(\S+) cancelled/);
+    if (cancelMatch) cancelledUsernames.add(cancelMatch[1]);
+    // Old cancel format
+    const oldCancel = line.match(/cancelled:\s*discord:(\d+):(\S+)/);
+    if (oldCancel) cancelledUsernames.add(oldCancel[2]);
   }
-  // Also check for cancelled signups and exclude them
-  const cancelledIds = new Set<string>();
-  for (const line of lines) {
-    const cancelMatch = line.match(/cancelled:\s*discord:(\d+)/);
-    if (cancelMatch) cancelledIds.add(cancelMatch[1]);
-  }
-  return signups.filter(s => !cancelledIds.has(s.discordUserId));
+
+  return signups.filter(s => !cancelledUsernames.has(s.username));
 }
 
 function appendToDescription(existingDescription: string, line: string): string {
@@ -1214,10 +1220,9 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
         return;
       }
       
-      // Append signup line + audit trail (never overwrite existing description)
+      // Append signup (single audit line, never overwrite existing description)
       let desc = existingEvent.description || "";
-      desc = appendToDescription(desc, `signup: discord:${userId}:${newSignup.username}`);
-      desc = appendToDescription(desc, `${formatAuditTimestamp()}: @${newSignup.username} signed up`);
+      desc = appendToDescription(desc, `${formatAuditTimestamp()}: @${newSignup.username} signed up (discord:${userId})`);
       
       const updateData: any = { description: desc };
       if (state.email) {
@@ -1228,7 +1233,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
     } else {
       // Create new event
       const eventTitle = `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
-      const description = `signup: discord:${userId}:${newSignup.username}\n${formatAuditTimestamp()}: @${newSignup.username} signed up`;
+      const description = `${formatAuditTimestamp()}: @${newSignup.username} signed up (discord:${userId})`;
       
       const calendarEvent: any = {
         summary: eventTitle,
@@ -1286,9 +1291,8 @@ async function cancelShift(shiftEvent: CalendarEvent, userId: string, settings: 
     throw new Error("You're not signed up for this shift");
   }
   
-  // Append cancellation line (keep full history, never delete lines)
+  // Append cancellation (single audit line)
   let desc = shiftEvent.description || "";
-  desc = appendToDescription(desc, `cancelled: discord:${userId}:${userSignup.username}`);
   desc = appendToDescription(desc, `${formatAuditTimestamp()}: @${userSignup.username} cancelled`);
   
   const remainingSignups = signups.filter(s => s.discordUserId !== userId);
