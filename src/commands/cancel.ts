@@ -24,6 +24,7 @@ async function getCachedAddress(discordUserId: string): Promise<string> {
   }
 
   const address = await getAccountAddressFromDiscordUserId(discordUserId);
+  if (!address) throw new Error("No wallet address found");
   addressCache.set(discordUserId, address);
   return address;
 }

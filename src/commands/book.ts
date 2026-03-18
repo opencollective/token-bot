@@ -38,6 +38,7 @@ async function getCachedAddress(discordUserId: string): Promise<string> {
   }
 
   const address = await getAccountAddressFromDiscordUserId(discordUserId);
+  if (!address) throw new Error("No wallet address found");
   addressCache.set(discordUserId, address);
   return address;
 }
@@ -1658,7 +1659,7 @@ Please contact an administrator for a refund.`;
     console.error("Error processing payment:", error);
     console.error("Token config:", JSON.stringify(tokenConfig, null, 2));
     console.error("Price amount:", priceAmount);
-    console.error("User address:", userAddress);
+    console.error("User ID:", userId);
 
     await interaction.editReply({
       content: `❌ **Payment failed**

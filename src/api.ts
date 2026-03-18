@@ -168,6 +168,9 @@ async function handleBookExecute(req: Request): Promise<Response> {
 
     // Get user's blockchain address
     const userAddress = await getAccountAddressFromDiscordUserId(userId);
+    if (!userAddress) {
+      return json({ success: false, error: "No wallet address found for user" } as BookResponse);
+    }
 
     // Check balance
     const balance = await getBalance(

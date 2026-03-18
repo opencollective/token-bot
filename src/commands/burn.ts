@@ -159,6 +159,7 @@ export default async function handleBurnCommand(
       } else {
         const targetAddress =
           await getAccountAddressForToken(targetUserId, token);
+        if (!targetAddress) throw new Error("No wallet address found");
         hash = await burnTokensFrom(
           chain, token.address, targetAddress,
           amount.toString(), token.decimals,
