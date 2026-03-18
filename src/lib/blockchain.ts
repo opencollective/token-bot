@@ -92,12 +92,13 @@ export async function deployContract(
     const hash = await client.deployContract({
       abi: contractAbi,
       chain: ChainConfig[chainSlug],
+      account: client.account!,
       args: args,
       bytecode: contractBytecode as `0x${string}`,
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     return receipt.contractAddress as Address;
-  } catch (e) {
+  } catch (e: any) {
     if (e.details === "insufficient funds for transfer") {
       throw new Error(
         "Insufficient funds to deploy this token. Please send some ETH to " +
@@ -150,11 +151,11 @@ export async function getBlockchainTxInfo(
 
 export type Clients = { publicClient: PublicClient; walletClient: WalletClient; account?: Account };
 
-export async function getBaseFee(chainSlug: string): Promise<bigint | undefined> {
-  const rpcUrl = RPC_URLS[chainSlug as SupportedChain];
+export async function getBaseFee(chainSlug: SupportedChain): Promise<bigint | undefined> {
+  const rpcUrl = RPC_URLS[chainSlug];
   console.log(">>> ChainConfig[chainSlug]", ChainConfig[chainSlug]);
   const client = createPublicClient({ transport: http(rpcUrl), chain: ChainConfig[chainSlug] });
-  const fees = await getInitialGasParams(client);
+  const fees = await getInitialGasParams(client as any);
   return fees.maxFeePerGas;
 }
 
@@ -229,7 +230,7 @@ export async function submitTransaction(
     transport: http(RPC_URLS[params.chainSlug]),
     chain: ChainConfig[params.chainSlug],
   });
-  let gasParams = await getInitialGasParams(publicClient);
+  let gasParams = await getInitialGasParams(publicClient as any);
   const clientAddress = client.account?.address as Address;
   const nonce = options?.nonce ?? await publicClient.getTransactionCount({
     address: clientAddress,

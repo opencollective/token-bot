@@ -173,6 +173,7 @@ export default async function handleMintCommand(
       } else {
         const recipientAddress =
           await getAccountAddressForToken(recipientUserId, token);
+        if (!recipientAddress) throw new Error("No wallet address found");
         hash = await mintTokens(
           chain, token.address, recipientAddress,
           amount.toString(), token.decimals,

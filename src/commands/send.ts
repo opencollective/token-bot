@@ -427,7 +427,7 @@ export async function handleSendInteraction(
         if (state.description) extraData = { description: state.description };
 
         hash = await bundler.call(
-          signer,
+          signer as any,
           community.primarySafeCardConfig.address,
           signerAccountAddress,
           calldata,

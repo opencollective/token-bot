@@ -574,6 +574,7 @@ async function handleDoctorCommand(
 
     // Helper: find or create a role by name, never duplicate
     async function findOrCreateMinterRole(): Promise<{ id: string; action: "found" | "created" } | null> {
+      if (!guild) return null;
       // Always check by name first to avoid duplicates
       await guild.roles.fetch(); // refresh cache
       const existing = guild.roles.cache.find((r) => r.name === expectedRoleName);
