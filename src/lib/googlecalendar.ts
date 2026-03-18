@@ -304,6 +304,7 @@ export class GoogleCalendarClient {
       const response = await this.calendar.events.insert({
         calendarId,
         requestBody: event,
+        sendUpdates: "none", // Don't send invite emails (avoids Domain-Wide Delegation requirement)
       });
       return response.data;
     } catch (error) {
@@ -333,6 +334,7 @@ export class GoogleCalendarClient {
         calendarId,
         eventId,
         requestBody: event,
+        sendUpdates: "none",
       });
     } catch (error) {
       throw new Error(`Failed to update event: ${error}`);
