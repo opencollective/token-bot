@@ -14,7 +14,7 @@ import {
 } from "discord.js";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
-import { getRoomEventsCache, invalidateRoomEventsCache } from "../lib/room-events-cache.ts";
+import { getRoomEventsCache, invalidateRoomEventsCache, ensureRoomEventsCacheReady } from "../lib/room-events-cache.ts";
 import { mintTokens } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { formatUnits } from "@wevm/viem";
@@ -415,7 +415,8 @@ export async function handleShiftsButton(
     state.step = "select_date";
     shiftsStates.set(userId, state);
 
-    // Build dropdown with next 28 days + room event counts (from memory cache)
+    // Ensure cache is initialized before reading (blocks only on first call)
+    await ensureRoomEventsCacheReady();
     const cache = getRoomEventsCache();
     const today = new Date();
     today.setHours(0, 0, 0, 0);

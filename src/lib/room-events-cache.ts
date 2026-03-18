@@ -174,6 +174,15 @@ function ensureFresh(): void {
 }
 
 /**
+ * Wait for the cache to be ready (blocks until first refresh completes).
+ * Call this before reading if you need guaranteed data.
+ */
+export async function ensureRoomEventsCacheReady(): Promise<void> {
+  if (lastRefresh > 0) return; // Already initialized
+  if (refreshPromise) await refreshPromise; // Wait for in-progress refresh
+}
+
+/**
  * Get the cache accessor. All reads are from memory — instant.
  */
 export function getRoomEventsCache() {

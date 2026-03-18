@@ -277,9 +277,9 @@ client.on(Events.ClientReady, async (readyClient) => {
   // Check calendar permissions in background (don't block bot startup)
   checkCalendarPermissions().catch(err => console.error("Calendar check failed:", err));
 
-  // Initialize room events cache from all guild product calendars
+  // Initialize room events cache — await to ensure data is ready before handling interactions
   if (calendarEnabled) {
-    initRoomEventsCacheFromProducts().catch(err => console.error("Room events cache init failed:", err));
+    await initRoomEventsCacheFromProducts().catch(err => console.error("Room events cache init failed:", err));
   }
 });
 
