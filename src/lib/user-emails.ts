@@ -58,9 +58,7 @@ export function getUserEmail(guildId: string, discordUserId: string): string | u
 }
 
 /**
- * Reverse lookup: find a user by their email address.
- * Returns { discordUserId, username } if found (username from description parsing not available here,
- * so returns discordUserId which can be used to look up the username).
+ * Reverse lookup: find a discord user by email for a guild.
  */
 export function getUserEmailByEmail(guildId: string, email: string): { discordUserId: string } | undefined {
   const guildEmails = emailsByGuild.get(guildId);

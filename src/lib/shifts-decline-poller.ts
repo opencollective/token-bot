@@ -4,7 +4,7 @@
  */
 
 import { GoogleCalendarClient, CalendarEvent } from "./googlecalendar.ts";
-import { getUserEmail, getUserEmailByEmail } from "./user-emails.ts";
+import { getUserEmail } from "./user-emails.ts";
 
 function formatAuditTimestamp(): string {
   const now = new Date();
@@ -28,10 +28,12 @@ export function startShiftsDeclinePoller(calendarId: string, guildId: string) {
   
   console.log("[shifts-poller] Starting decline poller (1h interval)");
   
-  // Run immediately, then hourly
-  checkDeclines(calendarId, guildId).catch(err => 
-    console.error("[shifts-poller] Error:", err)
-  );
+  // Run after 30s delay (let startup finish), then hourly
+  setTimeout(() => {
+    checkDeclines(calendarId, guildId).catch(err => 
+      console.error("[shifts-poller] Error:", err)
+    );
+  }, 30_000);
   
   pollerInterval = setInterval(() => {
     checkDeclines(calendarId, guildId).catch(err => 
@@ -50,7 +52,6 @@ export function stopShiftsDeclinePoller() {
 async function checkDeclines(calendarId: string, guildId: string) {
   const calendar = new GoogleCalendarClient();
   
-  // Check events from today to 30 days ahead
   const now = new Date();
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
@@ -71,8 +72,14 @@ async function checkDeclines(calendarId: string, guildId: string) {
     const declinedAttendees = event.attendees.filter(
       (a: any) => a.responseStatus === 'declined'
     );
-    
     if (declinedAttendees.length === 0) continue;
+    
+    // Parse signups to match emails to usernames
+    const signups: { username: string; discordUserId: string }[] = [];
+    for (const line of event.description.split('\n')) {
+      const m = line.match(/@(\S+) signed up \(discord:(\d+)\)/);
+      if (m) signups.push({ username: m[1], discordUserId: m[2] });
+    }
     
     let desc = event.description;
     let updated = false;
@@ -80,27 +87,16 @@ async function checkDeclines(calendarId: string, guildId: string) {
     for (const attendee of declinedAttendees) {
       const email = attendee.email;
       
-      // Check if this decline is already recorded
-      if (desc.includes(`${email} declined`) || desc.includes(`declined (via calendar)`)) {
-        // Check more specifically — look for this email's decline
-        const alreadyRecorded = desc.split('\n').some(line => 
-          line.includes('declined') && line.includes(email)
-        );
-        if (alreadyRecorded) continue;
-      }
+      // Find which signup this email belongs to
+      const signup = signups.find(s => getUserEmail(guildId, s.discordUserId) === email);
+      const displayName = signup ? `@${signup.username}` : email;
       
-      // Try to find the username from the event description signups
-      let displayName = email;
-      const userInfo = getUserEmailByEmail(guildId, email);
-      if (userInfo) {
-        // Find username from signup lines in description
-        const signupMatch = desc.match(new RegExp(`@(\\S+) signed up \\(discord:${userInfo.discordUserId}\\)`));
-        displayName = signupMatch ? `@${signupMatch[1]}` : `discord:${userInfo.discordUserId}`;
-      }
+      // Check if already recorded
+      const declineTag = `${displayName} declined`;
+      if (desc.includes(declineTag)) continue;
       
       desc = appendToDescription(desc, `${formatAuditTimestamp()}: ${displayName} declined (via calendar)`);
       updated = true;
-      
       console.log(`[shifts-poller] Recorded decline: ${displayName} on event ${event.summary}`);
     }
     
@@ -112,4 +108,6 @@ async function checkDeclines(calendarId: string, guildId: string) {
       }
     }
   }
+  
+  console.log(`[shifts-poller] Checked ${events.length} events`);
 }
