@@ -782,8 +782,11 @@ export async function handleShiftsSelect(
     state.step = "select_slot";
     shiftsStates.set(userId, state);
 
-    // Defer update immediately — slot selection makes multiple calendar API calls
-    await interaction.deferUpdate();
+    // Show loading state immediately, then fetch slot data
+    await interaction.update({
+      content: `⏳ Loading time slots for ${formatDate(selectedDate)}...`,
+      components: [],
+    });
     await showSlotSelectionDeferred(interaction, userId, settings, selectedDate);
     return;
   }
