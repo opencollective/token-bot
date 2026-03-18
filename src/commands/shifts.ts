@@ -1099,7 +1099,7 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
       selectOptions.push({
         label: label.substring(0, 100),
         value: `${i}`,
-        description: description.substring(0, 100),
+        description: description ? description.substring(0, 100) : undefined,
       });
     }
   }
