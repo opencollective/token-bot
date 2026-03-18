@@ -61,10 +61,10 @@ interface CalendarEvent {
 
 // Room calendar IDs for checking conflicts
 const ROOM_CALENDARS = {
-  ostrom: "c_72861dcac23416de3fe708f857f5c74f2e2578fe7da94dcee0a55922734417ef",
-  satoshi: "c_fce54b1bddc311791897f8a8723d0b10d7e3b69ea520baee0d267ce9d3266068",
+  ostrom: "c_72861dcac23416de3fe708f857f5c74f2e2578fe7da94dcee0a55922734417ef@group.calendar.google.com",
+  satoshi: "c_fce54b1bddc311791897f8a8723d0b10d7e3b69ea520baee0d267ce9d3266068@group.calendar.google.com",
   mushroom: "c_928d7621e14426ed508df906a7881dafc079757b44cea074d2434b405f86df7a@group.calendar.google.com",
-  coworking: "c_46409c48af2476b038fed585c06edd93133b5393d8a2b72b3ca98445a3372860"
+  coworking: "c_46409c48af2476b038fed585c06edd93133b5393d8a2b72b3ca98445a3372860@group.calendar.google.com"
 };
 
 // Cache for calendar data
@@ -134,34 +134,29 @@ async function getPastDatesWithShifts(calendarId: string): Promise<{ label: stri
   }
 }
 
-async function getRoomEventCounts(): Promise<Map<string, number>> {
-  const cacheKey = "room_events";
-  const cached = roomEventCountsCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return cached.data;
-  }
-
-  const calendar = new GoogleCalendarClient();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const fourWeeksOut = new Date(today);
-  fourWeeksOut.setDate(today.getDate() + 28);
-  fourWeeksOut.setHours(23, 59, 59, 999);
-
+/**
+ * Count events per day across multiple calendars for a date range.
+ * Exported for testing.
+ */
+export async function countEventsPerDay(
+  calendarIds: string[],
+  startDate: Date,
+  endDate: Date,
+  calendarClient?: GoogleCalendarClient,
+): Promise<Map<string, number>> {
+  const calendar = calendarClient || new GoogleCalendarClient();
   const counts = new Map<string, number>();
 
-  // Fetch all calendars in parallel
-  const calendarEntries = Object.entries(ROOM_CALENDARS);
   const results = await Promise.allSettled(
-    calendarEntries.map(([_roomName, calendarId]) =>
-      calendar.listEvents(calendarId, today, fourWeeksOut)
+    calendarIds.map((calendarId) =>
+      calendar.listEvents(calendarId, startDate, endDate)
     )
   );
 
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     if (result.status !== "fulfilled") {
-      console.error(`Error fetching room events for ${calendarEntries[i][0]}:`, result.reason);
+      console.error(`Error fetching events for calendar ${calendarIds[i]}:`, result.reason);
       continue;
     }
     for (const event of result.value) {
@@ -174,6 +169,25 @@ async function getRoomEventCounts(): Promise<Map<string, number>> {
       counts.set(dateKey, (counts.get(dateKey) || 0) + 1);
     }
   }
+
+  return counts;
+}
+
+async function getRoomEventCounts(): Promise<Map<string, number>> {
+  const cacheKey = "room_events";
+  const cached = roomEventCountsCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const fourWeeksOut = new Date(today);
+  fourWeeksOut.setDate(today.getDate() + 28);
+  fourWeeksOut.setHours(23, 59, 59, 999);
+
+  const calendarIds = Object.values(ROOM_CALENDARS);
+  const counts = await countEventsPerDay(calendarIds, today, fourWeeksOut);
 
   roomEventCountsCache.set(cacheKey, { data: counts, timestamp: Date.now() });
   return counts;
@@ -774,6 +788,34 @@ export async function handleShiftsSelect(
     return;
   }
 
+  // Slot selection (dropdown)
+  if (customId === "shifts_slot_select") {
+    const slotIndex = parseInt(interaction.values[0]);
+    const selectedSlot = settings.slots[slotIndex];
+    
+    state.selectedSlot = selectedSlot;
+    state.step = "enter_email";
+    shiftsStates.set(userId, state);
+
+    const modal = new ModalBuilder()
+      .setCustomId("shifts_email_modal")
+      .setTitle("Email (Optional)")
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("email")
+            .setLabel("Enter your email if you want this to appear in your personal calendar (optional)")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("your@email.com")
+            .setRequired(false)
+            .setMaxLength(100),
+        ),
+      );
+
+    await interaction.showModal(modal);
+    return;
+  }
+
   // Cancel shift selection
   if (customId === "shifts_cancel_select") {
     const selectedIndex = parseInt(interaction.values[0].replace("cancel_", ""));
@@ -1010,9 +1052,9 @@ export async function handleShiftsModal(
 // Deferred version — used after deferUpdate() when coming from select menu
 async function showSlotSelectionDeferred(interaction: Interaction, userId: string, settings: ShiftsSettings, date: Date) {
   try {
-    const { content, rows } = await buildSlotSelectionData(settings, date);
+    const { content, components } = await buildSlotSelectionData(settings, date);
     if ('editReply' in interaction) {
-      await (interaction as any).editReply({ content, components: rows });
+      await (interaction as any).editReply({ content, components });
     }
   } catch (error) {
     console.error("Error showing slot selection (deferred):", error);
@@ -1033,12 +1075,12 @@ async function showSlotSelectionDeferred(interaction: Interaction, userId: strin
 }
 
 // Build slot selection data (shared by immediate and deferred versions)
-async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Promise<{ content: string; rows: ActionRowBuilder<ButtonBuilder>[] }> {
+async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Promise<{ content: string; components: any[] }> {
   const shiftEvents = await getShiftEvents(settings.calendarId, date);
   
   let content = `🕐 **Select a time slot for ${formatDate(date)}:**\n\n`;
   
-  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  const selectOptions: { label: string; value: string; description?: string }[] = [];
   
   for (let i = 0; i < settings.slots.length; i++) {
     const slot = settings.slots[i];
@@ -1057,49 +1099,62 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
     const signups = existingEvent ? parseShiftSignups(existingEvent.description || "") : [];
     const spotsLeft = settings.maxSignupsPerSlot - signups.length;
     const isFull = spotsLeft <= 0;
+    const durationHours = parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0]);
+    const reward = durationHours * settings.rewardAmountPerHour;
     
     // Check for room events
     const roomEvents = await checkRoomEvents(date, slot.start, slot.end);
     
-    let buttonText = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
-    let buttonStyle = ButtonStyle.Secondary;
+    let label = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
+    let description = `${reward} ${settings.rewardTokenSymbol}`;
     
     if (isFull) {
-      buttonText = `🔴 ${buttonText} (full)`;
-      buttonStyle = ButtonStyle.Danger;
+      label = `🔴 ${label} (full)`;
     } else if (signups.length > 0) {
-      buttonText = `🟡 ${buttonText} (${spotsLeft}/${settings.maxSignupsPerSlot} spots)`;
-      buttonStyle = ButtonStyle.Secondary;
+      label = `🟡 ${label} (${spotsLeft}/${settings.maxSignupsPerSlot} spots)`;
+      description += ` · with ${signups.map(s => s.username).join(", ")}`;
     } else {
-      buttonText = `🟢 ${buttonText} (${settings.maxSignupsPerSlot} spots)`;
-      buttonStyle = ButtonStyle.Primary;
+      label = `🟢 ${label} (${settings.maxSignupsPerSlot} spots)`;
     }
     
-    const button = new ButtonBuilder()
-      .setCustomId(`shifts_slot_${i}`)
-      .setLabel(buttonText)
-      .setStyle(buttonStyle)
-      .setDisabled(isFull);
-    
-    // Add to row (max 5 buttons per row)
-    const rowIndex = Math.floor(i / 2);
-    if (!rows[rowIndex]) {
-      rows[rowIndex] = new ActionRowBuilder<ButtonBuilder>();
+    if (roomEvents.length > 0) {
+      description += ` · ${roomEvents.length} room event${roomEvents.length > 1 ? 's' : ''}`;
     }
-    rows[rowIndex].addComponents(button);
     
     // Add slot details to content
-    content += `**${formatTime(slot.start)} - ${formatTime(slot.end)}** (${(parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0]))}h)\n`;
+    content += `**${formatTime(slot.start)} - ${formatTime(slot.end)}** (${durationHours}h)\n`;
     if (signups.length > 0) {
       content += `  👥 Signed up: ${signups.map(s => s.username).join(", ")}\n`;
     }
     if (roomEvents.length > 0) {
       content += `  🏢 Events: ${roomEvents.join(", ")}\n`;
     }
-    content += `  💰 Earn ${(parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0])) * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n\n`;
+    content += `  💰 Earn ${reward} ${settings.rewardTokenSymbol}\n\n`;
+    
+    // Only add non-full slots to dropdown
+    if (!isFull) {
+      selectOptions.push({
+        label: label.substring(0, 100),
+        value: `${i}`,
+        description: description.substring(0, 100),
+      });
+    }
   }
-  
-  // Add navigation
+
+  const components: any[] = [];
+
+  if (selectOptions.length > 0) {
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId("shifts_slot_select")
+      .setPlaceholder("Select a time slot...")
+      .addOptions(selectOptions.slice(0, 25));
+    
+    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu));
+  } else {
+    content += "⚠️ All slots are full for this date.\n";
+  }
+
+  // Navigation
   const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("shifts_signup")
@@ -1110,16 +1165,16 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
       .setLabel("Cancel")
       .setStyle(ButtonStyle.Danger),
   );
-  rows.push(navRow);
+  components.push(navRow);
   
-  return { content, rows };
+  return { content, components };
 }
 
 // Helper functions for slot selection
 async function showSlotSelection(interaction: Interaction, userId: string, settings: ShiftsSettings, date: Date) {
   try {
-    const { content, rows } = await buildSlotSelectionData(settings, date);
-    await updateMessage(interaction, { content, components: rows });
+    const { content, components } = await buildSlotSelectionData(settings, date);
+    await updateMessage(interaction, { content, components });
   } catch (error) {
     console.error("Error showing slot selection:", error);
     await updateMessage(interaction, {
