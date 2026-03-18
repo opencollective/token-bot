@@ -270,16 +270,20 @@ client.on(Events.ClientReady, async (readyClient) => {
   console.log(`✅ Discord bot logged in as ${readyClient.user.tag}`);
   await registerCommands();
   
-  // Start API server and pass Discord client reference
-  setDiscordClient(client);
-  startApiServer();
-  
+  // Initialize room events cache first — must be ready before handling interactions
+  if (calendarEnabled) {
+    await initRoomEventsCacheFromProducts().catch(err => console.error("Room events cache init failed:", err));
+  }
+
   // Check calendar permissions in background (don't block bot startup)
   checkCalendarPermissions().catch(err => console.error("Calendar check failed:", err));
 
-  // Initialize room events cache — await to ensure data is ready before handling interactions
-  if (calendarEnabled) {
-    await initRoomEventsCacheFromProducts().catch(err => console.error("Room events cache init failed:", err));
+  // Start API server and pass Discord client reference
+  setDiscordClient(client);
+  try {
+    startApiServer();
+  } catch (err) {
+    console.error("⚠️  API server failed to start (port in use?):", (err as Error).message);
   }
 });
 
