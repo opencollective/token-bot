@@ -66,6 +66,7 @@ import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./c
 import { handleBookingsButton, handleBookingsCommand, handleBookingsModal, handleBookingsSelect } from "./commands/bookings.ts";
 import { handleShiftsButton, handleShiftsCommand, handleShiftsModal, handleShiftsSelect } from "./commands/shifts.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
+import { initRoomEventsCache } from "./lib/room-events-cache.ts";
 import { setDiscordClient, startApiServer } from "./api.ts";
 
 // Display server startup time and timezone
@@ -208,6 +209,36 @@ async function fetchTokenInfo(chain: Chain, address: BlockchainAddress) {
   return { name, symbol, decimals };
 }
 
+// Initialize room events cache from all guild product calendars
+async function initRoomEventsCacheFromProducts() {
+  const dataDir = Deno.env.get("DATA_DIR") || "./data";
+  const calIdToRoom = new Map<string, string>();
+
+  try {
+    for await (const guildEntry of Deno.readDir(dataDir)) {
+      if (!guildEntry.isDirectory) continue;
+      const productsPath = `${dataDir}/${guildEntry.name}/products.json`;
+      try {
+        const productsJson = await Deno.readTextFile(productsPath);
+        const products = JSON.parse(productsJson) as Product[];
+        for (const product of products) {
+          if (product.calendarId && product.type === "room") {
+            calIdToRoom.set(product.calendarId, product.name || product.slug || "unknown");
+          }
+        }
+      } catch {
+        // No products.json for this guild, skip
+      }
+    }
+  } catch (error) {
+    console.warn("⚠️  Could not read data dir for room events cache:", error);
+  }
+
+  if (calIdToRoom.size > 0) {
+    await initRoomEventsCache(calIdToRoom);
+  }
+}
+
 // Command registration
 async function registerCommands() {
   try {
@@ -245,6 +276,11 @@ client.on(Events.ClientReady, async (readyClient) => {
   
   // Check calendar permissions in background (don't block bot startup)
   checkCalendarPermissions().catch(err => console.error("Calendar check failed:", err));
+
+  // Initialize room events cache from all guild product calendars
+  if (calendarEnabled) {
+    initRoomEventsCacheFromProducts().catch(err => console.error("Room events cache init failed:", err));
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {

@@ -14,6 +14,7 @@ import {
 } from "discord.js";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
+import { getRoomEventsCache, invalidateRoomEventsCache } from "../lib/room-events-cache.ts";
 import { mintTokens } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { formatUnits } from "@wevm/viem";
@@ -59,33 +60,20 @@ interface CalendarEvent {
   attendees?: Array<{ email: string }>;
 }
 
-// Room calendar IDs for checking conflicts
-const ROOM_CALENDARS = {
-  ostrom: "c_72861dcac23416de3fe708f857f5c74f2e2578fe7da94dcee0a55922734417ef@group.calendar.google.com",
-  satoshi: "c_fce54b1bddc311791897f8a8723d0b10d7e3b69ea520baee0d267ce9d3266068@group.calendar.google.com",
-  mushroom: "c_928d7621e14426ed508df906a7881dafc079757b44cea074d2434b405f86df7a@group.calendar.google.com",
-  coworking: "c_46409c48af2476b038fed585c06edd93133b5393d8a2b72b3ca98445a3372860@group.calendar.google.com"
-};
-
-// Cache for calendar data
-interface CacheEntry<T> {
-  data: T;
-  timestamp: number;
-}
-
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const shiftDatesCache = new Map<string, CacheEntry<{ label: string; value: string }[]>>();
-const roomEventCountsCache = new Map<string, CacheEntry<Map<string, number>>>();
+// Shift dates cache (for reward flow — past dates with shifts)
+const shiftDatesCache = new Map<string, { data: { label: string; value: string }[]; timestamp: number }>();
+const SHIFT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function invalidateShiftCaches() {
   shiftDatesCache.clear();
-  roomEventCountsCache.clear();
+  // Also invalidate the room events cache since a signup happened
+  invalidateRoomEventsCache();
 }
 
 async function getPastDatesWithShifts(calendarId: string): Promise<{ label: string; value: string }[]> {
   const cacheKey = calendarId;
   const cached = shiftDatesCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+  if (cached && Date.now() - cached.timestamp < SHIFT_CACHE_TTL_MS) {
     return cached.data;
   }
 
@@ -134,64 +122,7 @@ async function getPastDatesWithShifts(calendarId: string): Promise<{ label: stri
   }
 }
 
-/**
- * Count events per day across multiple calendars for a date range.
- * Exported for testing.
- */
-export async function countEventsPerDay(
-  calendarIds: string[],
-  startDate: Date,
-  endDate: Date,
-  calendarClient?: GoogleCalendarClient,
-): Promise<Map<string, number>> {
-  const calendar = calendarClient || new GoogleCalendarClient();
-  const counts = new Map<string, number>();
 
-  const results = await Promise.allSettled(
-    calendarIds.map((calendarId) =>
-      calendar.listEvents(calendarId, startDate, endDate)
-    )
-  );
-
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    if (result.status !== "fulfilled") {
-      console.error(`Error fetching events for calendar ${calendarIds[i]}:`, result.reason);
-      continue;
-    }
-    for (const event of result.value) {
-      // Handle both timed events (dateTime) and all-day events (date)
-      const startStr = event.start.dateTime || (event.start as any).date;
-      if (!startStr) continue;
-      const eventDate = new Date(startStr);
-      if (isNaN(eventDate.getTime())) continue;
-      const dateKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}-${String(eventDate.getDate()).padStart(2, '0')}`;
-      counts.set(dateKey, (counts.get(dateKey) || 0) + 1);
-    }
-  }
-
-  return counts;
-}
-
-async function getRoomEventCounts(): Promise<Map<string, number>> {
-  const cacheKey = "room_events";
-  const cached = roomEventCountsCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return cached.data;
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const fourWeeksOut = new Date(today);
-  fourWeeksOut.setDate(today.getDate() + 28);
-  fourWeeksOut.setHours(23, 59, 59, 999);
-
-  const calendarIds = Object.values(ROOM_CALENDARS);
-  const counts = await countEventsPerDay(calendarIds, today, fourWeeksOut);
-
-  roomEventCountsCache.set(cacheKey, { data: counts, timestamp: Date.now() });
-  return counts;
-}
 
 export const shiftsStates = new Map<string, ShiftsState>();
 
@@ -262,57 +193,7 @@ function updateEventDescription(existingDescription: string = "", newSignup: Shi
   return lines.join('\n');
 }
 
-// Prefetch all room events for a whole day (one API call per calendar, in parallel)
-async function fetchAllRoomEventsForDay(date: Date): Promise<{ roomName: string; event: CalendarEvent }[]> {
-  const calendar = new GoogleCalendarClient();
-  const startOfDay = new Date(date);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(date);
-  endOfDay.setHours(23, 59, 59, 999);
 
-  const entries = Object.entries(ROOM_CALENDARS);
-  const results = await Promise.allSettled(
-    entries.map(([_, calendarId]) => calendar.listEvents(calendarId, startOfDay, endOfDay))
-  );
-
-  const allEvents: { roomName: string; event: CalendarEvent }[] = [];
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    if (result.status === "fulfilled") {
-      for (const event of result.value) {
-        allEvents.push({ roomName: entries[i][0], event });
-      }
-    }
-  }
-  return allEvents;
-}
-
-// Filter pre-fetched room events for a specific time slot
-function getRoomEventsForSlot(
-  allRoomEvents: { roomName: string; event: CalendarEvent }[],
-  date: Date,
-  slotStart: string,
-  slotEnd: string,
-): string[] {
-  const startDateTime = createDateTime(date, slotStart, "Europe/Brussels");
-  const endDateTime = createDateTime(date, slotEnd, "Europe/Brussels");
-  const events: string[] = [];
-
-  for (const { roomName, event } of allRoomEvents) {
-    const eventStartStr = event.start.dateTime || (event.start as any).date;
-    const eventEndStr = event.end.dateTime || (event.end as any).date;
-    if (!eventStartStr) continue;
-    
-    const eventStart = new Date(eventStartStr);
-    const eventEnd = eventEndStr ? new Date(eventEndStr) : new Date(eventStart.getTime() + 3600000);
-    
-    // Overlaps if: slotStart < eventEnd AND slotEnd > eventStart
-    if (startDateTime < eventEnd && endDateTime > eventStart && event.summary) {
-      events.push(`${roomName}: ${event.summary}`);
-    }
-  }
-  return events;
-}
 
 async function getShiftEvents(calendarId: string, date: Date): Promise<CalendarEvent[]> {
   const calendar = new GoogleCalendarClient();
@@ -534,8 +415,8 @@ export async function handleShiftsButton(
     state.step = "select_date";
     shiftsStates.set(userId, state);
 
-    // Build dropdown with next 28 days + room event counts
-    const roomCounts = await getRoomEventCounts();
+    // Build dropdown with next 28 days + room event counts (from memory cache)
+    const cache = getRoomEventsCache();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -544,7 +425,7 @@ export async function handleShiftsButton(
       const date = new Date(today);
       date.setDate(today.getDate() + i);
       const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-      const count = roomCounts.get(value) || 0;
+      const count = cache.getEventCountForDate(date);
       const countText = count > 0 ? `${count} event${count > 1 ? 's' : ''}` : 'no events';
 
       let label: string;
@@ -1112,11 +993,8 @@ async function showSlotSelectionDeferred(interaction: Interaction, userId: strin
 
 // Build slot selection data (shared by immediate and deferred versions)
 async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Promise<{ content: string; components: any[] }> {
-  // Prefetch all data in parallel: shift events + room events for the whole day
-  const [shiftEvents, allRoomEvents] = await Promise.all([
-    getShiftEvents(settings.calendarId, date),
-    fetchAllRoomEventsForDay(date),
-  ]);
+  const shiftEvents = await getShiftEvents(settings.calendarId, date);
+  const cache = getRoomEventsCache();
   
   let content = `🕐 **Select a time slot for ${formatDate(date)}:**\n\n`;
   
@@ -1142,8 +1020,9 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
     const durationHours = parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0]);
     const reward = durationHours * settings.rewardAmountPerHour;
     
-    // Filter pre-fetched room events for this slot (no extra API calls)
-    const roomEvents = getRoomEventsForSlot(allRoomEvents, date, slot.start, slot.end);
+    // Get room events for this slot from memory cache (zero API calls)
+    const slotRoomEvents = cache.getEventsForSlot(date, slot.start, slot.end);
+    const roomEvents = slotRoomEvents.map(e => `${e.room}: ${e.title}`);
     
     let label = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
     let description = `${reward} ${settings.rewardTokenSymbol}`;

@@ -14,6 +14,7 @@ import { BookState, Product } from "../types.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { disabledCalendars } from "../lib/calendar-state.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
+import { invalidateRoomEventsCache } from "../lib/room-events-cache.ts";
 import { burnTokensFrom, getBalance, SupportedChain } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
@@ -1572,6 +1573,9 @@ Booking Chain: ${tokenConfig.chain}`;
       }
 
       await calendarClient.createEvent(product.calendarId, calendarEvent);
+
+      // Invalidate room events cache so /shifts and /book show updated data
+      invalidateRoomEventsCache();
 
       try {
         const nostr = Nostr.getInstance();

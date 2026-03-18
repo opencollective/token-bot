@@ -8,6 +8,7 @@ import {
   TextChannel,
 } from "discord.js";
 import { CalendarEvent, GoogleCalendarClient } from "../lib/googlecalendar.ts";
+import { invalidateRoomEventsCache } from "../lib/room-events-cache.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { Product } from "../types.ts";
 import { getTokenAddressFromTx, mintTokens, SupportedChain } from "../lib/blockchain.ts";
@@ -424,6 +425,9 @@ export async function handleCancelButton(
         selectedItem.calendarId,
         selectedItem.event.id,
       );
+
+      // Invalidate room events cache
+      invalidateRoomEventsCache();
 
       // Get explorer URL based on chain
       const chainId = refundToken.chain === "celo" ? 42220 : 
