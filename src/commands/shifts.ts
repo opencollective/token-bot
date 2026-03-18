@@ -794,25 +794,34 @@ export async function handleShiftsSelect(
     const selectedSlot = settings.slots[slotIndex];
     
     state.selectedSlot = selectedSlot;
-    state.step = "enter_email";
+    state.step = "confirm";
     shiftsStates.set(userId, state);
 
-    const modal = new ModalBuilder()
-      .setCustomId("shifts_email_modal")
-      .setTitle("Email (Optional)")
-      .addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder()
-            .setCustomId("email")
-            .setLabel("Enter your email if you want this to appear in your personal calendar (optional)")
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder("your@email.com")
-            .setRequired(false)
-            .setMaxLength(100),
-        ),
-      );
+    // Show confirmation directly (skip email modal to avoid interaction issues)
+    const durationHours = parseInt(selectedSlot.end.split(':')[0]) - parseInt(selectedSlot.start.split(':')[0]);
+    const selectedDate = state.selectedDate!;
 
-    await interaction.showModal(modal);
+    let content = `📋 **Confirm your shift signup**\n\n`;
+    content += `**Date:** ${formatDate(selectedDate)}\n`;
+    content += `**Time:** ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}\n`;
+    content += `**Reward:** ${durationHours * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n`;
+    content += `\n💡 You'll be added to a calendar event for this shift.`;
+
+    await interaction.update({
+      content,
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("shifts_confirm_signup")
+            .setLabel("Confirm signup")
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId("shifts_signup")
+            .setLabel("← Back")
+            .setStyle(ButtonStyle.Secondary),
+        )
+      ],
+    });
     return;
   }
 
