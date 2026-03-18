@@ -63,8 +63,8 @@ export class GoogleCalendarClient {
       Deno.env.get("GOOGLE_ACCOUNT_KEY_FILEPATH") ||
       "./google-account-key.json";
 
-    const impersonateUser = config?.impersonateUser ||
-      Deno.env.get("GOOGLE_CALENDAR_IMPERSONATE_USER");
+    // Only impersonate when explicitly passed — don't auto-pick from env
+    const impersonateUser = config?.impersonateUser;
 
     if (impersonateUser) {
       // Domain-Wide Delegation: use JWT with subject to impersonate a real user
