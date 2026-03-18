@@ -150,16 +150,28 @@ async function getRoomEventCounts(): Promise<Map<string, number>> {
 
   const counts = new Map<string, number>();
 
-  for (const [_roomName, calendarId] of Object.entries(ROOM_CALENDARS)) {
-    try {
-      const events = await calendar.listEvents(calendarId, today, fourWeeksOut);
-      for (const event of events) {
-        const eventDate = new Date(event.start.dateTime);
-        const dateKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}-${String(eventDate.getDate()).padStart(2, '0')}`;
-        counts.set(dateKey, (counts.get(dateKey) || 0) + 1);
-      }
-    } catch (error) {
-      console.error(`Error fetching room events for ${_roomName}:`, error);
+  // Fetch all calendars in parallel
+  const calendarEntries = Object.entries(ROOM_CALENDARS);
+  const results = await Promise.allSettled(
+    calendarEntries.map(([_roomName, calendarId]) =>
+      calendar.listEvents(calendarId, today, fourWeeksOut)
+    )
+  );
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status !== "fulfilled") {
+      console.error(`Error fetching room events for ${calendarEntries[i][0]}:`, result.reason);
+      continue;
+    }
+    for (const event of result.value) {
+      // Handle both timed events (dateTime) and all-day events (date)
+      const startStr = event.start.dateTime || (event.start as any).date;
+      if (!startStr) continue;
+      const eventDate = new Date(startStr);
+      if (isNaN(eventDate.getTime())) continue;
+      const dateKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}-${String(eventDate.getDate()).padStart(2, '0')}`;
+      counts.set(dateKey, (counts.get(dateKey) || 0) + 1);
     }
   }
 
@@ -756,7 +768,9 @@ export async function handleShiftsSelect(
     state.step = "select_slot";
     shiftsStates.set(userId, state);
 
-    await showSlotSelection(interaction, userId, settings, selectedDate);
+    // Defer update immediately — slot selection makes multiple calendar API calls
+    await interaction.deferUpdate();
+    await showSlotSelectionDeferred(interaction, userId, settings, selectedDate);
     return;
   }
 
@@ -993,89 +1007,119 @@ export async function handleShiftsModal(
   }
 }
 
+// Deferred version — used after deferUpdate() when coming from select menu
+async function showSlotSelectionDeferred(interaction: Interaction, userId: string, settings: ShiftsSettings, date: Date) {
+  try {
+    const { content, rows } = await buildSlotSelectionData(settings, date);
+    if ('editReply' in interaction) {
+      await (interaction as any).editReply({ content, components: rows });
+    }
+  } catch (error) {
+    console.error("Error showing slot selection (deferred):", error);
+    if ('editReply' in interaction) {
+      await (interaction as any).editReply({
+        content: "⚠️ Error loading shift slots.",
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId("shifts_back_main")
+              .setLabel("← Back")
+              .setStyle(ButtonStyle.Secondary),
+          )
+        ],
+      });
+    }
+  }
+}
+
+// Build slot selection data (shared by immediate and deferred versions)
+async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Promise<{ content: string; rows: ActionRowBuilder<ButtonBuilder>[] }> {
+  const shiftEvents = await getShiftEvents(settings.calendarId, date);
+  
+  let content = `🕐 **Select a time slot for ${formatDate(date)}:**\n\n`;
+  
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  
+  for (let i = 0; i < settings.slots.length; i++) {
+    const slot = settings.slots[i];
+    
+    // Check existing signups
+    const slotStart = createDateTime(date, slot.start, settings.timezone);
+    const slotEnd = createDateTime(date, slot.end, settings.timezone);
+    
+    const existingEvent = shiftEvents.find(event => {
+      const eventStart = new Date(event.start.dateTime);
+      const eventEnd = new Date(event.end.dateTime);
+      return Math.abs(eventStart.getTime() - slotStart.getTime()) < 60000 && 
+             Math.abs(eventEnd.getTime() - slotEnd.getTime()) < 60000;
+    });
+    
+    const signups = existingEvent ? parseShiftSignups(existingEvent.description || "") : [];
+    const spotsLeft = settings.maxSignupsPerSlot - signups.length;
+    const isFull = spotsLeft <= 0;
+    
+    // Check for room events
+    const roomEvents = await checkRoomEvents(date, slot.start, slot.end);
+    
+    let buttonText = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
+    let buttonStyle = ButtonStyle.Secondary;
+    
+    if (isFull) {
+      buttonText = `🔴 ${buttonText} (full)`;
+      buttonStyle = ButtonStyle.Danger;
+    } else if (signups.length > 0) {
+      buttonText = `🟡 ${buttonText} (${spotsLeft}/${settings.maxSignupsPerSlot} spots)`;
+      buttonStyle = ButtonStyle.Secondary;
+    } else {
+      buttonText = `🟢 ${buttonText} (${settings.maxSignupsPerSlot} spots)`;
+      buttonStyle = ButtonStyle.Primary;
+    }
+    
+    const button = new ButtonBuilder()
+      .setCustomId(`shifts_slot_${i}`)
+      .setLabel(buttonText)
+      .setStyle(buttonStyle)
+      .setDisabled(isFull);
+    
+    // Add to row (max 5 buttons per row)
+    const rowIndex = Math.floor(i / 2);
+    if (!rows[rowIndex]) {
+      rows[rowIndex] = new ActionRowBuilder<ButtonBuilder>();
+    }
+    rows[rowIndex].addComponents(button);
+    
+    // Add slot details to content
+    content += `**${formatTime(slot.start)} - ${formatTime(slot.end)}** (${(parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0]))}h)\n`;
+    if (signups.length > 0) {
+      content += `  👥 Signed up: ${signups.map(s => s.username).join(", ")}\n`;
+    }
+    if (roomEvents.length > 0) {
+      content += `  🏢 Events: ${roomEvents.join(", ")}\n`;
+    }
+    content += `  💰 Earn ${(parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0])) * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n\n`;
+  }
+  
+  // Add navigation
+  const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("shifts_signup")
+      .setLabel("← Back to date selection")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("shifts_cancel_flow")
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Danger),
+  );
+  rows.push(navRow);
+  
+  return { content, rows };
+}
+
 // Helper functions for slot selection
 async function showSlotSelection(interaction: Interaction, userId: string, settings: ShiftsSettings, date: Date) {
   try {
-    const shiftEvents = await getShiftEvents(settings.calendarId, date);
-    
-    let content = `🕐 **Select a time slot for ${formatDate(date)}:**\n\n`;
-    
-    const rows: ActionRowBuilder<ButtonBuilder>[] = [];
-    
-    for (let i = 0; i < settings.slots.length; i++) {
-      const slot = settings.slots[i];
-      
-      // Check existing signups
-      const slotStart = createDateTime(date, slot.start, settings.timezone);
-      const slotEnd = createDateTime(date, slot.end, settings.timezone);
-      
-      const existingEvent = shiftEvents.find(event => {
-        const eventStart = new Date(event.start.dateTime);
-        const eventEnd = new Date(event.end.dateTime);
-        return Math.abs(eventStart.getTime() - slotStart.getTime()) < 60000 && 
-               Math.abs(eventEnd.getTime() - slotEnd.getTime()) < 60000;
-      });
-      
-      const signups = existingEvent ? parseShiftSignups(existingEvent.description || "") : [];
-      const spotsLeft = settings.maxSignupsPerSlot - signups.length;
-      const isFull = spotsLeft <= 0;
-      
-      // Check for room events
-      const roomEvents = await checkRoomEvents(date, slot.start, slot.end);
-      
-      let buttonText = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
-      let buttonStyle = ButtonStyle.Secondary;
-      
-      if (isFull) {
-        buttonText = `🔴 ${buttonText} (full)`;
-        buttonStyle = ButtonStyle.Danger;
-      } else if (signups.length > 0) {
-        buttonText = `🟡 ${buttonText} (${spotsLeft}/${settings.maxSignupsPerSlot} spots)`;
-        buttonStyle = ButtonStyle.Secondary;
-      } else {
-        buttonText = `🟢 ${buttonText} (${settings.maxSignupsPerSlot} spots)`;
-        buttonStyle = ButtonStyle.Primary;
-      }
-      
-      const button = new ButtonBuilder()
-        .setCustomId(`shifts_slot_${i}`)
-        .setLabel(buttonText)
-        .setStyle(buttonStyle)
-        .setDisabled(isFull);
-      
-      // Add to row (max 5 buttons per row)
-      const rowIndex = Math.floor(i / 2);
-      if (!rows[rowIndex]) {
-        rows[rowIndex] = new ActionRowBuilder<ButtonBuilder>();
-      }
-      rows[rowIndex].addComponents(button);
-      
-      // Add slot details to content
-      content += `**${formatTime(slot.start)} - ${formatTime(slot.end)}** (${(parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0]))}h)\n`;
-      if (signups.length > 0) {
-        content += `  👥 Signed up: ${signups.map(s => s.username).join(", ")}\n`;
-      }
-      if (roomEvents.length > 0) {
-        content += `  🏢 Events: ${roomEvents.join(", ")}\n`;
-      }
-      content += `  💰 Earn ${(parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0])) * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n\n`;
-    }
-    
-    // Add navigation
-    const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId("shifts_signup")
-        .setLabel("← Back to date selection")
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId("shifts_cancel_flow")
-        .setLabel("Cancel")
-        .setStyle(ButtonStyle.Danger),
-    );
-    rows.push(navRow);
-    
+    const { content, rows } = await buildSlotSelectionData(settings, date);
     await updateMessage(interaction, { content, components: rows });
-    
   } catch (error) {
     console.error("Error showing slot selection:", error);
     await updateMessage(interaction, {
