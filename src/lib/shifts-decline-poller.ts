@@ -81,7 +81,9 @@ async function checkDeclines(calendarId: string, guildId: string) {
       
       // Look up user by email for human-readable name
       const user = getUserByEmail(guildId, email);
-      const auditName = user ? `${user.displayName} <@${user.username}>` : email;
+      const auditName = (user && user.displayName && user.username)
+        ? `${user.displayName} <@${user.username}>`
+        : email;
       
       // Check if already recorded
       if (desc.includes(`${auditName} declined`)) continue;
