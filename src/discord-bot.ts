@@ -210,11 +210,22 @@ async function fetchTokenInfo(chain: Chain, address: BlockchainAddress) {
 }
 
 // Initialize room events cache from all guild product calendars
+// Known room calendars — hardcoded fallback since the bot may not run
+// on the same machine as the website that has products.json locally.
+const KNOWN_ROOM_CALENDARS = new Map<string, string>([
+  ["c_72861dcac23416de3fe708f857f5c74f2e2578fe7da94dcee0a55922734417ef@group.calendar.google.com", "Ostrom Room"],
+  ["c_fce54b1bddc311791897f8a8723d0b10d7e3b69ea520baee0d267ce9d3266068@group.calendar.google.com", "Satoshi Room"],
+  ["c_928d7621e14426ed508df906a7881dafc079757b44cea074d2434b405f86df7a@group.calendar.google.com", "Mush Room"],
+  ["c_46409c48af2476b038fed585c06edd93133b5393d8a2b72b3ca98445a3372860@group.calendar.google.com", "Coworking"],
+  ["c_d85b07cd944c033724c8b4adbea66840619181e445e2e6c8062cc0f761f15218@group.calendar.google.com", "Phone Booth"],
+  ["c_3950a43f7dcd7c13415ca8d85ec6f96daffa9baf952ea653a063d03f22a5a6fe@group.calendar.google.com", "Angel Room"],
+]);
+
 async function initRoomEventsCacheFromProducts() {
   const dataDir = Deno.env.get("DATA_DIR") || "./data";
-  console.log(`[room-events-cache] Scanning data dir: ${dataDir}`);
-  const calIdToRoom = new Map<string, string>();
+  const calIdToRoom = new Map<string, string>(KNOWN_ROOM_CALENDARS);
 
+  // Also scan products.json for any additional calendars
   try {
     for await (const guildEntry of Deno.readDir(dataDir)) {
       if (!guildEntry.isDirectory) continue;
@@ -223,7 +234,7 @@ async function initRoomEventsCacheFromProducts() {
         const productsJson = await Deno.readTextFile(productsPath);
         const products = JSON.parse(productsJson) as Product[];
         for (const product of products) {
-          if (product.calendarId && product.type === "room") {
+          if (product.calendarId && product.type === "room" && !calIdToRoom.has(product.calendarId)) {
             calIdToRoom.set(product.calendarId, product.name || product.slug || "unknown");
           }
         }
@@ -231,19 +242,12 @@ async function initRoomEventsCacheFromProducts() {
         // No products.json for this guild, skip
       }
     }
-  } catch (error) {
-    console.warn("⚠️  Could not read data dir for room events cache:", error);
+  } catch {
+    // Data dir may not exist on this deployment — that's fine, we have the hardcoded fallback
   }
 
-  console.log(`[room-events-cache] Found ${calIdToRoom.size} room calendars from products`);
-  if (calIdToRoom.size > 0) {
-    for (const [id, name] of calIdToRoom) {
-      console.log(`  📅 ${name}: ${id.substring(0, 20)}...`);
-    }
-    await initRoomEventsCache(calIdToRoom);
-  } else {
-    console.warn("[room-events-cache] No room calendars found — cache will be empty");
-  }
+  console.log(`[room-events-cache] Initializing with ${calIdToRoom.size} room calendars`);
+  await initRoomEventsCache(calIdToRoom);
 }
 
 // Command registration
