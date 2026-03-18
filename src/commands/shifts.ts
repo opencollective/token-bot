@@ -16,6 +16,7 @@ import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { getRoomEventsCache, invalidateRoomEventsCache, ensureRoomEventsCacheReady } from "../lib/room-events-cache.ts";
 import { getUserEmail, setUserEmail } from "../lib/user-emails.ts";
+import { sendCalendarInvite } from "../lib/calendar-invite.ts";
 import { mintTokens } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { formatUnits } from "@wevm/viem";
@@ -1195,9 +1196,6 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
       
       await calendar.updateEvent(settings.calendarId, existingEvent.id!, {
         description: updatedDescription,
-        ...(state.email && { 
-          attendees: [...(existingEvent.attendees || []), { email: state.email }] 
-        })
       });
       
     } else {
@@ -1205,7 +1203,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
       const eventTitle = `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
       const description = `signup: discord:${userId}:${interaction.user.username}${state.email ? ':' + state.email : ''}`;
       
-      const calendarEvent: any = {
+      await calendar.createEventNoConflictCheck(settings.calendarId, {
         summary: eventTitle,
         description,
         start: {
@@ -1216,14 +1214,21 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
           dateTime: endDateTime.toISOString(), 
           timeZone: settings.timezone,
         },
-      };
-      
-      if (state.email) {
-        calendarEvent.attendees = [{ email: state.email }];
-      }
-      
-      // Use createEventNoConflictCheck — shifts calendar can have overlapping events
-      await calendar.createEventNoConflictCheck(settings.calendarId, calendarEvent);
+      });
+    }
+
+    // Send calendar invite via email (non-blocking)
+    if (state.email) {
+      const shiftTitle = `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)} @ Commons Hub`;
+      sendCalendarInvite({
+        to: state.email,
+        summary: shiftTitle,
+        description: `Shift at Commons Hub Brussels\nTime: ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}`,
+        location: "Commons Hub Brussels",
+        startDate: startDateTime,
+        endDate: endDateTime,
+        timezone: settings.timezone,
+      }).catch(err => console.error("[shifts] Failed to send calendar invite:", err));
     }
 
     // Invalidate caches after signup
