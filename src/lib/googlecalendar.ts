@@ -293,6 +293,25 @@ export class GoogleCalendarClient {
   }
 
   /**
+   * Create an event without checking for conflicts.
+   * Use for calendars where overlapping events are expected (e.g., shifts).
+   */
+  async createEventNoConflictCheck(
+    calendarId: string,
+    event: any,
+  ): Promise<any> {
+    try {
+      const response = await this.calendar.events.insert({
+        calendarId,
+        requestBody: event,
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to create event: ${error}`);
+    }
+  }
+
+  /**
    * Delete an event from a calendar
    * @param calendarId - The ID of the calendar
    * @param eventId - The ID of the event to delete
@@ -306,6 +325,7 @@ export class GoogleCalendarClient {
       start?: { dateTime: string; timeZone?: string };
       end?: { dateTime: string; timeZone?: string };
       source?: { url: string; title?: string };
+      attendees?: { email: string }[];
     },
   ): Promise<void> {
     try {

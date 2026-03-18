@@ -985,6 +985,8 @@ function buildSignupConfirmation(state: ShiftsState, settings: ShiftsSettings): 
   content += `**Reward:** ${durationHours * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n`;
   if (state.email) {
     content += `**Email:** ${state.email} _(calendar invite will be sent)_\n`;
+  } else {
+    content += `\n📧 _Provide your email address to receive a calendar invitation._\n`;
   }
 
   const buttons = [
@@ -1220,7 +1222,8 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
         calendarEvent.attendees = [{ email: state.email }];
       }
       
-      await calendar.createEvent(settings.calendarId, calendarEvent);
+      // Use createEventNoConflictCheck — shifts calendar can have overlapping events
+      await calendar.createEventNoConflictCheck(settings.calendarId, calendarEvent);
     }
 
     // Invalidate caches after signup
@@ -1238,10 +1241,11 @@ Your shift has been added to the calendar. Thank you for helping take care of ou
 
     shiftsStates.delete(userId);
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error processing signup:", error);
+    const errorMsg = error?.message || error?.errors?.[0]?.message || String(error);
     await interaction.editReply({
-      content: "❌ Error creating shift signup. Please try again.",
+      content: `❌ Error creating shift signup: ${errorMsg}`,
     });
   }
 }
