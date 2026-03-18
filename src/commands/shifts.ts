@@ -171,13 +171,24 @@ function createDateTime(date: Date, timeStr: string, timezone: string): Date {
   return dateTime;
 }
 
+function formatAuditTimestamp(): string {
+  const now = new Date();
+  const day = String(now.getDate()).padStart(2, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year = now.getFullYear();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+}
+
 function parseShiftSignups(description: string): ShiftSignup[] {
   const signups: ShiftSignup[] = [];
   if (!description) return signups;
   
   const lines = description.split('\n');
   for (const line of lines) {
-    const match = line.match(/^signup:\s*discord:(\d+):([^:]+)(?::(.+))?$/);
+    // Support both old format (signup: discord:id:username:email) and new (signup: discord:id:username)
+    const match = line.match(/^signup:\s*discord:(\d+):([^:\n]+)(?::(.+))?$/);
     if (match) {
       signups.push({
         discordUserId: match[1],
@@ -186,13 +197,18 @@ function parseShiftSignups(description: string): ShiftSignup[] {
       });
     }
   }
-  return signups;
+  // Also check for cancelled signups and exclude them
+  const cancelledIds = new Set<string>();
+  for (const line of lines) {
+    const cancelMatch = line.match(/cancelled:\s*discord:(\d+)/);
+    if (cancelMatch) cancelledIds.add(cancelMatch[1]);
+  }
+  return signups.filter(s => !cancelledIds.has(s.discordUserId));
 }
 
-function updateEventDescription(existingDescription: string = "", newSignup: ShiftSignup): string {
-  const lines = existingDescription.split('\n').filter(line => !line.startsWith('signup:'));
-  lines.push(`signup: discord:${newSignup.discordUserId}:${newSignup.username}${newSignup.email ? ':' + newSignup.email : ''}`);
-  return lines.join('\n');
+function appendToDescription(existingDescription: string, line: string): string {
+  const trimmed = existingDescription.trimEnd();
+  return trimmed ? `${trimmed}\n${line}` : line;
 }
 
 
@@ -245,8 +261,10 @@ async function getAllUpcomingShifts(calendarId: string): Promise<CalendarEvent[]
   }
 }
 
+const CHT_MINTER_ROLE_ID = "1480923356013269044";
+
 function isShiftsMaster(member: GuildMember, settings: ShiftsSettings): boolean {
-  return member.roles.cache.has(settings.shiftsMasterRoleId);
+  return member.roles.cache.has(settings.shiftsMasterRoleId) || member.roles.cache.has(CHT_MINTER_ROLE_ID);
 }
 
 // Update message helper
@@ -1196,9 +1214,12 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
         return;
       }
       
-      const updatedDescription = updateEventDescription(existingEvent.description || "", newSignup);
+      // Append signup line + audit trail (never overwrite existing description)
+      let desc = existingEvent.description || "";
+      desc = appendToDescription(desc, `signup: discord:${userId}:${newSignup.username}`);
+      desc = appendToDescription(desc, `${formatAuditTimestamp()}: @${newSignup.username} signed up`);
       
-      const updateData: any = { description: updatedDescription };
+      const updateData: any = { description: desc };
       if (state.email) {
         updateData.attendees = [...(existingEvent.attendees || []), { email: state.email }];
       }
@@ -1207,7 +1228,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
     } else {
       // Create new event
       const eventTitle = `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
-      const description = `signup: discord:${userId}:${interaction.user.username}${state.email ? ':' + state.email : ''}`;
+      const description = `signup: discord:${userId}:${newSignup.username}\n${formatAuditTimestamp()}: @${newSignup.username} signed up`;
       
       const calendarEvent: any = {
         summary: eventTitle,
@@ -1265,19 +1286,22 @@ async function cancelShift(shiftEvent: CalendarEvent, userId: string, settings: 
     throw new Error("You're not signed up for this shift");
   }
   
+  // Append cancellation line (keep full history, never delete lines)
+  let desc = shiftEvent.description || "";
+  desc = appendToDescription(desc, `cancelled: discord:${userId}:${userSignup.username}`);
+  desc = appendToDescription(desc, `${formatAuditTimestamp()}: @${userSignup.username} cancelled`);
+  
   const remainingSignups = signups.filter(s => s.discordUserId !== userId);
   
   if (remainingSignups.length === 0) {
-    // Delete the entire event if no one else is signed up
-    await calendar.deleteEvent(settings.calendarId, shiftEvent.id!);
-  } else {
-    // Update event description to remove the user
-    const updatedDescription = remainingSignups
-      .map(s => `signup: discord:${s.discordUserId}:${s.username}${s.email ? ':' + s.email : ''}`)
-      .join('\n');
-    
+    // No one left — update description but keep the event (preserves history)
     await calendar.updateEvent(settings.calendarId, shiftEvent.id!, {
-      description: updatedDescription,
+      description: desc,
+      summary: `[Cancelled] ${shiftEvent.summary || 'Shift'}`,
+    });
+  } else {
+    await calendar.updateEvent(settings.calendarId, shiftEvent.id!, {
+      description: desc,
     });
   }
 }
@@ -1345,20 +1369,19 @@ async function processReward(interaction: ButtonInteraction, userId: string, gui
       }
     }
 
-    // Update calendar event with reward info
+    // Append reward audit trail to calendar event
     const successfulRewards = results.filter(r => r.success);
     if (successfulRewards.length > 0) {
       const calendar = new GoogleCalendarClient();
-      const originalDescription = state.selectedRewardEvent!.description || "";
+      let desc = state.selectedRewardEvent!.description || "";
       
-      let rewardSection = `\n---\nToken rewards:`;
+      const ts = formatAuditTimestamp();
       for (const result of successfulRewards) {
-        rewardSection += `\n- @${result.username}: ${result.amount} ${settings.rewardTokenSymbol} (tx: ${result.hash})`;
+        desc = appendToDescription(desc, `${ts}: @${interaction.user.username} minted ${result.amount} ${settings.rewardTokenSymbol} for @${result.username} (tx: ${result.hash})`);
       }
-      rewardSection += `\nRewarded by: @${interaction.user.username} (discord:${userId})`;
       
       await calendar.updateEvent(settings.calendarId, state.selectedRewardEvent!.id!, {
-        description: originalDescription + rewardSection
+        description: desc
       });
     }
 
