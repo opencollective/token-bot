@@ -1151,6 +1151,10 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
 
   try {
     const calendar = new GoogleCalendarClient();
+    // Use impersonation when adding attendees (requires Domain-Wide Delegation)
+    const calendarWithInvites = state.email
+      ? new GoogleCalendarClient({ impersonateUser: Deno.env.get("GOOGLE_CALENDAR_IMPERSONATE_USER") || undefined })
+      : calendar;
     const selectedDate = state.selectedDate!;
     const selectedSlot = state.selectedSlot!;
     
@@ -1198,7 +1202,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
       if (state.email) {
         updateData.attendees = [...(existingEvent.attendees || []), { email: state.email }];
       }
-      await calendar.updateEvent(settings.calendarId, existingEvent.id!, updateData);
+      await calendarWithInvites.updateEvent(settings.calendarId, existingEvent.id!, updateData);
       
     } else {
       // Create new event
@@ -1222,7 +1226,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
         calendarEvent.attendees = [{ email: state.email }];
       }
       
-      await calendar.createEventNoConflictCheck(settings.calendarId, calendarEvent);
+      await calendarWithInvites.createEventNoConflictCheck(settings.calendarId, calendarEvent);
     }
 
     // Invalidate caches after signup
