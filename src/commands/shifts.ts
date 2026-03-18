@@ -183,33 +183,20 @@ function formatAuditTimestamp(): string {
 
 function parseShiftSignups(description: string): ShiftSignup[] {
   const signups: ShiftSignup[] = [];
+  const cancelled = new Set<string>();
   if (!description) return signups;
   
-  const lines = description.split('\n');
-  const cancelledUsernames = new Set<string>();
-
-  for (const line of lines) {
-    // Old format: signup: discord:id:username(:email)
-    const oldMatch = line.match(/^signup:\s*discord:(\d+):([^:\n]+)(?::(.+))?$/);
-    if (oldMatch) {
-      signups.push({ discordUserId: oldMatch[1], username: oldMatch[2], email: oldMatch[3] || undefined });
+  for (const line of description.split('\n')) {
+    const signup = line.match(/@(\S+) signed up \(discord:(\d+)\)/);
+    if (signup) {
+      signups.push({ discordUserId: signup[2], username: signup[1] });
       continue;
     }
-    // New format: DD/MM/YYYY HH:MM: @username signed up (discord:id)
-    const newMatch = line.match(/@(\S+) signed up \(discord:(\d+)\)/);
-    if (newMatch) {
-      signups.push({ discordUserId: newMatch[2], username: newMatch[1] });
-      continue;
-    }
-    // Cancellation: DD/MM/YYYY HH:MM: @username cancelled
-    const cancelMatch = line.match(/@(\S+) cancelled/);
-    if (cancelMatch) cancelledUsernames.add(cancelMatch[1]);
-    // Old cancel format
-    const oldCancel = line.match(/cancelled:\s*discord:(\d+):(\S+)/);
-    if (oldCancel) cancelledUsernames.add(oldCancel[2]);
+    const cancel = line.match(/@(\S+) cancelled/);
+    if (cancel) cancelled.add(cancel[1]);
   }
 
-  return signups.filter(s => !cancelledUsernames.has(s.username));
+  return signups.filter(s => !cancelled.has(s.username));
 }
 
 function appendToDescription(existingDescription: string, line: string): string {
