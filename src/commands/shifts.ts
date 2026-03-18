@@ -15,7 +15,7 @@ import {
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { getRoomEventsCache, invalidateRoomEventsCache, ensureRoomEventsCacheReady } from "../lib/room-events-cache.ts";
-import { getUserEmail, setUserEmail } from "../lib/user-emails.ts";
+import { getUserEmail, saveUser, getUser, getUserByEmail } from "../lib/user-emails.ts";
 
 import { mintTokens } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
@@ -187,12 +187,20 @@ function parseShiftSignups(description: string): ShiftSignup[] {
   if (!description) return signups;
   
   for (const line of description.split('\n')) {
-    const signup = line.match(/@(\S+) signed up \(discord:(\d+)\)/);
+    // Format: "DisplayName <@username> signed up (discord:id)"
+    const signup = line.match(/<@(\S+?)> signed up(?: \(discord:(\d+)\))?/);
     if (signup) {
-      signups.push({ discordUserId: signup[2], username: signup[1] });
+      signups.push({ discordUserId: signup[2] || '', username: signup[1] });
       continue;
     }
-    const cancel = line.match(/@(\S+) cancelled/);
+    // Legacy: "@username signed up (discord:id)"
+    const legacy = line.match(/@(\S+) signed up \(discord:(\d+)\)/);
+    if (legacy) {
+      signups.push({ discordUserId: legacy[2], username: legacy[1] });
+      continue;
+    }
+    // Cancellation
+    const cancel = line.match(/<@(\S+?)> cancelled/) || line.match(/@(\S+) cancelled/);
     if (cancel) cancelled.add(cancel[1]);
   }
 
@@ -760,7 +768,7 @@ export async function handleShiftsSelect(
     });
 
     try {
-      await cancelShift(shiftToCancel, userId, settings);
+      await cancelShift(shiftToCancel, userId, guildId, settings);
       
       await interaction.editReply({
         content: "✅ Shift cancelled successfully.",
@@ -971,9 +979,14 @@ export async function handleShiftsModal(
     state.step = "confirm";
     shiftsStates.set(userId, state);
 
-    // Save email for future use
+    // Save user info
     if (email) {
-      await setUserEmail(guildId, userId, email);
+      await saveUser(guildId, {
+        discordUserId: userId,
+        username: interaction.user.username,
+        displayName: interaction.user.displayName || interaction.user.globalName || interaction.user.username,
+        email,
+      });
     }
 
     await interaction.deferUpdate();
@@ -1209,6 +1222,17 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
              Math.abs(eventEnd.getTime() - endDateTime.getTime()) < 60000;
     });
 
+    const displayName = interaction.user.displayName || interaction.user.globalName || interaction.user.username;
+    const auditName = `${displayName} <@${interaction.user.username}>`;
+    
+    // Save/update user info on every signup
+    saveUser(interaction.guildId!, {
+      discordUserId: userId,
+      username: interaction.user.username,
+      displayName,
+      email: state.email,
+    }).catch(err => console.error("[shifts] Failed to save user:", err));
+    
     const newSignup: ShiftSignup = {
       discordUserId: userId,
       username: interaction.user.username,
@@ -1237,7 +1261,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
       
       // Append signup (single audit line, never overwrite existing description)
       let desc = existingEvent.description || "";
-      desc = appendToDescription(desc, `${formatAuditTimestamp()}: @${newSignup.username} signed up (discord:${userId})`);
+      desc = appendToDescription(desc, `${formatAuditTimestamp()}: ${auditName} signed up (discord:${userId})`);
       
       const updateData: any = { description: desc };
       if (state.email) {
@@ -1248,7 +1272,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
     } else {
       // Create new event
       const eventTitle = `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
-      const description = `${formatAuditTimestamp()}: @${newSignup.username} signed up (discord:${userId})`;
+      const description = `${formatAuditTimestamp()}: ${auditName} signed up (discord:${userId})`;
       
       const calendarEvent: any = {
         summary: eventTitle,
@@ -1296,7 +1320,7 @@ Your shift has been added to the calendar. Thank you for helping take care of ou
 }
 
 // Cancel shift
-async function cancelShift(shiftEvent: CalendarEvent, userId: string, settings: ShiftsSettings) {
+async function cancelShift(shiftEvent: CalendarEvent, userId: string, guildId: string, settings: ShiftsSettings) {
   const calendar = new GoogleCalendarClient();
   
   const signups = parseShiftSignups(shiftEvent.description || "");
@@ -1306,9 +1330,13 @@ async function cancelShift(shiftEvent: CalendarEvent, userId: string, settings: 
     throw new Error("You're not signed up for this shift");
   }
   
+  // Build human-readable name for audit trail
+  const user = getUser(guildId, userId);
+  const auditName = user ? `${user.displayName} <@${user.username}>` : `<@${userSignup.username}>`;
+  
   // Append cancellation (single audit line)
   let desc = shiftEvent.description || "";
-  desc = appendToDescription(desc, `${formatAuditTimestamp()}: @${userSignup.username} cancelled`);
+  desc = appendToDescription(desc, `${formatAuditTimestamp()}: ${auditName} cancelled`);
   
   const remainingSignups = signups.filter(s => s.discordUserId !== userId);
   
@@ -1395,8 +1423,12 @@ async function processReward(interaction: ButtonInteraction, userId: string, gui
       let desc = state.selectedRewardEvent!.description || "";
       
       const ts = formatAuditTimestamp();
+      const minterUser = getUser(guildId, userId);
+      const minterName = minterUser ? `${minterUser.displayName} <@${minterUser.username}>` : `<@${interaction.user.username}>`;
       for (const result of successfulRewards) {
-        desc = appendToDescription(desc, `${ts}: @${interaction.user.username} minted ${result.amount} ${settings.rewardTokenSymbol} for @${result.username} (tx: ${result.hash})`);
+        const recipientUser = getUser(guildId, result.userId);
+        const recipientName = recipientUser ? `${recipientUser.displayName} <@${recipientUser.username}>` : `<@${result.username}>`;
+        desc = appendToDescription(desc, `${ts}: ${minterName} minted ${result.amount} ${settings.rewardTokenSymbol} for ${recipientName} (tx: ${result.hash})`);
       }
       
       await calendar.updateEvent(settings.calendarId, state.selectedRewardEvent!.id!, {

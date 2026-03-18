@@ -4,7 +4,7 @@
  */
 
 import { GoogleCalendarClient, CalendarEvent } from "./googlecalendar.ts";
-import { getUserEmail } from "./user-emails.ts";
+import { getUserByEmail } from "./user-emails.ts";
 
 function formatAuditTimestamp(): string {
   const now = new Date();
@@ -28,7 +28,6 @@ export function startShiftsDeclinePoller(calendarId: string, guildId: string) {
   
   console.log("[shifts-poller] Starting decline poller (1h interval)");
   
-  // Run after 30s delay (let startup finish), then hourly
   setTimeout(() => {
     checkDeclines(calendarId, guildId).catch(err => 
       console.error("[shifts-poller] Error:", err)
@@ -74,30 +73,22 @@ async function checkDeclines(calendarId: string, guildId: string) {
     );
     if (declinedAttendees.length === 0) continue;
     
-    // Parse signups to match emails to usernames
-    const signups: { username: string; discordUserId: string }[] = [];
-    for (const line of event.description.split('\n')) {
-      const m = line.match(/@(\S+) signed up \(discord:(\d+)\)/);
-      if (m) signups.push({ username: m[1], discordUserId: m[2] });
-    }
-    
     let desc = event.description;
     let updated = false;
     
     for (const attendee of declinedAttendees) {
       const email = attendee.email;
       
-      // Find which signup this email belongs to
-      const signup = signups.find(s => getUserEmail(guildId, s.discordUserId) === email);
-      const displayName = signup ? `@${signup.username}` : email;
+      // Look up user by email for human-readable name
+      const user = getUserByEmail(guildId, email);
+      const auditName = user ? `${user.displayName} <@${user.username}>` : email;
       
       // Check if already recorded
-      const declineTag = `${displayName} declined`;
-      if (desc.includes(declineTag)) continue;
+      if (desc.includes(`${auditName} declined`)) continue;
       
-      desc = appendToDescription(desc, `${formatAuditTimestamp()}: ${displayName} declined (via calendar)`);
+      desc = appendToDescription(desc, `${formatAuditTimestamp()}: ${auditName} declined (via calendar)`);
       updated = true;
-      console.log(`[shifts-poller] Recorded decline: ${displayName} on event ${event.summary}`);
+      console.log(`[shifts-poller] Recorded decline: ${auditName} on event ${event.summary}`);
     }
     
     if (updated) {
