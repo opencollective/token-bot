@@ -1068,30 +1068,31 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
     const roomEvents = slotRoomEvents.map(e => `${e.room}: ${e.title}`);
     
     let label = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
-    let description = `${reward} ${settings.rewardTokenSymbol}`;
+    let description = '';
     
     if (isFull) {
       label = `🔴 ${label} (full)`;
     } else if (signups.length > 0) {
       label = `🟡 ${label} (${spotsLeft}/${settings.maxSignupsPerSlot} spots)`;
-      description += ` · with ${signups.map(s => s.username).join(", ")}`;
+      description = `with ${signups.map(s => s.username).join(", ")}`;
     } else {
       label = `🟢 ${label} (${settings.maxSignupsPerSlot} spots)`;
     }
     
     if (roomEvents.length > 0) {
-      description += ` · ${roomEvents.length} room event${roomEvents.length > 1 ? 's' : ''}`;
+      const eventsSuffix = `${roomEvents.length} room event${roomEvents.length > 1 ? 's' : ''}`;
+      description = description ? `${description} · ${eventsSuffix}` : eventsSuffix;
     }
     
     // Add slot details to content
-    content += `**${formatTime(slot.start)} - ${formatTime(slot.end)}** (${durationHours}h)\n`;
+    content += `**${formatTime(slot.start)} - ${formatTime(slot.end)}**`;
     if (signups.length > 0) {
-      content += `  👥 Signed up: ${signups.map(s => s.username).join(", ")}\n`;
+      content += ` — ${signups.map(s => s.username).join(", ")}`;
     }
     if (roomEvents.length > 0) {
-      content += `  🏢 Events: ${roomEvents.join(", ")}\n`;
+      content += ` · ${roomEvents.length} event${roomEvents.length > 1 ? 's' : ''}`;
     }
-    content += `  💰 Earn ${reward} ${settings.rewardTokenSymbol}\n\n`;
+    content += `\n`;
     
     // Only add non-full slots to dropdown
     if (!isFull) {
