@@ -61,8 +61,109 @@ interface CalendarEvent {
 const ROOM_CALENDARS = {
   ostrom: "c_72861dcac23416de3fe708f857f5c74f2e2578fe7da94dcee0a55922734417ef",
   satoshi: "c_fce54b1bddc311791897f8a8723d0b10d7e3b69ea520baee0d267ce9d3266068",
+  mushroom: "c_928d7621e14426ed508df906a7881dafc079757b44cea074d2434b405f86df7a@group.calendar.google.com",
   coworking: "c_46409c48af2476b038fed585c06edd93133b5393d8a2b72b3ca98445a3372860"
 };
+
+// Cache for calendar data
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const shiftDatesCache = new Map<string, CacheEntry<{ label: string; value: string }[]>>();
+const roomEventCountsCache = new Map<string, CacheEntry<Map<string, number>>>();
+
+function invalidateShiftCaches() {
+  shiftDatesCache.clear();
+  roomEventCountsCache.clear();
+}
+
+async function getPastDatesWithShifts(calendarId: string): Promise<{ label: string; value: string }[]> {
+  const cacheKey = calendarId;
+  const cached = shiftDatesCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const calendar = new GoogleCalendarClient();
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  const monthAgo = new Date();
+  monthAgo.setDate(monthAgo.getDate() - 30);
+  monthAgo.setHours(0, 0, 0, 0);
+
+  try {
+    const events = await calendar.listEvents(calendarId, monthAgo, today);
+    const datesWithShifts = new Map<string, Date>();
+
+    for (const event of events) {
+      const eventDate = new Date(event.start.dateTime);
+      const dateValue = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}-${String(eventDate.getDate()).padStart(2, '0')}`;
+      if (!datesWithShifts.has(dateValue)) {
+        const d = new Date(eventDate);
+        d.setHours(0, 0, 0, 0);
+        datesWithShifts.set(dateValue, d);
+      }
+    }
+
+    // Sort descending (most recent first)
+    const sorted = Array.from(datesWithShifts.entries())
+      .sort((a, b) => b[1].getTime() - a[1].getTime())
+      .slice(0, 25);
+
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+
+    const options = sorted.map(([value, date]) => {
+      const isToday = date.getTime() === todayDate.getTime();
+      return {
+        label: isToday ? "Today" : formatShortDate(date),
+        value,
+      };
+    });
+
+    shiftDatesCache.set(cacheKey, { data: options, timestamp: Date.now() });
+    return options;
+  } catch (error) {
+    console.error("Error fetching past shift dates:", error);
+    return [];
+  }
+}
+
+async function getRoomEventCounts(): Promise<Map<string, number>> {
+  const cacheKey = "room_events";
+  const cached = roomEventCountsCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const calendar = new GoogleCalendarClient();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const fourWeeksOut = new Date(today);
+  fourWeeksOut.setDate(today.getDate() + 28);
+  fourWeeksOut.setHours(23, 59, 59, 999);
+
+  const counts = new Map<string, number>();
+
+  for (const [_roomName, calendarId] of Object.entries(ROOM_CALENDARS)) {
+    try {
+      const events = await calendar.listEvents(calendarId, today, fourWeeksOut);
+      for (const event of events) {
+        const eventDate = new Date(event.start.dateTime);
+        const dateKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}-${String(eventDate.getDate()).padStart(2, '0')}`;
+        counts.set(dateKey, (counts.get(dateKey) || 0) + 1);
+      }
+    } catch (error) {
+      console.error(`Error fetching room events for ${_roomName}:`, error);
+    }
+  }
+
+  roomEventCountsCache.set(cacheKey, { data: counts, timestamp: Date.now() });
+  return counts;
+}
 
 export const shiftsStates = new Map<string, ShiftsState>();
 
@@ -93,52 +194,9 @@ function formatTime(timeStr: string): string {
   return `${displayHour}:${minutes}${ampm}`;
 }
 
-function getDateOptions(): { label: string; value: string; date: Date }[] {
-  const options: { label: string; value: string; date: Date }[] = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  for (let i = 0; i < 7; i++) {
-    const date = new Date(today);
-    date.setDate(today.getDate() + i);
-    
-    let label: string;
-    if (i === 0) {
-      label = "Today";
-    } else if (i === 1) {
-      label = "Tomorrow";
-    } else {
-      label = formatShortDate(date);
-    }
-    
-    const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    options.push({ label, value, date });
-  }
-  
-  return options;
-}
+// getDateOptions removed — replaced by dropdown with room event counts
 
-function getPastDateOptions(): { label: string; value: string; date: Date }[] {
-  const options: { label: string; value: string; date: Date }[] = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  // Today first
-  const todayValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  options.push({ label: "Today", value: todayValue, date: new Date(today) });
-  
-  // Past 7 days
-  for (let i = 1; i <= 7; i++) {
-    const date = new Date(today);
-    date.setDate(today.getDate() - i);
-    
-    const label = formatShortDate(date);
-    const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    options.push({ label, value, date });
-  }
-  
-  return options;
-}
+// getPastDateOptions removed — replaced by getPastDatesWithShifts()
 
 function parseDateValue(value: string): Date {
   const [year, month, day] = value.split('-').map(Number);
@@ -260,6 +318,86 @@ async function updateMessage(interaction: Interaction, data: { content: string; 
   }
 }
 
+// Build the main shifts view content and components
+async function buildMainView(userId: string, settings: ShiftsSettings, isMaster: boolean): Promise<{ content: string; components: ActionRowBuilder<ButtonBuilder>[] }> {
+  const userShifts = await getUserUpcomingShifts(settings.calendarId, userId);
+
+  let content = `🔄 **Caretaking Shifts**\n\n`;
+  content += `${settings.description}\n`;
+  content += `💰 ${settings.reward}\n\n`;
+
+  // Show user's upcoming shifts
+  if (userShifts.length > 0) {
+    content += `**Your upcoming shifts:**\n`;
+    for (const shift of userShifts) {
+      const startTime = new Date(shift.start.dateTime);
+      const endTime = new Date(shift.end.dateTime);
+      const dateStr = formatDate(startTime);
+      const timeStr = `${formatTime(startTime.toTimeString().substring(0,5))} - ${formatTime(endTime.toTimeString().substring(0,5))}`;
+
+      const signups = parseShiftSignups(shift.description || "");
+      const otherSignups = signups.filter(s => s.discordUserId !== userId);
+      const othersText = otherSignups.length > 0 ? ` (with ${otherSignups.map(s => s.username).join(", ")})` : "";
+
+      content += `• ${dateStr} ${timeStr}${othersText}\n`;
+    }
+    content += `\n`;
+  } else {
+    content += `**Your upcoming shifts:** None\n\n`;
+  }
+
+  // Show all shifts for masters
+  if (isMaster) {
+    const allShifts = await getAllUpcomingShifts(settings.calendarId);
+    if (allShifts.length > 0) {
+      content += `**All upcoming shifts (next 7 days):**\n`;
+      for (const shift of allShifts) {
+        const startTime = new Date(shift.start.dateTime);
+        const endTime = new Date(shift.end.dateTime);
+        const dateStr = formatShortDate(startTime);
+        const timeStr = `${formatTime(startTime.toTimeString().substring(0,5))}-${formatTime(endTime.toTimeString().substring(0,5))}`;
+
+        const signups = parseShiftSignups(shift.description || "");
+        const signupsText = signups.length > 0 ? ` (${signups.map(s => s.username).join(", ")})` : "";
+
+        content += `• ${dateStr} ${timeStr}${signupsText}\n`;
+      }
+      content += `\n`;
+    }
+  }
+
+  // Build buttons
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("shifts_signup")
+      .setLabel("Sign up for a shift")
+      .setStyle(ButtonStyle.Primary),
+  );
+
+  if (userShifts.length > 0) {
+    row1.addComponents(
+      new ButtonBuilder()
+        .setCustomId("shifts_cancel")
+        .setLabel("Cancel a shift")
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
+
+  const components = [row1];
+
+  if (isMaster) {
+    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("shifts_reward")
+        .setLabel("Reward shifts")
+        .setStyle(ButtonStyle.Success),
+    );
+    components.push(row2);
+  }
+
+  return { content, components };
+}
+
 // Main command handler
 export async function handleShiftsCommand(
   interaction: Interaction,
@@ -291,81 +429,7 @@ export async function handleShiftsCommand(
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
-    // Get user's upcoming shifts
-    const userShifts = await getUserUpcomingShifts(settings.calendarId, userId);
-    
-    let content = `🔄 **Caretaking Shifts**\n\n`;
-    content += `${settings.description}\n`;
-    content += `💰 ${settings.reward}\n\n`;
-
-    // Show user's upcoming shifts
-    if (userShifts.length > 0) {
-      content += `**Your upcoming shifts:**\n`;
-      for (const shift of userShifts) {
-        const startTime = new Date(shift.start.dateTime);
-        const endTime = new Date(shift.end.dateTime);
-        const dateStr = formatDate(startTime);
-        const timeStr = `${formatTime(startTime.toTimeString().substring(0,5))} - ${formatTime(endTime.toTimeString().substring(0,5))}`;
-        
-        const signups = parseShiftSignups(shift.description || "");
-        const otherSignups = signups.filter(s => s.discordUserId !== userId);
-        const othersText = otherSignups.length > 0 ? ` (with ${otherSignups.map(s => s.username).join(", ")})` : "";
-        
-        content += `• ${dateStr} ${timeStr}${othersText}\n`;
-      }
-      content += `\n`;
-    } else {
-      content += `**Your upcoming shifts:** None\n\n`;
-    }
-
-    // Show all shifts for masters
-    if (isMaster) {
-      const allShifts = await getAllUpcomingShifts(settings.calendarId);
-      if (allShifts.length > 0) {
-        content += `**All upcoming shifts (next 7 days):**\n`;
-        for (const shift of allShifts) {
-          const startTime = new Date(shift.start.dateTime);
-          const endTime = new Date(shift.end.dateTime);
-          const dateStr = formatShortDate(startTime);
-          const timeStr = `${formatTime(startTime.toTimeString().substring(0,5))}-${formatTime(endTime.toTimeString().substring(0,5))}`;
-          
-          const signups = parseShiftSignups(shift.description || "");
-          const signupsText = signups.length > 0 ? ` (${signups.map(s => s.username).join(", ")})` : "";
-          
-          content += `• ${dateStr} ${timeStr}${signupsText}\n`;
-        }
-        content += `\n`;
-      }
-    }
-
-    // Build buttons
-    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId("shifts_signup")
-        .setLabel("Sign up for a shift")
-        .setStyle(ButtonStyle.Primary),
-    );
-
-    if (userShifts.length > 0) {
-      row1.addComponents(
-        new ButtonBuilder()
-          .setCustomId("shifts_cancel")
-          .setLabel("Cancel a shift")
-          .setStyle(ButtonStyle.Secondary),
-      );
-    }
-
-    const components = [row1];
-
-    if (isMaster) {
-      const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId("shifts_reward")
-          .setLabel("Reward shifts")
-          .setStyle(ButtonStyle.Success),
-      );
-      components.push(row2);
-    }
+    const { content, components } = await buildMainView(userId, settings, isMaster);
 
     await interaction.editReply({
       content,
@@ -413,37 +477,32 @@ export async function handleShiftsButton(
     state.step = "select_date";
     shiftsStates.set(userId, state);
 
-    const dateOptions = getDateOptions();
-    const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+    // Build dropdown with next 28 days + room event counts
+    const roomCounts = await getRoomEventCounts();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    // First row: Today, Tomorrow  
-    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`shifts_date_${dateOptions[0].value}`)
-        .setLabel(dateOptions[0].label)
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`shifts_date_${dateOptions[1].value}`)
-        .setLabel(dateOptions[1].label)
-        .setStyle(ButtonStyle.Secondary),
-    );
-    rows.push(row1);
+    const selectOptions: { label: string; value: string }[] = [];
+    for (let i = 0; i < 28; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + i);
+      const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const count = roomCounts.get(value) || 0;
+      const countText = count > 0 ? `${count} event${count > 1 ? 's' : ''}` : 'no events';
 
-    // Second row: Next few days
-    if (dateOptions.length > 2) {
-      const row2 = new ActionRowBuilder<ButtonBuilder>();
-      for (let i = 2; i < Math.min(5, dateOptions.length); i++) {
-        row2.addComponents(
-          new ButtonBuilder()
-            .setCustomId(`shifts_date_${dateOptions[i].value}`)
-            .setLabel(dateOptions[i].label)
-            .setStyle(ButtonStyle.Secondary),
-        );
-      }
-      rows.push(row2);
+      let label: string;
+      if (i === 0) label = `Today — ${countText}`;
+      else if (i === 1) label = `Tomorrow — ${countText}`;
+      else label = `${formatShortDate(date)} — ${countText}`;
+
+      selectOptions.push({ label, value });
     }
 
-    // Navigation
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId("shifts_signup_date_select")
+      .setPlaceholder("Select a date for your shift...")
+      .addOptions(selectOptions.slice(0, 25));
+
     const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId("shifts_back_main")
@@ -454,11 +513,13 @@ export async function handleShiftsButton(
         .setLabel("Cancel")
         .setStyle(ButtonStyle.Danger),
     );
-    rows.push(navRow);
 
     await interaction.update({
       content: "📅 **Select a date for your shift:**",
-      components: rows,
+      components: [
+        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu),
+        navRow,
+      ],
     });
     return;
   }
@@ -532,11 +593,22 @@ export async function handleShiftsButton(
     state.step = "reward_select_date";
     shiftsStates.set(userId, state);
 
-    const dateOptions = getPastDateOptions();
-    const selectOptions = dateOptions.slice(0, 25).map(d => ({
-      label: d.label,
-      value: d.value,
-    }));
+    const selectOptions = await getPastDatesWithShifts(settings.calendarId);
+
+    if (selectOptions.length === 0) {
+      await interaction.update({
+        content: "⚠️ No shifts found in the past month.",
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId("shifts_back_main")
+              .setLabel("← Back")
+              .setStyle(ButtonStyle.Secondary),
+          )
+        ],
+      });
+      return;
+    }
 
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId("shifts_reward_date_select")
@@ -613,8 +685,25 @@ export async function handleShiftsButton(
 
   // Navigation buttons
   if (customId === "shifts_back_main") {
-    // Go back to main shifts view
-    await handleShiftsCommand(interaction, userId, guildId);
+    // Re-initialize state for main view
+    const member = interaction.member as GuildMember;
+    const isMaster = isShiftsMaster(member, settings);
+    shiftsStates.set(userId, {
+      step: "main",
+      guildId,
+      isShiftsMaster: isMaster
+    });
+
+    try {
+      const { content, components } = await buildMainView(userId, settings, isMaster);
+      await interaction.update({ content, components });
+    } catch (error) {
+      console.error("Error returning to main view:", error);
+      await interaction.update({
+        content: "⚠️ Error loading shifts data.",
+        components: [],
+      });
+    }
     return;
   }
 
@@ -653,6 +742,19 @@ export async function handleShiftsSelect(
       content: "⚠️ Shifts settings not found.",
       components: [],
     });
+    return;
+  }
+
+  // Signup date selection (dropdown)
+  if (customId === "shifts_signup_date_select") {
+    const dateValue = interaction.values[0];
+    const selectedDate = parseDateValue(dateValue);
+
+    state.selectedDate = selectedDate;
+    state.step = "select_slot";
+    shiftsStates.set(userId, state);
+
+    await showSlotSelection(interaction, userId, settings, selectedDate);
     return;
   }
 
@@ -1071,6 +1173,9 @@ async function processSignup(interaction: Interaction, userId: string, settings:
       
       await calendar.createEvent(settings.calendarId, calendarEvent);
     }
+
+    // Invalidate caches after signup
+    invalidateShiftCaches();
 
     await interaction.editReply({
       content: `✅ **Shift signup confirmed!**
