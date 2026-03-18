@@ -1039,14 +1039,41 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
   const shiftEvents = await getShiftEvents(settings.calendarId, date);
   const cache = getRoomEventsCache();
   
-  let content = `🕐 **Select a time slot for ${formatDate(date)}:**\n\n`;
+  // Collect all room events for this day
+  const allDayRoomEvents: { start: string; end: string; title: string; room: string }[] = [];
+  for (const slot of settings.slots) {
+    const slotRoomEvents = cache.getEventsForSlot(date, slot.start, slot.end);
+    for (const e of slotRoomEvents) {
+      // Dedupe by title+room (events can span multiple slots)
+      if (!allDayRoomEvents.some(x => x.title === e.title && x.room === e.room)) {
+        const eventStart = new Date(e.start);
+        const eventEnd = new Date(e.end);
+        allDayRoomEvents.push({
+          start: eventStart.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: settings.timezone }).replace(':00', ''),
+          end: eventEnd.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: settings.timezone }).replace(':00', ''),
+          title: e.title,
+          room: e.room,
+        });
+      }
+    }
+  }
+
+  let content = `🕐 **Shifts for ${formatDate(date)}**\n\n`;
+  
+  if (allDayRoomEvents.length > 0) {
+    for (const e of allDayRoomEvents) {
+      content += `${e.start}-${e.end}: ${e.title} (${e.room})\n`;
+    }
+  } else {
+    content += `No booking that day (yet)\n`;
+  }
+  content += `\n`;
   
   const selectOptions: { label: string; value: string; description?: string }[] = [];
   
   for (let i = 0; i < settings.slots.length; i++) {
     const slot = settings.slots[i];
     
-    // Check existing signups
     const slotStart = createDateTime(date, slot.start, settings.timezone);
     const slotEnd = createDateTime(date, slot.end, settings.timezone);
     
@@ -1060,12 +1087,6 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
     const signups = existingEvent ? parseShiftSignups(existingEvent.description || "") : [];
     const spotsLeft = settings.maxSignupsPerSlot - signups.length;
     const isFull = spotsLeft <= 0;
-    const durationHours = parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0]);
-    const reward = durationHours * settings.rewardAmountPerHour;
-    
-    // Get room events for this slot from memory cache (zero API calls)
-    const slotRoomEvents = cache.getEventsForSlot(date, slot.start, slot.end);
-    const roomEventLabels = slotRoomEvents.map(e => `${e.title} (${e.room})`);
     
     let label = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
     let description = '';
@@ -1079,22 +1100,6 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
       label = `🟢 ${label} (${settings.maxSignupsPerSlot} spots)`;
     }
     
-    if (roomEventLabels.length > 0) {
-      const eventsSuffix = `${roomEventLabels.length} event${roomEventLabels.length > 1 ? 's' : ''}`;
-      description = description ? `${description} · ${eventsSuffix}` : eventsSuffix;
-    }
-    
-    // Add slot details to content
-    content += `**${formatTime(slot.start)} - ${formatTime(slot.end)}**`;
-    if (signups.length > 0) {
-      content += ` — ${signups.map(s => s.username).join(", ")}`;
-    }
-    if (roomEventLabels.length > 0) {
-      content += ` · ${roomEventLabels.length} event${roomEventLabels.length > 1 ? 's' : ''}: ${roomEventLabels.join(", ")}`;
-    }
-    content += `\n`;
-    
-    // Only add non-full slots to dropdown
     if (!isFull) {
       selectOptions.push({
         label: label.substring(0, 100),
@@ -1109,7 +1114,7 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
   if (selectOptions.length > 0) {
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId("shifts_slot_select")
-      .setPlaceholder("Select a time slot...")
+      .setPlaceholder("Select a shift")
       .addOptions(selectOptions.slice(0, 25));
     
     components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu));
