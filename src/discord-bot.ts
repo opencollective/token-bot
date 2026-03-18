@@ -215,7 +215,9 @@ async function initRoomEventsCacheFromProducts() {
   const calIdToRoom = new Map<string, string>();
 
   try {
+    const entries: string[] = [];
     for await (const guildEntry of Deno.readDir(dataDir)) {
+      entries.push(`${guildEntry.name} (${guildEntry.isDirectory ? 'dir' : 'file'})`);
       if (!guildEntry.isDirectory) continue;
       const productsPath = `${dataDir}/${guildEntry.name}/products.json`;
       try {
@@ -226,13 +228,13 @@ async function initRoomEventsCacheFromProducts() {
           if (product.calendarId) {
             const name = product.name || product.slug || "unknown";
             calIdToRoom.set(product.calendarId, name);
-            console.log(`  📅 ${name} (type=${product.type}): ${product.calendarId.substring(0, 20)}...`);
           }
         }
-      } catch {
-        // No products.json for this guild
+      } catch (err) {
+        console.log(`[room-events-cache] Skipped ${productsPath}: ${(err as Error).message}`);
       }
     }
+    console.log(`[room-events-cache] Data dir ${dataDir} contents: [${entries.join(', ')}]`);
   } catch (error) {
     console.error(`[room-events-cache] Could not read data dir ${dataDir}:`, error);
   }
