@@ -1,12 +1,14 @@
 import {
   ActionRowBuilder,
   ButtonBuilder,
+  ButtonInteraction,
   ButtonStyle,
   GuildMember,
   Interaction,
   MessageFlags,
   ModalBuilder,
   StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
@@ -1091,7 +1093,7 @@ async function showSlotSelection(interaction: Interaction, userId: string, setti
 }
 
 // Process signup
-async function processSignup(interaction: Interaction, userId: string, settings: ShiftsSettings, state: ShiftsState) {
+async function processSignup(interaction: ButtonInteraction, userId: string, settings: ShiftsSettings, state: ShiftsState) {
   await interaction.update({
     content: "⏳ Creating your shift signup...",
     components: [],
@@ -1219,21 +1221,14 @@ async function cancelShift(shiftEvent: CalendarEvent, userId: string, settings: 
       .map(s => `signup: discord:${s.discordUserId}:${s.username}${s.email ? ':' + s.email : ''}`)
       .join('\n');
     
-    // Update attendees if the user had an email
-    let updatedAttendees = shiftEvent.attendees || [];
-    if (userSignup.email) {
-      updatedAttendees = updatedAttendees.filter(a => a.email !== userSignup.email);
-    }
-    
     await calendar.updateEvent(settings.calendarId, shiftEvent.id!, {
       description: updatedDescription,
-      attendees: updatedAttendees
     });
   }
 }
 
 // Process reward
-async function processReward(interaction: Interaction, userId: string, guildId: string, settings: ShiftsSettings, state: ShiftsState) {
+async function processReward(interaction: ButtonInteraction, userId: string, guildId: string, settings: ShiftsSettings, state: ShiftsState) {
   await interaction.update({
     content: "⏳ Processing rewards...",
     components: [],
@@ -1258,6 +1253,10 @@ async function processReward(interaction: Interaction, userId: string, guildId: 
         const amount = state.rewardAmounts![participantUserId];
         const recipientAddress = await getAccountAddressForToken(participantUserId, token);
         
+        if (!recipientAddress) {
+          throw new Error("No wallet address found");
+        }
+
         const hash = await mintTokens(
           token.chain as any,
           token.address,
@@ -1274,7 +1273,7 @@ async function processReward(interaction: Interaction, userId: string, guildId: 
           username: signup?.username || "Unknown",
           amount,
           success: true,
-          hash
+          hash: hash ?? undefined
         });
 
       } catch (error) {
