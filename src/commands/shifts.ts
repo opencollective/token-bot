@@ -1212,6 +1212,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
       const calendarEvent: any = {
         summary: eventTitle,
         description,
+        location: "Commons Hub Brussels, Rue de la Madeleine 51, 1000 Brussels",
         start: {
           dateTime: startDateTime.toISOString(),
           timeZone: settings.timezone,
