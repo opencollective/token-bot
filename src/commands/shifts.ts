@@ -1065,7 +1065,7 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
     
     // Get room events for this slot from memory cache (zero API calls)
     const slotRoomEvents = cache.getEventsForSlot(date, slot.start, slot.end);
-    const roomEvents = slotRoomEvents.map(e => `${e.room}: ${e.title}`);
+    const roomEventLabels = slotRoomEvents.map(e => `${e.title} (${e.room})`);
     
     let label = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
     let description = '';
@@ -1079,8 +1079,8 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
       label = `🟢 ${label} (${settings.maxSignupsPerSlot} spots)`;
     }
     
-    if (roomEvents.length > 0) {
-      const eventsSuffix = `${roomEvents.length} room event${roomEvents.length > 1 ? 's' : ''}`;
+    if (roomEventLabels.length > 0) {
+      const eventsSuffix = `${roomEventLabels.length} event${roomEventLabels.length > 1 ? 's' : ''}`;
       description = description ? `${description} · ${eventsSuffix}` : eventsSuffix;
     }
     
@@ -1089,8 +1089,8 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
     if (signups.length > 0) {
       content += ` — ${signups.map(s => s.username).join(", ")}`;
     }
-    if (roomEvents.length > 0) {
-      content += ` · ${roomEvents.length} event${roomEvents.length > 1 ? 's' : ''}`;
+    if (roomEventLabels.length > 0) {
+      content += ` · ${roomEventLabels.length} event${roomEventLabels.length > 1 ? 's' : ''}: ${roomEventLabels.join(", ")}`;
     }
     content += `\n`;
     
