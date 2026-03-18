@@ -16,4 +16,4 @@ COPY . .
 # API server port
 EXPOSE 3000
 
-CMD ["deno", "task", "start"]
+ENTRYPOINT ["sh", "./entrypoint.sh"]
