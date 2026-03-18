@@ -262,26 +262,55 @@ function updateEventDescription(existingDescription: string = "", newSignup: Shi
   return lines.join('\n');
 }
 
-async function checkRoomEvents(date: Date, slotStart: string, slotEnd: string): Promise<string[]> {
-  const events: string[] = [];
+// Prefetch all room events for a whole day (one API call per calendar, in parallel)
+async function fetchAllRoomEventsForDay(date: Date): Promise<{ roomName: string; event: CalendarEvent }[]> {
   const calendar = new GoogleCalendarClient();
-  
-  const startDateTime = createDateTime(date, slotStart, "Europe/Brussels");
-  const endDateTime = createDateTime(date, slotEnd, "Europe/Brussels");
-  
-  for (const [roomName, calendarId] of Object.entries(ROOM_CALENDARS)) {
-    try {
-      const roomEvents = await calendar.listEvents(calendarId, startDateTime, endDateTime);
-      for (const event of roomEvents) {
-        if (event.summary) {
-          events.push(`${roomName}: ${event.summary}`);
-        }
+  const startOfDay = new Date(date);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(date);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const entries = Object.entries(ROOM_CALENDARS);
+  const results = await Promise.allSettled(
+    entries.map(([_, calendarId]) => calendar.listEvents(calendarId, startOfDay, endOfDay))
+  );
+
+  const allEvents: { roomName: string; event: CalendarEvent }[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === "fulfilled") {
+      for (const event of result.value) {
+        allEvents.push({ roomName: entries[i][0], event });
       }
-    } catch (error) {
-      console.error(`Error checking ${roomName} calendar:`, error);
     }
   }
-  
+  return allEvents;
+}
+
+// Filter pre-fetched room events for a specific time slot
+function getRoomEventsForSlot(
+  allRoomEvents: { roomName: string; event: CalendarEvent }[],
+  date: Date,
+  slotStart: string,
+  slotEnd: string,
+): string[] {
+  const startDateTime = createDateTime(date, slotStart, "Europe/Brussels");
+  const endDateTime = createDateTime(date, slotEnd, "Europe/Brussels");
+  const events: string[] = [];
+
+  for (const { roomName, event } of allRoomEvents) {
+    const eventStartStr = event.start.dateTime || (event.start as any).date;
+    const eventEndStr = event.end.dateTime || (event.end as any).date;
+    if (!eventStartStr) continue;
+    
+    const eventStart = new Date(eventStartStr);
+    const eventEnd = eventEndStr ? new Date(eventEndStr) : new Date(eventStart.getTime() + 3600000);
+    
+    // Overlaps if: slotStart < eventEnd AND slotEnd > eventStart
+    if (startDateTime < eventEnd && endDateTime > eventStart && event.summary) {
+      events.push(`${roomName}: ${event.summary}`);
+    }
+  }
   return events;
 }
 
@@ -782,12 +811,7 @@ export async function handleShiftsSelect(
     state.step = "select_slot";
     shiftsStates.set(userId, state);
 
-    // Show loading state immediately, then fetch slot data
-    await interaction.update({
-      content: `⏳ Loading time slots for ${formatDate(selectedDate)}...`,
-      components: [],
-    });
-    await showSlotSelectionDeferred(interaction, userId, settings, selectedDate);
+    await showSlotSelection(interaction, userId, settings, selectedDate);
     return;
   }
 
@@ -1088,7 +1112,11 @@ async function showSlotSelectionDeferred(interaction: Interaction, userId: strin
 
 // Build slot selection data (shared by immediate and deferred versions)
 async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Promise<{ content: string; components: any[] }> {
-  const shiftEvents = await getShiftEvents(settings.calendarId, date);
+  // Prefetch all data in parallel: shift events + room events for the whole day
+  const [shiftEvents, allRoomEvents] = await Promise.all([
+    getShiftEvents(settings.calendarId, date),
+    fetchAllRoomEventsForDay(date),
+  ]);
   
   let content = `🕐 **Select a time slot for ${formatDate(date)}:**\n\n`;
   
@@ -1114,8 +1142,8 @@ async function buildSlotSelectionData(settings: ShiftsSettings, date: Date): Pro
     const durationHours = parseInt(slot.end.split(':')[0]) - parseInt(slot.start.split(':')[0]);
     const reward = durationHours * settings.rewardAmountPerHour;
     
-    // Check for room events
-    const roomEvents = await checkRoomEvents(date, slot.start, slot.end);
+    // Filter pre-fetched room events for this slot (no extra API calls)
+    const roomEvents = getRoomEventsForSlot(allRoomEvents, date, slot.start, slot.end);
     
     let label = `${formatTime(slot.start)} - ${formatTime(slot.end)}`;
     let description = `${reward} ${settings.rewardTokenSymbol}`;
