@@ -852,7 +852,21 @@ export async function handleShiftsSelect(
     state.step = "reward_confirm";
     shiftsStates.set(userId, state);
 
-    const signups = parseShiftSignups(selectedEvent.description || "");
+    // Get declined attendee emails to filter them out
+    const declinedEmails = new Set(
+      (selectedEvent.attendees || [])
+        .filter((a: any) => a.responseStatus === 'declined')
+        .map((a: any) => a.email)
+    );
+    
+    const allSignups = parseShiftSignups(selectedEvent.description || "");
+    // Exclude users whose email has declined the calendar invite
+    const signups = declinedEmails.size > 0
+      ? allSignups.filter(s => {
+          const userEmail = getUserEmail(interaction.guildId!, s.discordUserId);
+          return !userEmail || !declinedEmails.has(userEmail);
+        })
+      : allSignups;
     
     if (signups.length === 0) {
       await interaction.update({
@@ -893,6 +907,14 @@ export async function handleShiftsSelect(
     
     for (const signup of signups) {
       content += `• @${signup.username}: ${rewardPerUser} ${settings.rewardTokenSymbol}\n`;
+    }
+    
+    const declinedSignups = allSignups.filter(s => !signups.some(active => active.discordUserId === s.discordUserId));
+    if (declinedSignups.length > 0) {
+      content += `\n**Excluded (declined):**\n`;
+      for (const s of declinedSignups) {
+        content += `• ~@${s.username}~\n`;
+      }
     }
 
     await interaction.update({

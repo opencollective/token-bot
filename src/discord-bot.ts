@@ -68,6 +68,7 @@ import { handleShiftsButton, handleShiftsCommand, handleShiftsModal, handleShift
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 import { initRoomEventsCache } from "./lib/room-events-cache.ts";
 import { initUserEmails } from "./lib/user-emails.ts";
+import { startShiftsDeclinePoller } from "./lib/shifts-decline-poller.ts";
 import { setDiscordClient, startApiServer } from "./api.ts";
 
 // Display server startup time and timezone
@@ -283,6 +284,23 @@ client.on(Events.ClientReady, async (readyClient) => {
   await initUserEmails().catch(err => console.error("User emails init failed:", err));
   if (calendarEnabled) {
     await initRoomEventsCacheFromProducts().catch(err => console.error("Room events cache init failed:", err));
+  }
+
+  // Start shifts decline poller for each guild
+  if (calendarEnabled) {
+    const dataDir = Deno.env.get("DATA_DIR") || "./data";
+    try {
+      for await (const entry of Deno.readDir(dataDir)) {
+        if (!entry.isDirectory) continue;
+        try {
+          const content = await Deno.readTextFile(`${dataDir}/${entry.name}/shifts-settings.json`);
+          const shiftsSettings = JSON.parse(content);
+          if (shiftsSettings.calendarId) {
+            startShiftsDeclinePoller(shiftsSettings.calendarId, entry.name);
+          }
+        } catch { /* no shifts settings for this guild */ }
+      }
+    } catch { /* DATA_DIR doesn't exist */ }
   }
 
   // Check calendar permissions in background (don't block bot startup)

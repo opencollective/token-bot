@@ -36,7 +36,7 @@ export type CalendarEvent = {
     dateTime: string;
     timeZone?: string;
   };
-  attendees?: Array<{ email: string }>;
+  attendees?: Array<{ email: string; responseStatus?: string }>;
   reminders?: {
     useDefault: boolean;
   };
