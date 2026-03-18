@@ -58,16 +58,25 @@ export class GoogleCalendarClient {
   private auth: any;
   private calendar: any;
 
-  constructor(config?: GoogleCalendarConfig) {
+  constructor(config?: GoogleCalendarConfig & { impersonateUser?: string }) {
     const keyFilePath = config?.keyFilePath ||
       Deno.env.get("GOOGLE_ACCOUNT_KEY_FILEPATH") ||
       "./google-account-key.json";
 
-    this.auth = new google.auth.GoogleAuth({
+    const impersonateUser = config?.impersonateUser ||
+      Deno.env.get("GOOGLE_CALENDAR_IMPERSONATE_USER");
+
+    const authConfig: any = {
       keyFile: keyFilePath,
       scopes: ["https://www.googleapis.com/auth/calendar"],
-    });
+    };
 
+    // Domain-Wide Delegation: impersonate a real user to send calendar invites
+    if (impersonateUser) {
+      authConfig.clientOptions = { subject: impersonateUser };
+    }
+
+    this.auth = new google.auth.GoogleAuth(authConfig);
     this.calendar = google.calendar({ version: "v3", auth: this.auth });
   }
 
