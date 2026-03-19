@@ -306,6 +306,9 @@ client.on(Events.ClientReady, async (readyClient) => {
   // Check calendar permissions in background (don't block bot startup)
   checkCalendarPermissions().catch(err => console.error("Calendar check failed:", err));
 
+  // Start background token stats cache refresh
+  startTokenStatsPoller();
+
   // Start API server and pass Discord client reference
   setDiscordClient(client);
   try {
@@ -493,8 +496,27 @@ function getExplorerUrl(chain: Chain, address: string): string {
   return `${explorers[chain]}/${address}`;
 }
 
-// Fetch token stats (supply and holders)
+// --- Token stats cache (background refresh) ---
+const tokenStatsCache = new Map<string, TokenStats>();
+const TOKEN_STATS_REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+
+function tokenStatsCacheKey(chain: Chain, address: string): string {
+  return `${chain}:${address.toLowerCase()}`;
+}
+
+// Fetch token stats (supply and holders) — uses cache, falls back to live
 async function fetchTokenStats(chain: Chain, address: string, decimals: number): Promise<TokenStats> {
+  const key = tokenStatsCacheKey(chain, address);
+  const cached = tokenStatsCache.get(key);
+  if (cached) return cached;
+
+  // Cache miss — fetch live (and populate cache)
+  const stats = await fetchTokenStatsLive(chain, address, decimals);
+  tokenStatsCache.set(key, stats);
+  return stats;
+}
+
+async function fetchTokenStatsLive(chain: Chain, address: string, decimals: number): Promise<TokenStats> {
   try {
     const [totalSupplyRaw, holders] = await Promise.all([
       getTotalSupply(chain as SupportedChain, address),
@@ -502,7 +524,6 @@ async function fetchTokenStats(chain: Chain, address: string, decimals: number):
     ]);
     
     const totalSupply = formatUnits(totalSupplyRaw, decimals);
-    // Format with thousand separators, no decimals
     const formattedSupply = Math.floor(parseFloat(totalSupply)).toLocaleString('en-US');
     
     return { totalSupply: formattedSupply, holders };
@@ -512,15 +533,42 @@ async function fetchTokenStats(chain: Chain, address: string, decimals: number):
   }
 }
 
+async function refreshTokenStatsCache(): Promise<void> {
+  const dataDir = Deno.env.get("DATA_DIR") || "./data";
+  try {
+    for await (const entry of Deno.readDir(dataDir)) {
+      if (!entry.isDirectory) continue;
+      const settings = await loadGuildSettings(entry.name);
+      if (!settings?.tokens) continue;
+      await Promise.all(
+        settings.tokens.map(async (token) => {
+          const stats = await fetchTokenStatsLive(token.chain, token.address, token.decimals);
+          tokenStatsCache.set(tokenStatsCacheKey(token.chain, token.address), stats);
+        }),
+      );
+    }
+    console.log(`📊 Token stats cache refreshed (${tokenStatsCache.size} tokens)`);
+  } catch (error) {
+    console.error("Token stats cache refresh failed:", error);
+  }
+}
+
+function startTokenStatsPoller(): void {
+  // Initial refresh
+  refreshTokenStatsCache().catch(err => console.error("Initial token stats refresh failed:", err));
+  // Periodic refresh
+  setInterval(() => {
+    refreshTokenStatsCache().catch(err => console.error("Token stats refresh failed:", err));
+  }, TOKEN_STATS_REFRESH_MS);
+}
+
 // Helper function to format token list
 async function formatTokenList(settings: GuildSettings | null, guild: any = null): Promise<string> {
   if (!settings || settings.tokens.length === 0) {
     return "No tokens configured yet.";
   }
 
-  const tokenLines: string[] = [];
-
-  for (const token of settings.tokens) {
+  const tokenLines = await Promise.all(settings.tokens.map(async (token) => {
     const explorerUrl = getExplorerUrl(token.chain, token.address);
     const stats = await fetchTokenStats(token.chain, token.address, token.decimals);
 
@@ -538,25 +586,21 @@ async function formatTokenList(settings: GuildSettings | null, guild: any = null
       tokenInfo += `\n• Transactions: <#${token.transactionsChannelId}>`;
     }
 
-    // Show minters for mintable tokens
+    // Show minters for mintable tokens (use cached role.members to avoid full guild fetch)
     if (token.mintable && token.minterRoleId && guild) {
       try {
         const role = await guild.roles.fetch(token.minterRoleId);
-        if (role) {
-          const members = await guild.members.fetch();
-          const roleMembers = members.filter((m: any) => m.roles.cache.has(token.minterRoleId));
-          if (roleMembers.size > 0) {
-            const minterNames = roleMembers.map((m: any) => `@${m.displayName}`).join(", ");
-            tokenInfo += `\n• Minters: ${minterNames}`;
-          }
+        if (role && role.members.size > 0) {
+          const minterNames = role.members.map((m: any) => `@${m.displayName}`).join(", ");
+          tokenInfo += `\n• Minters: ${minterNames}`;
         }
       } catch (error) {
         console.error("Error fetching minter role members:", error);
       }
     }
 
-    tokenLines.push(tokenInfo);
-  }
+    return tokenInfo;
+  }));
 
   return tokenLines.join("\n\n");
 }
