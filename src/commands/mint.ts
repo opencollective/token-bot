@@ -9,6 +9,7 @@ import {
 import { mintTokens, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
 import { loadGuildSettings } from "../lib/utils.ts";
+import { refreshTokenStats } from "../lib/token-stats-cache.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { Token } from "../types.ts";
@@ -277,4 +278,9 @@ export default async function handleMintCommand(
   }
 
   await interaction.editReply({ content: replyContent });
+
+  // Refresh token stats cache in background after successful mints
+  if (successfulMints.length > 0) {
+    refreshTokenStats(token.chain, token.address, token.decimals).catch(() => {});
+  }
 }

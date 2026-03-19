@@ -55,7 +55,7 @@ const tokenSetupStates = new Map<string, TokenSetupState>();
 const channelSetupStates = new Map<string, ChannelSetupState>();
 // Role editing is now handled via /roles command with modals
 
-import { getNativeBalance, getTokenHolderCount, getTotalSupply, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
+import { getNativeBalance, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
@@ -306,8 +306,8 @@ client.on(Events.ClientReady, async (readyClient) => {
   // Check calendar permissions in background (don't block bot startup)
   checkCalendarPermissions().catch(err => console.error("Calendar check failed:", err));
 
-  // Start background token stats cache refresh
-  startTokenStatsPoller();
+  // Warm token stats cache on startup
+  warmTokenStatsCache().catch(err => console.error("Token stats cache warm failed:", err));
 
   // Start API server and pass Discord client reference
   setDiscordClient(client);
@@ -478,12 +478,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// Token info with supply and holders
-interface TokenStats {
-  totalSupply: string;
-  holders: number | null;
-}
-
 // Helper to get block explorer URL for a token
 function getExplorerUrl(chain: Chain, address: string): string {
   const explorers: Record<Chain, string> = {
@@ -496,71 +490,7 @@ function getExplorerUrl(chain: Chain, address: string): string {
   return `${explorers[chain]}/${address}`;
 }
 
-// --- Token stats cache (background refresh) ---
-const tokenStatsCache = new Map<string, TokenStats>();
-const TOKEN_STATS_REFRESH_MS = 5 * 60 * 1000; // 5 minutes
-
-function tokenStatsCacheKey(chain: Chain, address: string): string {
-  return `${chain}:${address.toLowerCase()}`;
-}
-
-// Fetch token stats (supply and holders) — uses cache, falls back to live
-async function fetchTokenStats(chain: Chain, address: string, decimals: number): Promise<TokenStats> {
-  const key = tokenStatsCacheKey(chain, address);
-  const cached = tokenStatsCache.get(key);
-  if (cached) return cached;
-
-  // Cache miss — fetch live (and populate cache)
-  const stats = await fetchTokenStatsLive(chain, address, decimals);
-  tokenStatsCache.set(key, stats);
-  return stats;
-}
-
-async function fetchTokenStatsLive(chain: Chain, address: string, decimals: number): Promise<TokenStats> {
-  try {
-    const [totalSupplyRaw, holders] = await Promise.all([
-      getTotalSupply(chain as SupportedChain, address),
-      getTokenHolderCount(chain as SupportedChain, address),
-    ]);
-    
-    const totalSupply = formatUnits(totalSupplyRaw, decimals);
-    const formattedSupply = Math.floor(parseFloat(totalSupply)).toLocaleString('en-US');
-    
-    return { totalSupply: formattedSupply, holders };
-  } catch (error) {
-    console.error(`Error fetching token stats for ${address}:`, error);
-    return { totalSupply: "?", holders: null };
-  }
-}
-
-async function refreshTokenStatsCache(): Promise<void> {
-  const dataDir = Deno.env.get("DATA_DIR") || "./data";
-  try {
-    for await (const entry of Deno.readDir(dataDir)) {
-      if (!entry.isDirectory) continue;
-      const settings = await loadGuildSettings(entry.name);
-      if (!settings?.tokens) continue;
-      await Promise.all(
-        settings.tokens.map(async (token) => {
-          const stats = await fetchTokenStatsLive(token.chain, token.address, token.decimals);
-          tokenStatsCache.set(tokenStatsCacheKey(token.chain, token.address), stats);
-        }),
-      );
-    }
-    console.log(`📊 Token stats cache refreshed (${tokenStatsCache.size} tokens)`);
-  } catch (error) {
-    console.error("Token stats cache refresh failed:", error);
-  }
-}
-
-function startTokenStatsPoller(): void {
-  // Initial refresh
-  refreshTokenStatsCache().catch(err => console.error("Initial token stats refresh failed:", err));
-  // Periodic refresh
-  setInterval(() => {
-    refreshTokenStatsCache().catch(err => console.error("Token stats refresh failed:", err));
-  }, TOKEN_STATS_REFRESH_MS);
-}
+import { getTokenStats, warmTokenStatsCache } from "./lib/token-stats-cache.ts";
 
 // Helper function to format token list
 async function formatTokenList(settings: GuildSettings | null, guild: any = null): Promise<string> {
@@ -570,7 +500,7 @@ async function formatTokenList(settings: GuildSettings | null, guild: any = null
 
   const tokenLines = await Promise.all(settings.tokens.map(async (token) => {
     const explorerUrl = getExplorerUrl(token.chain, token.address);
-    const stats = await fetchTokenStats(token.chain, token.address, token.decimals);
+    const stats = await getTokenStats(token.chain, token.address, token.decimals);
 
     const shortAddr = `${token.address.slice(0, 6)}…${token.address.slice(-4)}`;
     let tokenInfo = `**${token.name} (${token.symbol})**`;
