@@ -149,15 +149,7 @@ export default async function handleBurnCommand(
     try {
       let hash: string | null;
 
-      if (token.walletManager === "opencollective") {
-        const { Token: OCToken } = await import("@opencollective/token-factory");
-        const ocToken = new OCToken({
-          name: token.name, symbol: token.symbol,
-          chain: token.chain, tokenAddress: token.address,
-        });
-        const amountWei = parseUnits(amount.toFixed(token.decimals), token.decimals);
-        hash = await ocToken.burnFrom(amountWei, `discord:${targetUserId}`);
-      } else {
+      if (token.walletManager === "citizenwallet") {
         const targetAddress =
           await getAccountAddressForToken(targetUserId, token);
         if (!targetAddress) throw new Error("No wallet address found");
@@ -165,6 +157,15 @@ export default async function handleBurnCommand(
           chain, token.address, targetAddress,
           amount.toString(), token.decimals,
         );
+      } else {
+        // Default: opencollective token-factory
+        const { Token: OCToken } = await import("@opencollective/token-factory");
+        const ocToken = new OCToken({
+          name: token.name, symbol: token.symbol,
+          chain: token.chain, tokenAddress: token.address,
+        });
+        const amountWei = parseUnits(amount.toFixed(token.decimals), token.decimals);
+        hash = await ocToken.burnFrom(amountWei, `discord:${targetUserId}`);
       }
 
       if (hash) {

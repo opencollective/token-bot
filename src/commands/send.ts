@@ -364,7 +364,7 @@ export async function handleSendInteraction(
       const chainId = ChainConfig[chain].id;
       let hash: string;
 
-      const walletManager = token.walletManager || "citizenwallet";
+      const walletManager = token.walletManager || "opencollective";
 
       if (walletManager === "opencollective") {
         // Use @opencollective/token-factory for Safe-based transfers

@@ -1709,7 +1709,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (!hasOnChainMintRole) {
         const shortBotAddr = `${botAddress.slice(0, 6)}…${botAddress.slice(-4)}`;
-        mintableNote = `\n\nℹ️ Bot doesn't have on-chain MINTER role. If minting fails, grant MINTER role to: \`${botAddress}\`\nOr set \`walletManager: "opencollective"\` in settings if using OC token factory.`;
+        mintableNote = `\n\nℹ️ Bot doesn't have on-chain MINTER role. If minting fails, grant MINTER role to: \`${botAddress}\`\nSet \`walletManager: "citizenwallet"\` in token settings if using CitizenWallet instead of OC token factory.`;
       }
 
       const addedToken = await addTokenToSettings(guildId, {

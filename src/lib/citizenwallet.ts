@@ -23,20 +23,20 @@ const DEFAULT_INSTANCE_ID = "cw-discord-1";
  * Resolve a Discord user's wallet address for a specific token.
  *
  * Routes to the correct wallet manager:
- * - "citizenwallet": resolves via CardManager contract (default)
- * - "opencollective": resolves via @opencollective/token-factory (Safe address prediction)
+ * - "opencollective": resolves via @opencollective/token-factory (Safe address prediction) (default)
+ * - "citizenwallet": resolves via CardManager contract
  */
 export async function getAccountAddressForToken(
   userId: string,
   token: Token,
 ): Promise<string | null> {
-  const manager = token.walletManager || "citizenwallet";
+  const manager = token.walletManager || "opencollective";
 
-  if (manager === "opencollective") {
-    return resolveOpenCollectiveAddress(userId, token);
+  if (manager === "citizenwallet") {
+    return resolveCitizenWalletAddress(userId, token);
   }
 
-  return resolveCitizenWalletAddress(userId, token);
+  return resolveOpenCollectiveAddress(userId, token);
 }
 
 // ── OpenCollective (Safe-based) ─────────────────────────────────────────────

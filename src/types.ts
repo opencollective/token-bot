@@ -12,7 +12,7 @@ export type Token = {
   mintable?: boolean;
   mintInstructions?: string;
   transactionsChannelId?: string; // Override default transactions channel for this token
-  walletManager?: WalletManager; // How to resolve user addresses (default: "citizenwallet")
+  walletManager?: WalletManager; // How to resolve user addresses (default: "opencollective")
   // citizenwallet-specific:
   cardManagerAddress?: BlockchainAddress;
   cardManagerInstanceId?: string;
