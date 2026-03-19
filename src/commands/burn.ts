@@ -12,18 +12,9 @@ import { refreshTokenStats } from "../lib/token-stats-cache.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { Token } from "../types.ts";
-import { hasTokenPermission } from "./mint.ts";
+import { hasTokenPermission, parseRecipients, type Recipient } from "./mint.ts";
 
-// Parse user mentions from a string, returns array of user IDs
-function parseUserMentions(input: string): string[] {
-  const mentionRegex = /<@!?(\d+)>/g;
-  const userIds: string[] = [];
-  let match;
-  while ((match = mentionRegex.exec(input)) !== null) {
-    userIds.push(match[1]);
-  }
-  return userIds;
-}
+
 
 // Get burnable tokens (all tokens can be burned if bot has permission)
 function getBurnableTokens(tokens: Token[]): Token[] {
@@ -122,11 +113,11 @@ export default async function handleBurnCommand(
     return;
   }
 
-  // Parse user mentions
-  const targetUserIds = parseUserMentions(usersInput);
-  if (targetUserIds.length === 0) {
+  // Parse recipients (Discord mentions and/or email addresses)
+  const recipients = parseRecipients(usersInput);
+  if (recipients.length === 0) {
     await interaction.reply({
-      content: "❌ No valid users found. Mention users with @username.",
+      content: "❌ No valid recipients found. Mention users with @username or enter an email address.",
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -138,20 +129,21 @@ export default async function handleBurnCommand(
   const chainId = ChainConfig[chain].id;
 
   const results: {
-    userId: string;
+    recipient: Recipient;
     success: boolean;
     hash?: string;
     error?: string;
   }[] = [];
 
-  // Burn from each user
-  for (const targetUserId of targetUserIds) {
+  // Burn from each recipient
+  for (const recipient of recipients) {
     try {
       let hash: string | null;
 
       if (token.walletManager === "citizenwallet") {
+        if (recipient.type === "email") throw new Error("CitizenWallet does not support email recipients");
         const targetAddress =
-          await getAccountAddressForToken(targetUserId, token);
+          await getAccountAddressForToken(recipient.id, token);
         if (!targetAddress) throw new Error("No wallet address found");
         hash = await burnTokensFrom(
           chain, token.address, targetAddress,
@@ -165,11 +157,11 @@ export default async function handleBurnCommand(
           chain: token.chain, tokenAddress: token.address,
         });
         const amountWei = parseUnits(amount.toFixed(token.decimals), token.decimals);
-        hash = await ocToken.burnFrom(amountWei, `discord:${targetUserId}`);
+        hash = await ocToken.burnFrom(amountWei, recipient.accountId);
       }
 
       if (hash) {
-        results.push({ userId: targetUserId, success: true, hash });
+        results.push({ recipient, success: true, hash });
 
         const txUri = `ethereum:${chainId}:tx:${hash}` as URI;
 
@@ -177,7 +169,7 @@ export default async function handleBurnCommand(
         try {
           const nostr = Nostr.getInstance();
           const nostrContent =
-            description || `Burned ${amount} ${token.symbol} from Discord user`;
+            description || `Burned ${amount} ${token.symbol} from ${recipient.label}`;
 
           await nostr.publishMetadata(txUri, {
             content: nostrContent,
@@ -191,15 +183,15 @@ export default async function handleBurnCommand(
         }
       } else {
         results.push({
-          userId: targetUserId,
+          recipient,
           success: false,
           error: "No hash returned",
         });
       }
     } catch (error) {
-      console.error(`Error burning from user ${targetUserId}:`, error);
+      console.error(`Error burning from ${recipient.label}:`, error);
       results.push({
-        userId: targetUserId,
+        recipient,
         success: false,
         error: String(error),
       });
@@ -223,7 +215,7 @@ export default async function handleBurnCommand(
       if (transactionsChannel) {
         const burnLines = successfulBurns.map((r) => {
           const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
-          return `🔥 <@${userId}> burned ${formattedAmount} ${tokenLink} from <@${r.userId}> [[tx]](<${txUrl}>)`;
+          return `🔥 <@${userId}> burned ${formattedAmount} ${tokenLink} from ${r.recipient.label} [[tx]](<${txUrl}>)`;
         });
 
         let discordMessage = burnLines.join("\n");
@@ -245,7 +237,7 @@ export default async function handleBurnCommand(
   if (successCount > 0) {
     const burnLines = successfulBurns.map((r) => {
       const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
-      return `🔥 Burned ${formattedAmount} ${tokenLink} from <@${r.userId}> [[tx]](<${txUrl}>)`;
+      return `🔥 Burned ${formattedAmount} ${tokenLink} from ${r.recipient.label} [[tx]](<${txUrl}>)`;
     });
     replyContent = burnLines.join("\n");
     if (description) {
@@ -255,7 +247,7 @@ export default async function handleBurnCommand(
 
   if (failCount > 0) {
     const failedBurns = results.filter((r) => !r.success);
-    const failedLines = failedBurns.map((r) => `<@${r.userId}>: ${r.error}`);
+    const failedLines = failedBurns.map((r) => `${r.recipient.label}: ${r.error}`);
     replyContent += `\n❌ Failed to burn from:\n${failedLines.join("\n")}`;
   }
 

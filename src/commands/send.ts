@@ -28,9 +28,13 @@ import type { GuildSettings, Token } from "../types.ts";
 
 // ── State ───────────────────────────────────────────────────────────────────
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 interface SendState {
-  recipientId: string;
+  recipientId: string; // Discord user ID or email address
+  recipientAccountId: string; // "discord:id" or "email:addr"
   recipientName: string;
+  recipientLabel: string; // "<@id>" or "email"
   guildId: string;
   senderId: string;
   senderAddress: string; // Address for the selected token's chain
@@ -129,17 +133,43 @@ export default async function handleSendCommand(
   if (!interaction.isChatInputCommand() || !interaction.options) return;
 
   const recipientUser = interaction.options.getUser("user");
+  const emailInput = interaction.options.getString("email");
   const amount = interaction.options.getNumber("amount");
   const tokenSymbol = interaction.options.getString("token");
   const description = interaction.options.getString("description") || undefined;
 
-  if (!recipientUser || !amount) {
+  if (!amount) {
     await interaction.reply({ content: "❌ Missing required options.", ephemeral: true });
     return;
   }
 
-  if (recipientUser.id === userId) {
-    await interaction.reply({ content: "❌ You cannot send tokens to yourself.", ephemeral: true });
+  // Determine recipient
+  let recipientId: string;
+  let recipientAccountId: string;
+  let recipientName: string;
+  let recipientLabel: string;
+
+  if (recipientUser) {
+    if (recipientUser.id === userId) {
+      await interaction.reply({ content: "❌ You cannot send tokens to yourself.", ephemeral: true });
+      return;
+    }
+    recipientId = recipientUser.id;
+    recipientAccountId = `discord:${recipientUser.id}`;
+    recipientName = recipientUser.username;
+    recipientLabel = `<@${recipientUser.id}>`;
+  } else if (emailInput) {
+    const email = emailInput.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(email)) {
+      await interaction.reply({ content: "❌ Invalid email address.", ephemeral: true });
+      return;
+    }
+    recipientId = email;
+    recipientAccountId = `email:${email}`;
+    recipientName = email;
+    recipientLabel = email;
+  } else {
+    await interaction.reply({ content: "❌ Specify a user or email address.", ephemeral: true });
     return;
   }
 
@@ -178,8 +208,10 @@ export default async function handleSendCommand(
     console.log(`[send] Tokens with positive balance: ${tokensWithBalance.map(i => guildSettings.tokens[i].symbol).join(", ") || "none"}`);
 
     const state: SendState = {
-      recipientId: recipientUser.id,
-      recipientName: recipientUser.username,
+      recipientId,
+      recipientAccountId,
+      recipientName,
+      recipientLabel,
       guildId, senderId: userId, senderAddress: "",
       amount, description, balances, addresses,
     };
@@ -251,7 +283,7 @@ export default async function handleSendCommand(
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
 
     await interaction.editReply({
-      content: `💸 Sending **${amount}** to <@${recipientUser.id}>\n\nYou have sufficient balance in multiple tokens. **Which one?**`,
+      content: `💸 Sending **${amount}** to ${recipientLabel}\n\nYou have sufficient balance in multiple tokens. **Which one?**`,
       components: [row],
     });
   } catch (error) {
@@ -268,7 +300,7 @@ async function showConfirmation(interaction: any, state: SendState) {
   const token = state.token!;
   const balance = state.balances.get(state.tokenIndex!) ?? 0n;
 
-  let msg = `💸 **Send ${state.amount.toLocaleString("en-US")} ${token.symbol}** to <@${state.recipientId}>`;
+  let msg = `💸 **Send ${state.amount.toLocaleString("en-US")} ${token.symbol}** to ${state.recipientLabel}`;
   if (state.description) msg += `\n📝 ${state.description}`;
   msg += `\n\nYour balance: ${fmtBal(balance, token.decimals)} ${token.symbol}`;
 
@@ -378,7 +410,7 @@ export async function handleSendInteraction(
         const amountWei = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
         hash = await ocToken.transfer(
           `discord:${state.senderId}`,
-          `discord:${state.recipientId}`,
+          state.recipientAccountId,
           amountWei,
         );
       } else {
@@ -448,7 +480,7 @@ export async function handleSendInteraction(
             const tokenUrl = `https://txinfo.xyz/${chain}/token/${token.address}`;
             const tokenLink = `[${token.symbol}](<${tokenUrl}>)`;
             const txUrl = `https://txinfo.xyz/${chain}/tx/${hash}`;
-            let msg = `💸 <@${userId}> sent ${state.amount.toLocaleString("en-US")} ${tokenLink} to <@${state.recipientId}> [[tx]](<${txUrl}>)`;
+            let msg = `💸 <@${userId}> sent ${state.amount.toLocaleString("en-US")} ${tokenLink} to ${state.recipientLabel} [[tx]](<${txUrl}>)`;
             if (state.description) msg += `\n📝 ${state.description}`;
             await ch.send(msg);
           }
@@ -461,14 +493,14 @@ export async function handleSendInteraction(
       try {
         const nostr = Nostr.getInstance();
         await nostr.publishMetadata(txUri, {
-          content: state.description || `Sent ${state.amount} ${token.symbol} to Discord user`,
+          content: state.description || `Sent ${state.amount} ${token.symbol} to ${state.recipientName}`,
           tags: [["t", "send"], ["t", "transfer"], ["amount", state.amount.toString()]],
         });
       } catch (err) {
         console.error("Error publishing Nostr:", err);
       }
 
-      let reply = `✅ Sent **${state.amount.toLocaleString("en-US")} ${token.symbol}** to <@${state.recipientId}>`;
+      let reply = `✅ Sent **${state.amount.toLocaleString("en-US")} ${token.symbol}** to ${state.recipientLabel}`;
       if (state.description) reply += `\n📝 ${state.description}`;
       await interaction.editReply({ content: reply });
     } catch (error) {

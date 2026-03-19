@@ -20,7 +20,7 @@
     "options": [
       {
         "name": "users",
-        "description": "Users to mint for (mention with @)",
+        "description": "Users to mint for (@mention or email)",
         "type": 3,
         "required": true
       },
@@ -52,7 +52,7 @@
     "options": [
       {
         "name": "users",
-        "description": "Users to burn from (mention with @)",
+        "description": "Users to burn from (@mention or email)",
         "type": 3,
         "required": true
       },
@@ -96,9 +96,15 @@
     "options": [
       {
         "name": "user",
-        "description": "The user to send tokens to",
-        "required": true,
+        "description": "Discord user to send tokens to",
+        "required": false,
         "type": 6
+      },
+      {
+        "name": "email",
+        "description": "Email address to send tokens to",
+        "required": false,
+        "type": 3
       },
       {
         "name": "amount",

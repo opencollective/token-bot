@@ -28,14 +28,55 @@ export function hasTokenPermission(member: GuildMember, mintRoleId?: string): bo
 }
 
 // Parse user mentions from a string, returns array of user IDs
-function parseUserMentions(input: string): string[] {
+export type Recipient = {
+  type: "discord" | "email";
+  id: string; // Discord user ID or email address
+  label: string; // Display label: <@id> or email
+  accountId: string; // Prefixed identifier: "discord:id" or "email:addr"
+};
+
+export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function parseRecipients(input: string): Recipient[] {
+  const recipients: Recipient[] = [];
+  const seen = new Set<string>();
+
+  // Extract Discord mentions
   const mentionRegex = /<@!?(\d+)>/g;
-  const userIds: string[] = [];
   let match;
   while ((match = mentionRegex.exec(input)) !== null) {
-    userIds.push(match[1]);
+    const key = `discord:${match[1]}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      recipients.push({
+        type: "discord",
+        id: match[1],
+        label: `<@${match[1]}>`,
+        accountId: key,
+      });
+    }
   }
-  return userIds;
+
+  // Extract email addresses (anything that looks like an email outside of mentions)
+  const withoutMentions = input.replace(/<@!?\d+>/g, " ");
+  const tokens = withoutMentions.split(/[\s,;]+/).filter(Boolean);
+  for (const token of tokens) {
+    const email = token.trim().toLowerCase();
+    if (EMAIL_REGEX.test(email)) {
+      const key = `email:${email}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        recipients.push({
+          type: "email",
+          id: email,
+          label: email,
+          accountId: key,
+        });
+      }
+    }
+  }
+
+  return recipients;
 }
 
 // Get mintable tokens from settings
@@ -136,11 +177,11 @@ export default async function handleMintCommand(
     return;
   }
 
-  // Parse user mentions
-  const recipientUserIds = parseUserMentions(usersInput);
-  if (recipientUserIds.length === 0) {
+  // Parse recipients (Discord mentions and/or email addresses)
+  const recipients = parseRecipients(usersInput);
+  if (recipients.length === 0) {
     await interaction.reply({
-      content: "❌ No valid users found. Mention users with @username.",
+      content: "❌ No valid recipients found. Mention users with @username or enter an email address.",
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -152,20 +193,21 @@ export default async function handleMintCommand(
   const chainId = ChainConfig[chain].id;
 
   const results: {
-    userId: string;
+    recipient: Recipient;
     success: boolean;
     hash?: string;
     error?: string;
   }[] = [];
 
-  // Mint for each user
-  for (const recipientUserId of recipientUserIds) {
+  // Mint for each recipient
+  for (const recipient of recipients) {
     try {
       let hash: string | null;
 
       if (token.walletManager === "citizenwallet") {
+        if (recipient.type === "email") throw new Error("CitizenWallet does not support email recipients");
         const recipientAddress =
-          await getAccountAddressForToken(recipientUserId, token);
+          await getAccountAddressForToken(recipient.id, token);
         if (!recipientAddress) throw new Error("No wallet address found");
         hash = await mintTokens(
           chain, token.address, recipientAddress,
@@ -179,11 +221,11 @@ export default async function handleMintCommand(
           chain: token.chain, tokenAddress: token.address,
         });
         const amountWei = parseUnits(amount.toFixed(token.decimals), token.decimals);
-        hash = await ocToken.mintTo(amountWei, `discord:${recipientUserId}`);
+        hash = await ocToken.mintTo(amountWei, recipient.accountId);
       }
 
       if (hash) {
-        results.push({ userId: recipientUserId, success: true, hash });
+        results.push({ recipient, success: true, hash });
 
         const txUri = `ethereum:${chainId}:tx:${hash}` as URI;
 
@@ -191,7 +233,7 @@ export default async function handleMintCommand(
         try {
           const nostr = Nostr.getInstance();
           const nostrContent =
-            description || `Minted ${amount} ${token.symbol} for Discord user`;
+            description || `Minted ${amount} ${token.symbol} for ${recipient.label}`;
 
           await nostr.publishMetadata(txUri, {
             content: nostrContent,
@@ -205,15 +247,15 @@ export default async function handleMintCommand(
         }
       } else {
         results.push({
-          userId: recipientUserId,
+          recipient,
           success: false,
           error: "No hash returned",
         });
       }
     } catch (error) {
-      console.error(`Error minting for user ${recipientUserId}:`, error);
+      console.error(`Error minting for ${recipient.label}:`, error);
       results.push({
-        userId: recipientUserId,
+        recipient,
         success: false,
         error: String(error),
       });
@@ -235,10 +277,9 @@ export default async function handleMintCommand(
       )) as TextChannel;
 
       if (transactionsChannel) {
-        // Build message for each recipient with tx link
         const mintLines = successfulMints.map((r) => {
           const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
-          return `🪙 <@${userId}> minted ${formattedAmount} ${tokenLink} for <@${r.userId}> [[tx]](<${txUrl}>)`;
+          return `🪙 <@${userId}> minted ${formattedAmount} ${tokenLink} for ${r.recipient.label} [[tx]](<${txUrl}>)`;
         });
         
         let discordMessage = mintLines.join("\n");
@@ -260,7 +301,7 @@ export default async function handleMintCommand(
   if (successCount > 0) {
     const mintLines = successfulMints.map((r) => {
       const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
-      return `✅ Minted ${formattedAmount} ${tokenLink} for <@${r.userId}> [[tx]](<${txUrl}>)`;
+      return `✅ Minted ${formattedAmount} ${tokenLink} for ${r.recipient.label} [[tx]](<${txUrl}>)`;
     });
     replyContent = mintLines.join("\n");
     if (description) {
@@ -270,7 +311,7 @@ export default async function handleMintCommand(
 
   if (failCount > 0) {
     const failedMints = results.filter((r) => !r.success);
-    const failedMentions = failedMints.map((r) => `<@${r.userId}>`).join(", ");
+    const failedMentions = failedMints.map((r) => r.recipient.label).join(", ");
     replyContent += `\n❌ Failed to mint for: ${failedMentions}`;
   }
 
