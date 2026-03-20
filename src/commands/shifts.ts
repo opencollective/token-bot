@@ -789,7 +789,7 @@ export async function handleShiftsSelect(
       // Log to #shifts channel
       const cancelStart = new Date(shiftToCancel.start.dateTime);
       const cancelEnd = new Date(shiftToCancel.end.dateTime);
-      await logShiftAction(`❌ <@${userId}> cancelled their shift on **${formatShortDate(cancelStart)}** ${formatTime(cancelStart.toTimeString().substring(0,5))}-${formatTime(cancelEnd.toTimeString().substring(0,5))}`);
+      await logShiftAction(`❌ <@${userId}> cancelled their shift on **${formatDate(cancelStart)}** ${formatTime(cancelStart.toTimeString().substring(0,5))}-${formatTime(cancelEnd.toTimeString().substring(0,5))}`);
 
       // Clear state
       shiftsStates.delete(userId);
@@ -1327,7 +1327,7 @@ Your shift has been added to the calendar. Thank you for helping take care of ou
     });
 
     // Log to #shifts channel
-    await logShiftAction(`📋 <@${userId}> signed up for a shift on **${formatShortDate(selectedDate)}** ${slotTimeStr}`);
+    await logShiftAction(`📋 <@${userId}> signed up for a shift on **${formatDate(selectedDate)}** ${slotTimeStr}`);
 
     shiftsStates.delete(userId);
 
@@ -1462,10 +1462,10 @@ async function processReward(interaction: ButtonInteraction, userId: string, gui
       const rewardEvent = state.selectedRewardEvent!;
       const rewardStart = new Date(rewardEvent.start.dateTime);
       const rewardEnd = new Date(rewardEvent.end.dateTime);
-      const shiftLabel = `**${formatShortDate(rewardStart)}** ${formatTime(rewardStart.toTimeString().substring(0,5))}-${formatTime(rewardEnd.toTimeString().substring(0,5))}`;
-      for (const result of successfulRewards) {
-        await logShiftAction(`💰 <@${result.userId}> rewarded ${result.amount} ${settings.rewardTokenSymbol} for shift on ${shiftLabel}`);
-      }
+      const shiftLabel = `**${formatDate(rewardStart)}** ${formatTime(rewardStart.toTimeString().substring(0,5))}-${formatTime(rewardEnd.toTimeString().substring(0,5))}`;
+      const userMentions = successfulRewards.map(r => `<@${r.userId}>`).join(", ");
+      const amount = successfulRewards[0].amount;
+      await logShiftAction(`💰 ${userMentions} rewarded ${amount} ${settings.rewardTokenSymbol} each for shift on ${shiftLabel}`);
     }
 
     // Build response message
