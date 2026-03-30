@@ -47,7 +47,7 @@ Deno.test("Xavier has positive CHT balance", async () => {
   expect(address).toBeTruthy();
   const balance = await getBalance(chtToken.chain as SupportedChain, chtToken.address, address!);
   console.log(`[test] CHT balance: ${Number(balance) / 1e6}`);
-  expect(balance).toBeGreaterThan(0n);
+  expect(balance > 0n).toBe(true);
 });
 
 Deno.test({
@@ -69,7 +69,7 @@ Deno.test({
     expect(address).toBeTruthy();
     const balance = await getBalance(eurchbToken.chain as SupportedChain, eurchbToken.address, address!);
     console.log(`[test] EURchb balance: ${Number(balance) / 1e6}`);
-    expect(balance).toBeGreaterThan(0n);
+    expect(balance > 0n).toBe(true);
   },
 });
 
