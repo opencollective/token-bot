@@ -1665,18 +1665,40 @@ Please contact an administrator for a refund.`;
     console.error("Price amount:", priceAmount);
     console.error("User ID:", userId);
 
-    await interaction.editReply({
-      content: `❌ **Payment failed**
+    const rawMsg: string = error.message || "Unknown error";
+    let userMessage: string;
 
-**Error:** ${error.message || "Unknown error"}
+    if (rawMsg.includes("Nonce provided") && rawMsg.includes("lower than the current nonce")) {
+      userMessage = `❌ **Payment failed — please try again**
 
-**Details:**
+The transaction hit a temporary conflict (another transaction was processing at the same time). This is not a problem with your account or balance.
+
+**What to do:** Simply run \`/book\` again. Your tokens have **not** been deducted.`;
+    } else if (rawMsg.includes("Insufficient balance") || rawMsg.includes("insufficient funds")) {
+      userMessage = `❌ **Insufficient balance**
+
+You don't have enough ${tokenSymbol} to complete this payment.
+
+• **Required:** ${priceAmount.toFixed(2)} ${tokenSymbol}
+• **Token:** ${tokenSymbol} (${tokenConfig.chain})
+
+${tokenConfig.mintInstructions || ""}`;
+    } else if (rawMsg.includes("allowance") || rawMsg.includes("ERC20: burn amount exceeds allowance")) {
+      userMessage = `❌ **Payment failed — approval needed**
+
+The bot doesn't have permission to burn tokens from your account. Please contact an administrator to set up the token allowance.`;
+    } else {
+      userMessage = `❌ **Payment failed**
+
+Something went wrong processing your payment. Please try again in a moment.
+
+If the problem persists, contact an administrator with this info:
 • Token: ${tokenSymbol} (${tokenConfig.chain})
 • Amount: ${priceAmount.toFixed(2)}
-• Address: ${tokenConfig.address.slice(0, 10)}...
+• Error: ${rawMsg.length > 200 ? rawMsg.slice(0, 200) + "..." : rawMsg}`;
+    }
 
-Please ensure you have enough ${tokenSymbol} tokens and the bot has permission to burn from your account.`,
-    });
+    await interaction.editReply({ content: userMessage });
   }
 }
 

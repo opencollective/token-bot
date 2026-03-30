@@ -300,23 +300,17 @@ export async function submitTransaction(
         continue;
       }
       const msg = (err as { message?: string })?.message ?? "";
-      // If previous attempt mined, this is expected — don't keep resending.
+      // Nonce conflict — fetch fresh nonce and retry
       if (msg.includes("Nonce provided") && msg.includes("lower than the current nonce")) {
-        if (attempt === 1) {
-          const newNonce = await publicClient.getTransactionCount({
-            address: clientAddress,
-            blockTag: "pending",
-          });
-          console.log(
-            `Nonce provided (${writeContractParams.nonce}) lower than the current nonce, updating nonce to ${newNonce}`,
-          );
-          writeContractParams.nonce = newNonce;
-        }
+        const newNonce = await publicClient.getTransactionCount({
+          address: clientAddress,
+          blockTag: "pending",
+        });
         console.log(
-          "Previous attempt likely mined; not resending.",
-          writeContractParams.functionName,
-          writeContractParams.args,
+          `Nonce conflict (had ${writeContractParams.nonce}, now ${newNonce}), retrying (attempt ${attempt}/${maxRetries})`,
         );
+        writeContractParams.nonce = newNonce;
+        if (attempt < maxRetries) continue;
       }
       if (attempt === maxRetries) throw err;
       gasParams = bumpGasParams(gasParams, gasBumpPercent);
