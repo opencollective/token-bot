@@ -22,7 +22,12 @@ import {
   type UserOpExtraData,
 } from "@citizenwallet/sdk";
 import { formatUnits, parseUnits } from "@wevm/viem";
-import { SupportedChain, ChainConfig, getBalance } from "../lib/blockchain.ts";
+import {
+  ChainConfig,
+  getBalance,
+  parseInsufficientGasError,
+  SupportedChain,
+} from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId, getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { GuildSettings, Token } from "../types.ts";
 
@@ -505,9 +510,13 @@ export async function handleSendInteraction(
       await interaction.editReply({ content: reply });
     } catch (error) {
       console.error("Error executing send:", error);
-      await interaction.editReply({
-        content: `❌ Failed to send: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      const gasErr = parseInsufficientGasError(error, token.chain as SupportedChain);
+      const message = gasErr
+        ? gasErr.formatMessage("send")
+        : error instanceof Error
+        ? error.message
+        : String(error);
+      await interaction.editReply({ content: `❌ ${message}` });
     }
 
     sendStates.delete(userId);

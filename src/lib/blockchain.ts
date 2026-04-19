@@ -27,6 +27,89 @@ import { getEnv } from "./utils.ts";
 
 export const MINTER_ROLE = "0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6";
 
+export class InsufficientGasBalanceError extends Error {
+  readonly chainSlug: SupportedChain;
+  readonly address: string;
+  readonly balanceWei: bigint;
+  readonly requiredWei: bigint;
+
+  constructor(params: {
+    chainSlug: SupportedChain;
+    address: string;
+    balanceWei: bigint;
+    requiredWei: bigint;
+  }) {
+    super("Insufficient native balance to pay for gas");
+    this.name = "InsufficientGasBalanceError";
+    this.chainSlug = params.chainSlug;
+    this.address = params.address;
+    this.balanceWei = params.balanceWei;
+    this.requiredWei = params.requiredWei;
+  }
+
+  formatMessage(verb: string): string {
+    const chain = ChainConfig[this.chainSlug];
+    const sym = chain.nativeCurrency.symbol;
+    const name = chain.name;
+    const dec = chain.nativeCurrency.decimals;
+    const fmt = (wei: bigint): string => {
+      const full = formatUnits(wei, dec);
+      const [intPart, decPart = ""] = full.split(".");
+      const trimmed = decPart.slice(0, 6).replace(/0+$/, "");
+      return trimmed ? `${intPart}.${trimmed}` : intPart;
+    };
+    const topUp = this.address || "the bot wallet";
+    const balanceInfo = this.balanceWei > 0n || this.requiredWei > 0n
+      ? `current balance: ${fmt(this.balanceWei)} ${sym}, cost for this transaction: ${
+        fmt(this.requiredWei)
+      } ${sym}`
+      : `current balance too low`;
+    return (
+      `Unable to ${verb}. Error: not enough balance to pay for recording this transaction on the ${name} blockchain ` +
+      `(${balanceInfo}). Please top up your account (${topUp}) with ${sym}.`
+    );
+  }
+}
+
+export function parseInsufficientGasError(
+  err: unknown,
+  chainSlug: SupportedChain,
+  fallbackAddress?: string,
+): InsufficientGasBalanceError | null {
+  if (err instanceof InsufficientGasBalanceError) return err;
+  const errObj = err as {
+    message?: string;
+    details?: string;
+    shortMessage?: string;
+    cause?: { details?: string; message?: string; data?: { message?: string } };
+    sender?: string;
+  };
+  const parts = [
+    errObj.message ?? "",
+    errObj.details ?? "",
+    errObj.shortMessage ?? "",
+    errObj.cause?.details ?? "",
+    errObj.cause?.message ?? "",
+    errObj.cause?.data?.message ?? "",
+  ];
+  const combined = parts.join("\n");
+  const isInsufficient = /insufficient funds/i.test(combined) ||
+    /exceeds the balance of the account/i.test(combined);
+  if (!isInsufficient) return null;
+
+  const haveWant = combined.match(/have\s+(\d+)\s+want\s+(\d+)/i);
+  const addrMatch = combined.match(/address\s+(0x[a-fA-F0-9]{40})/);
+  const address = addrMatch?.[1] ?? errObj.sender ?? fallbackAddress ?? "";
+  const balanceWei = haveWant ? BigInt(haveWant[1]) : 0n;
+  const requiredWei = haveWant ? BigInt(haveWant[2]) : 0n;
+  return new InsufficientGasBalanceError({
+    chainSlug,
+    address,
+    balanceWei,
+    requiredWei,
+  });
+}
+
 export const PROFILE_ADMIN_ROLE =
   "0x224b562a599bb6f57441f98a50de513dff0de3d9b620f342c27a4e4a898ce8e2";
 
@@ -292,6 +375,12 @@ export async function submitTransaction(
       gasParams = bumpGasParams(gasParams, gasBumpPercent);
       continue;
     } catch (err: unknown) {
+      const gasBalanceErr = parseInsufficientGasError(
+        err,
+        params.chainSlug,
+        clientAddress,
+      );
+      if (gasBalanceErr) throw gasBalanceErr;
       const code = (err as { code?: number; cause?: { code?: number } })?.code ?? (
         err as { cause?: { code?: number } }
       )?.cause?.code;

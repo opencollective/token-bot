@@ -6,7 +6,12 @@ import {
   PermissionsBitField,
   TextChannel,
 } from "discord.js";
-import { mintTokens, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
+import {
+  ChainConfig,
+  mintTokens,
+  parseInsufficientGasError,
+  SupportedChain,
+} from "../lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { refreshTokenStats } from "../lib/token-stats-cache.ts";
@@ -254,10 +259,16 @@ export default async function handleMintCommand(
       }
     } catch (error) {
       console.error(`Error minting for ${recipient.label}:`, error);
+      const gasErr = parseInsufficientGasError(error, chain);
+      const message = gasErr
+        ? gasErr.formatMessage("mint")
+        : error instanceof Error
+        ? error.message
+        : String(error);
       results.push({
         recipient,
         success: false,
-        error: String(error),
+        error: message,
       });
     }
   }
@@ -311,12 +322,12 @@ export default async function handleMintCommand(
 
   if (failCount > 0) {
     const failedMints = results.filter((r) => !r.success);
-    const failedMentions = failedMints.map((r) => r.recipient.label).join(", ");
-    replyContent += `\n❌ Failed to mint for: ${failedMentions}`;
-  }
-
-  if (successCount === 0) {
-    replyContent = "❌ Failed to mint tokens for all users.";
+    const failedLines = failedMints.map((r) => `${r.recipient.label}: ${r.error}`);
+    if (successCount === 0) {
+      replyContent = `❌ Failed to mint:\n${failedLines.join("\n")}`;
+    } else {
+      replyContent += `\n❌ Failed to mint for:\n${failedLines.join("\n")}`;
+    }
   }
 
   await interaction.editReply({ content: replyContent });

@@ -5,7 +5,12 @@ import {
   MessageFlags,
   TextChannel,
 } from "discord.js";
-import { burnTokensFrom, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
+import {
+  burnTokensFrom,
+  ChainConfig,
+  parseInsufficientGasError,
+  SupportedChain,
+} from "../lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
 import { loadGuildSettings } from "../lib/utils.ts";
 import { refreshTokenStats } from "../lib/token-stats-cache.ts";
@@ -190,10 +195,16 @@ export default async function handleBurnCommand(
       }
     } catch (error) {
       console.error(`Error burning from ${recipient.label}:`, error);
+      const gasErr = parseInsufficientGasError(error, chain);
+      const message = gasErr
+        ? gasErr.formatMessage("burn")
+        : error instanceof Error
+        ? error.message
+        : String(error);
       results.push({
         recipient,
         success: false,
-        error: String(error),
+        error: message,
       });
     }
   }
