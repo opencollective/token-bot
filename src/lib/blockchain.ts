@@ -252,13 +252,22 @@ export type Clients = { publicClient: PublicClient; walletClient: WalletClient; 
 
 export async function getBaseFee(chainSlug: SupportedChain): Promise<bigint | undefined> {
   const rpcUrl = RPC_URLS[chainSlug];
-  console.log(">>> ChainConfig[chainSlug]", ChainConfig[chainSlug]);
   const client = createPublicClient({ transport: http(rpcUrl), chain: ChainConfig[chainSlug] });
-  const fees = await getInitialGasParams(client as any);
+  const fees = await getInitialGasParams(client as any, chainSlug);
   return fees.maxFeePerGas;
 }
 
-async function getInitialGasParams(publicClient: PublicClient): Promise<
+// Celo's baseFee can spike to 100+ gwei during stablecoin volume; viem's
+// estimator returns 2×baseFee, which produces a maxFeePerGas of 240+ gwei.
+// Combined with the 50M block gas limit fallback when estimateGas fails, the
+// implied gas budget balloons to ~12 CELO. Cap the fee per gas to keep the
+// budget bounded.
+const CELO_MAX_FEE_PER_GAS_CAP = 50_000_000_000n; // 50 gwei
+
+async function getInitialGasParams(
+  publicClient: PublicClient,
+  chainSlug: SupportedChain,
+): Promise<
   | { gasPrice: bigint; maxFeePerGas?: undefined; maxPriorityFeePerGas?: undefined }
   | { gasPrice?: undefined; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }
 > {
@@ -273,10 +282,17 @@ async function getInitialGasParams(publicClient: PublicClient): Promise<
     if (typeof maybeEstimate === "function") {
       const fees = await maybeEstimate();
       if (fees.maxFeePerGas && fees.maxPriorityFeePerGas) {
-        return {
-          maxFeePerGas: fees.maxFeePerGas,
-          maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+        let { maxFeePerGas, maxPriorityFeePerGas } = fees as {
+          maxFeePerGas: bigint;
+          maxPriorityFeePerGas: bigint;
         };
+        if (chainSlug === "celo" && maxFeePerGas > CELO_MAX_FEE_PER_GAS_CAP) {
+          maxFeePerGas = CELO_MAX_FEE_PER_GAS_CAP;
+          if (maxPriorityFeePerGas > maxFeePerGas) {
+            maxPriorityFeePerGas = maxFeePerGas;
+          }
+        }
+        return { maxFeePerGas, maxPriorityFeePerGas };
       }
     }
   } catch {
@@ -329,12 +345,19 @@ export async function submitTransaction(
     transport: http(RPC_URLS[params.chainSlug]),
     chain: ChainConfig[params.chainSlug],
   });
-  let gasParams = await getInitialGasParams(publicClient as any);
+  let gasParams = await getInitialGasParams(publicClient as any, params.chainSlug);
   const clientAddress = client.account?.address as Address;
   const nonce = options?.nonce ?? await publicClient.getTransactionCount({
     address: clientAddress,
     blockTag: "pending",
   });
+
+  // When eth_estimateGas can't run (e.g. balance < gas × maxFeePerGas), viem
+  // falls back to the block gas limit (~50M on Celo). Set a manual ceiling
+  // for ERC20 ops so the implied budget stays bounded.
+  const manualGasLimit: bigint | undefined = params.chainSlug === "celo"
+    ? 500_000n
+    : undefined;
 
   const writeContractParams = {
     address: params.contractAddress,
@@ -345,6 +368,7 @@ export async function submitTransaction(
     args: params.args,
     nonce,
     ...gasParams,
+    ...(manualGasLimit !== undefined ? { gas: manualGasLimit } : {}),
   };
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
