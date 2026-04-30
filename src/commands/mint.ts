@@ -259,7 +259,7 @@ export default async function handleMintCommand(
       }
     } catch (error) {
       console.error(`Error minting for ${recipient.label}:`, error);
-      const gasErr = parseInsufficientGasError(error, chain);
+      const gasErr = await parseInsufficientGasError(error, chain);
       const message = gasErr
         ? gasErr.formatMessage("mint")
         : error instanceof Error

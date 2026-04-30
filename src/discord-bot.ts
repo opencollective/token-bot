@@ -55,7 +55,7 @@ const tokenSetupStates = new Map<string, TokenSetupState>();
 const channelSetupStates = new Map<string, ChannelSetupState>();
 // Role editing is now handled via /roles command with modals
 
-import { getNativeBalance, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
+import { ChainConfig, getNativeBalance, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
@@ -86,12 +86,53 @@ const dateTimeStr = now.toLocaleString('en-GB', {
 console.log(`🚀 Server starting at ${dateTimeStr} (${timezone})`);
 
 const botWallet = getWalletClient(CHAIN);
-const nativeBalance = await getNativeBalance(CHAIN, botWallet.account?.address as string);
-console.log(">>> botWallet address", botWallet.account?.address, "on", CHAIN);
-console.log(">>> nativeBalance", formatUnits(nativeBalance, 18));
+const botAddress = botWallet.account?.address as string;
+console.log(`🤖 Bot wallet address: ${botAddress}`);
 
-if (nativeBalance < BigInt(0.001 * 10 ** 18)) {
-  console.error("❌ Bot wallet has less than 0.001 ETH");
+// Collect unique chains used across all configured guilds (plus the default CHAIN)
+const chainsInUse = new Set<SupportedChain>([CHAIN]);
+const dataDirForChains = Deno.env.get("DATA_DIR") || "./data";
+try {
+  for await (const guildEntry of Deno.readDir(dataDirForChains)) {
+    if (!guildEntry.isDirectory) continue;
+    try {
+      const raw = await Deno.readTextFile(`${dataDirForChains}/${guildEntry.name}/settings.json`);
+      const settings = JSON.parse(raw) as GuildSettings;
+      for (const token of settings.tokens || []) {
+        chainsInUse.add(token.chain as SupportedChain);
+      }
+    } catch {
+      // skip guilds without readable settings.json
+    }
+  }
+} catch {
+  // data dir doesn't exist yet
+}
+
+const chainBalances = await Promise.all(
+  Array.from(chainsInUse).map(async (chain) => {
+    try {
+      return { chain, balance: await getNativeBalance(chain, botAddress), error: null as Error | null };
+    } catch (err) {
+      return { chain, balance: 0n, error: err as Error };
+    }
+  }),
+);
+
+console.log("💰 Native balances:");
+for (const { chain, balance, error } of chainBalances) {
+  const { symbol, decimals } = ChainConfig[chain].nativeCurrency;
+  if (error) {
+    console.warn(`   ${chain}: failed to fetch ${symbol} balance — ${error.message}`);
+  } else {
+    console.log(`   ${chain}: ${formatUnits(balance, decimals)} ${symbol}`);
+  }
+}
+
+const defaultChainBalance = chainBalances.find((b) => b.chain === CHAIN);
+if (defaultChainBalance && !defaultChainBalance.error && defaultChainBalance.balance < BigInt(0.001 * 10 ** 18)) {
+  const symbol = ChainConfig[CHAIN].nativeCurrency.symbol;
+  console.error(`❌ Bot wallet has less than 0.001 ${symbol} on ${CHAIN}`);
   Deno.exit(1);
 }
 

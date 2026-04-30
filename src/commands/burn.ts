@@ -195,7 +195,7 @@ export default async function handleBurnCommand(
       }
     } catch (error) {
       console.error(`Error burning from ${recipient.label}:`, error);
-      const gasErr = parseInsufficientGasError(error, chain);
+      const gasErr = await parseInsufficientGasError(error, chain);
       const message = gasErr
         ? gasErr.formatMessage("burn")
         : error instanceof Error

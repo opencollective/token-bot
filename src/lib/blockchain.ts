@@ -58,24 +58,26 @@ export class InsufficientGasBalanceError extends Error {
       const trimmed = decPart.slice(0, 6).replace(/0+$/, "");
       return trimmed ? `${intPart}.${trimmed}` : intPart;
     };
-    const topUp = this.address || "the bot wallet";
-    const balanceInfo = this.balanceWei > 0n || this.requiredWei > 0n
-      ? `current balance: ${fmt(this.balanceWei)} ${sym}, cost for this transaction: ${
-        fmt(this.requiredWei)
-      } ${sym}`
-      : `current balance too low`;
+    const executor = this.address || "(unknown)";
+    const balanceStr = `${fmt(this.balanceWei)} ${sym}`;
+    const requiredStr = this.requiredWei > 0n
+      ? `${fmt(this.requiredWei)} ${sym}`
+      : "unknown (estimated gas not reported by RPC)";
     return (
-      `Unable to ${verb}. Error: not enough balance to pay for recording this transaction on the ${name} blockchain ` +
-      `(${balanceInfo}). Please top up your account (${topUp}) with ${sym}.`
+      `Unable to ${verb}. Insufficient native balance to pay for gas on ${name}.\n` +
+      `• Executor: ${executor}\n` +
+      `• Current balance: ${balanceStr}\n` +
+      `• Required for this transaction: ${requiredStr}\n` +
+      `Please top up the executor with ${sym}.`
     );
   }
 }
 
-export function parseInsufficientGasError(
+export async function parseInsufficientGasError(
   err: unknown,
   chainSlug: SupportedChain,
   fallbackAddress?: string,
-): InsufficientGasBalanceError | null {
+): Promise<InsufficientGasBalanceError | null> {
   if (err instanceof InsufficientGasBalanceError) return err;
   const errObj = err as {
     message?: string;
@@ -99,9 +101,23 @@ export function parseInsufficientGasError(
 
   const haveWant = combined.match(/have\s+(\d+)\s+want\s+(\d+)/i);
   const addrMatch = combined.match(/address\s+(0x[a-fA-F0-9]{40})/);
-  const address = addrMatch?.[1] ?? errObj.sender ?? fallbackAddress ?? "";
-  const balanceWei = haveWant ? BigInt(haveWant[1]) : 0n;
+  let address = addrMatch?.[1] ?? errObj.sender ?? fallbackAddress ?? "";
+  if (!address) {
+    try {
+      address = (getWalletClient(chainSlug).account?.address as string) ?? "";
+    } catch {
+      // signer unavailable — leave address blank
+    }
+  }
+  let balanceWei = haveWant ? BigInt(haveWant[1]) : 0n;
   const requiredWei = haveWant ? BigInt(haveWant[2]) : 0n;
+  if (balanceWei === 0n && address) {
+    try {
+      balanceWei = await getNativeBalance(chainSlug, address);
+    } catch {
+      // RPC unavailable — leave balance as 0n
+    }
+  }
   return new InsufficientGasBalanceError({
     chainSlug,
     address,
@@ -375,7 +391,7 @@ export async function submitTransaction(
       gasParams = bumpGasParams(gasParams, gasBumpPercent);
       continue;
     } catch (err: unknown) {
-      const gasBalanceErr = parseInsufficientGasError(
+      const gasBalanceErr = await parseInsufficientGasError(
         err,
         params.chainSlug,
         clientAddress,
