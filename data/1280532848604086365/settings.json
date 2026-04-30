@@ -33,8 +33,8 @@
       "symbol": "EURchb",
       "decimals": 6,
       "chain": "gnosis",
-      "address": "0x7050E56d04E0965a0F840179FC0D25bcE9b5dEC4",
-      "mintable": false,
+      "address": "0x9ee438a16be3c75247aded9c80e801bf4764ca5c",
+      "mintable": true,
       "transactionsChannelId": "1372518467323826259",
       "walletManager": "opencollective"
     },
