@@ -12,7 +12,7 @@ import {
   SupportedChain,
 } from "../lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
-import { loadGuildSettings } from "../lib/utils.ts";
+import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
 import { refreshTokenStats } from "../lib/token-stats-cache.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
@@ -96,7 +96,7 @@ export default async function handleBurnCommand(
 
   // Find the token (default to only burnable token if not specified)
   const token = tokenSymbol
-    ? burnableTokens.find((t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase())
+    ? findTokenByInput(burnableTokens, tokenSymbol)
     : burnableTokens.length === 1 ? burnableTokens[0] : null;
   if (!token) {
     const available = burnableTokens.map((t) => `\`${t.symbol}\``).join(", ");

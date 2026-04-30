@@ -13,7 +13,7 @@ import {
   SupportedChain,
 } from "../lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
-import { loadGuildSettings } from "../lib/utils.ts";
+import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
 import { refreshTokenStats } from "../lib/token-stats-cache.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
@@ -160,7 +160,7 @@ export default async function handleMintCommand(
 
   // Find the token (default to only mintable token if not specified)
   const token = tokenSymbol
-    ? mintableTokens.find((t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase())
+    ? findTokenByInput(mintableTokens, tokenSymbol)
     : mintableTokens.length === 1 ? mintableTokens[0] : null;
   if (!token) {
     const available = mintableTokens.map((t) => `\`${t.symbol}\``).join(", ");

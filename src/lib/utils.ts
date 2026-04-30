@@ -42,6 +42,24 @@ export function parseMessageContent(
   return result;
 }
 
+// Resolves a user-supplied token reference against a list of tokens.
+// Accepts "SYMBOL", "SYMBOL (Name)", or just the name — Discord lets users
+// submit the autocomplete display label, not just its value.
+export function findTokenByInput<T extends { symbol: string; name: string }>(
+  tokens: readonly T[],
+  input: string,
+): T | undefined {
+  const normalized = input.toLowerCase().trim();
+  const beforeParen = normalized.split(" (")[0].trim();
+  return tokens.find(
+    (t) =>
+      t.symbol.toLowerCase() === normalized ||
+      t.symbol.toLowerCase() === beforeParen ||
+      t.name.toLowerCase() === normalized ||
+      t.name.toLowerCase() === beforeParen,
+  );
+}
+
 export function getEnv(key: string): string | undefined {
   try {
     if (typeof Deno !== "undefined" && Deno.env?.get) return Deno.env.get(key);

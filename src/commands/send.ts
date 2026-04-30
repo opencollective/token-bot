@@ -7,7 +7,7 @@ import {
   StringSelectMenuBuilder,
   TextChannel,
 } from "discord.js";
-import { loadGuildSettings } from "../lib/utils.ts";
+import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { keccak256, toUtf8Bytes, Wallet } from "ethers";
 import {
@@ -224,9 +224,8 @@ export default async function handleSendCommand(
 
     // If a token was specified via the command option, use it directly
     if (tokenSymbol) {
-      const idx = guildSettings.tokens.findIndex(
-        (t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase(),
-      );
+      const matched = findTokenByInput(guildSettings.tokens, tokenSymbol);
+      const idx = matched ? guildSettings.tokens.indexOf(matched) : -1;
       if (idx === -1) {
         const available = guildSettings.tokens.map((t) => t.symbol).join(", ");
         await interaction.editReply({
