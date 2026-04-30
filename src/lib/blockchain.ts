@@ -257,16 +257,9 @@ export async function getBaseFee(chainSlug: SupportedChain): Promise<bigint | un
   return fees.maxFeePerGas;
 }
 
-// Celo's baseFee can spike to 100+ gwei during stablecoin volume; viem's
-// estimator returns 2×baseFee, which produces a maxFeePerGas of 240+ gwei.
-// Combined with the 50M block gas limit fallback when estimateGas fails, the
-// implied gas budget balloons to ~12 CELO. Cap the fee per gas to keep the
-// budget bounded.
-const CELO_MAX_FEE_PER_GAS_CAP = 50_000_000_000n; // 50 gwei
-
 async function getInitialGasParams(
   publicClient: PublicClient,
-  chainSlug: SupportedChain,
+  _chainSlug: SupportedChain,
 ): Promise<
   | { gasPrice: bigint; maxFeePerGas?: undefined; maxPriorityFeePerGas?: undefined }
   | { gasPrice?: undefined; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }
@@ -282,17 +275,10 @@ async function getInitialGasParams(
     if (typeof maybeEstimate === "function") {
       const fees = await maybeEstimate();
       if (fees.maxFeePerGas && fees.maxPriorityFeePerGas) {
-        let { maxFeePerGas, maxPriorityFeePerGas } = fees as {
-          maxFeePerGas: bigint;
-          maxPriorityFeePerGas: bigint;
+        return {
+          maxFeePerGas: fees.maxFeePerGas,
+          maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
         };
-        if (chainSlug === "celo" && maxFeePerGas > CELO_MAX_FEE_PER_GAS_CAP) {
-          maxFeePerGas = CELO_MAX_FEE_PER_GAS_CAP;
-          if (maxPriorityFeePerGas > maxFeePerGas) {
-            maxPriorityFeePerGas = maxFeePerGas;
-          }
-        }
-        return { maxFeePerGas, maxPriorityFeePerGas };
       }
     }
   } catch {
