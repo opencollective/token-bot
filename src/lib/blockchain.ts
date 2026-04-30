@@ -357,10 +357,36 @@ export async function submitTransaction(
       "nonce",
       nonce,
     );
+    const gweiOf = (wei: bigint | undefined) =>
+      wei === undefined ? "n/a" : `${Number(wei) / 1e9} gwei`;
+    if ("gasPrice" in gasParams && gasParams.gasPrice !== undefined) {
+      console.log(`[gas] ${params.chainSlug} gasPrice=${gweiOf(gasParams.gasPrice)}`);
+    } else if ("maxFeePerGas" in gasParams) {
+      console.log(
+        `[gas] ${params.chainSlug} maxFeePerGas=${gweiOf(gasParams.maxFeePerGas)} maxPriorityFeePerGas=${
+          gweiOf(gasParams.maxPriorityFeePerGas)
+        }`,
+      );
+    }
     try {
       const { request } = await publicClient.simulateContract(
         writeContractParams as unknown as SimulateContractParameters,
       );
+      const reqGas = (request as { gas?: bigint }).gas;
+      const sym = ChainConfig[params.chainSlug].nativeCurrency.symbol;
+      const feeCap = "maxFeePerGas" in gasParams
+        ? gasParams.maxFeePerGas
+        : (gasParams as { gasPrice?: bigint }).gasPrice;
+      if (reqGas !== undefined && feeCap !== undefined) {
+        const budgetWei = reqGas * feeCap;
+        console.log(
+          `[gas] ${params.chainSlug} request.gas=${reqGas} → max budget ${
+            formatUnits(budgetWei, ChainConfig[params.chainSlug].nativeCurrency.decimals)
+          } ${sym}`,
+        );
+      } else {
+        console.log(`[gas] ${params.chainSlug} request.gas=${reqGas ?? "(unset, viem will estimate)"}`);
+      }
       if (DRY_RUN) {
         console.log(
           "DRY_RUN: would have submitted transaction with params:",
