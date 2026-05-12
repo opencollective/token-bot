@@ -7,11 +7,11 @@ import {
   Interaction,
   MessageFlags,
   ModalBuilder,
-  ModalSubmitInteraction,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   TextInputBuilder,
   TextInputStyle,
+  UserSelectMenuBuilder,
 } from "discord.js";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
 import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
@@ -277,68 +277,30 @@ function getAuditNameForUser(guildId: string, userId: string, fallbackUsername: 
   return user ? `${user.displayName} <@${user.username}>` : `<@${fallbackUsername}>`;
 }
 
-async function resolveShiftParticipants(
-  interaction: ModalSubmitInteraction,
+async function resolveSelectedShiftParticipants(
+  interaction: Interaction,
   guildId: string,
-  rawInput: string,
-): Promise<{ participants: ShiftSignup[]; unresolved: string[] }> {
+  selectedUserIds: string[],
+): Promise<ShiftSignup[]> {
   const guild = interaction.guild;
   if (!guild) {
-    return { participants: [], unresolved: ["guild"] };
-  }
-
-  const tokens = new Set<string>();
-  for (const match of rawInput.matchAll(/<@!?(\d+)>/g)) {
-    tokens.add(match[1]);
-  }
-
-  const withoutMentions = rawInput.replace(/<@!?\d+>/g, " ");
-  for (const part of withoutMentions.split(/[\s,;\n]+/)) {
-    const token = part.trim().replace(/^@/, "");
-    if (token) tokens.add(token);
+    return [];
   }
 
   const participants: ShiftSignup[] = [];
-  const unresolved: string[] = [];
   const seen = new Set<string>();
 
-  for (const token of tokens) {
-    let member: GuildMember | undefined;
+  for (const selectedUserId of selectedUserIds) {
+    if (seen.has(selectedUserId)) continue;
 
-    if (/^\d+$/.test(token)) {
-      try {
-        member = await guild.members.fetch(token);
-      } catch {
-        member = undefined;
-      }
-    } else {
-      const normalized = token.toLowerCase();
-      member = guild.members.cache.find(m =>
-        m.user.username.toLowerCase() === normalized ||
-        (m.displayName || "").toLowerCase() === normalized ||
-        (m.user.globalName || "").toLowerCase() === normalized
-      );
-
-      if (!member) {
-        try {
-          const matches = await guild.members.fetch({ query: token, limit: 10 });
-          member = matches.find(m =>
-            m.user.username.toLowerCase() === normalized ||
-            (m.displayName || "").toLowerCase() === normalized ||
-            (m.user.globalName || "").toLowerCase() === normalized
-          ) || matches.first();
-        } catch {
-          member = undefined;
-        }
-      }
-    }
-
-    if (!member || seen.has(member.id)) {
-      if (!member) unresolved.push(token);
+    let member: GuildMember;
+    try {
+      member = await guild.members.fetch(selectedUserId);
+    } catch {
       continue;
     }
 
-    seen.add(member.id);
+    seen.add(selectedUserId);
     participants.push({
       discordUserId: member.id,
       username: member.user.username,
@@ -352,7 +314,7 @@ async function resolveShiftParticipants(
     }).catch(err => console.error("[shifts] Failed to save retroactive participant:", err));
   }
 
-  return { participants, unresolved };
+  return participants;
 }
 
 
@@ -775,22 +737,31 @@ export async function handleShiftsButton(
       return;
     }
 
-    const modal = new ModalBuilder()
-      .setCustomId("shifts_past_participants_modal")
-      .setTitle("Record a past shift")
-      .addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder()
-            .setCustomId("participants")
-            .setLabel("Discord username(s) or mention(s)")
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder("@alice, @bob")
-            .setRequired(true)
-            .setMaxLength(500),
-        ),
-      );
+    state.step = "past_select_users";
+    shiftsStates.set(userId, state);
 
-    await interaction.showModal(modal);
+    const userSelect = new UserSelectMenuBuilder()
+      .setCustomId("shifts_past_users_select")
+      .setPlaceholder("Select one or more people...")
+      .setMinValues(1)
+      .setMaxValues(10);
+
+    await interaction.update({
+      content: "👥 **Select who completed the past shift:**",
+      components: [
+        new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("shifts_back_main")
+            .setLabel("← Back")
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId("shifts_cancel_flow")
+            .setLabel("Cancel")
+            .setStyle(ButtonStyle.Danger),
+        ),
+      ],
+    });
     return;
   }
 
@@ -908,7 +879,7 @@ export async function handleShiftsSelect(
   userId: string,
   guildId: string,
 ) {
-  if (!interaction.isStringSelectMenu()) return;
+  if (!interaction.isStringSelectMenu() && !interaction.isUserSelectMenu()) return;
 
   const customId = interaction.customId;
   const state = shiftsStates.get(userId);
@@ -929,6 +900,61 @@ export async function handleShiftsSelect(
     });
     return;
   }
+
+  if (customId === "shifts_past_users_select") {
+    if (!state.isShiftsMaster) {
+      await interaction.update({
+        content: "⚠️ You don't have permission to record past shifts.",
+        components: [],
+      });
+      return;
+    }
+
+    const participants = await resolveSelectedShiftParticipants(interaction, guildId, interaction.values);
+    if (participants.length === 0) {
+      await interaction.update({
+        content: "⚠️ I could not resolve the selected participants. Please try again.",
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId("shifts_record_past")
+              .setLabel("← Back")
+              .setStyle(ButtonStyle.Secondary),
+          ),
+        ],
+      });
+      return;
+    }
+
+    state.pastShiftParticipants = participants;
+    state.step = "past_select_date";
+    shiftsStates.set(userId, state);
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId("shifts_past_date_select")
+      .setPlaceholder("Select the shift date...")
+      .addOptions(getPastDateOptions());
+
+    await interaction.update({
+      content: `📅 **Select the shift date for:** ${participants.map(p => `@${p.username}`).join(", ")}`,
+      components: [
+        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("shifts_record_past")
+            .setLabel("← Back")
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId("shifts_cancel_flow")
+            .setLabel("Cancel")
+            .setStyle(ButtonStyle.Danger),
+        ),
+      ],
+    });
+    return;
+  }
+
+  if (!interaction.isStringSelectMenu()) return;
 
   // Signup date selection (dropdown)
   if (customId === "shifts_signup_date_select") {
@@ -1267,50 +1293,6 @@ export async function handleShiftsModal(
     return;
   }
 
-  if (customId === "shifts_past_participants_modal") {
-    if (!state.isShiftsMaster) {
-      await interaction.reply({
-        content: "⚠️ You don't have permission to record past shifts.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const rawParticipants = interaction.fields.getTextInputValue("participants").trim();
-    const { participants, unresolved } = await resolveShiftParticipants(interaction, guildId, rawParticipants);
-
-    if (participants.length === 0 || unresolved.length > 0) {
-      const unresolvedText = unresolved.length > 0 ? `\n\nCould not resolve: ${unresolved.map(u => `\`${u}\``).join(", ")}` : "";
-      await interaction.reply({
-        content: `⚠️ I could not resolve all participants. Use Discord mentions, user IDs, or exact usernames.${unresolvedText}`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    state.pastShiftParticipants = participants;
-    state.step = "past_select_date";
-    shiftsStates.set(userId, state);
-
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId("shifts_past_date_select")
-      .setPlaceholder("Select the shift date...")
-      .addOptions(getPastDateOptions());
-
-    await interaction.reply({
-      content: `📅 **Select the shift date for:** ${participants.map(p => `@${p.username}`).join(", ")}`,
-      components: [
-        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu),
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId("shifts_cancel_flow")
-            .setLabel("Cancel")
-            .setStyle(ButtonStyle.Danger),
-        ),
-      ],
-      flags: MessageFlags.Ephemeral,
-    });
-  }
 }
 
 // Deferred version — used after deferUpdate() when coming from select menu

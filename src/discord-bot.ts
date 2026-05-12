@@ -505,6 +505,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       return handleStringSelect(interaction, userId, guildId);
     }
+    if (interaction.isUserSelectMenu()) {
+      if (interaction.customId.startsWith("shifts_")) {
+        return handleShiftsSelect(interaction, userId, guildId);
+      }
+    }
     if (interaction.isRoleSelectMenu()) {
       return handleRoleSelectMenu(interaction, userId, guildId);
     }
