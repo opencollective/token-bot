@@ -154,7 +154,7 @@ function buildUpcomingDateOptions(days = 28): { label: string; value: string }[]
 
 function getCustomStartOptions(): { label: string; value: string }[] {
   const options: { label: string; value: string }[] = [];
-  for (let minutes = 8 * 60; minutes <= 22 * 60; minutes += 30) {
+  for (let minutes = 8 * 60; minutes <= 20 * 60; minutes += 30) {
     const value = minutesToTime(minutes);
     options.push({
       label: formatTime(value),
@@ -952,28 +952,14 @@ export async function handleShiftsSelect(
     state.selectedSlot = undefined;
     shiftsStates.set(userId, state);
 
-    const startOptions = getCustomStartOptions();
-    const earlyOptions = startOptions.slice(0, 25);
-    const lateOptions = startOptions.slice(25);
     const components: any[] = [
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId("shifts_custom_start_select")
           .setPlaceholder("Select a start time...")
-          .addOptions(earlyOptions),
+          .addOptions(getCustomStartOptions()),
       ),
     ];
-
-    if (lateOptions.length > 0) {
-      components.push(
-        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId("shifts_custom_start_select_late")
-            .setPlaceholder("Select a later start time...")
-            .addOptions(lateOptions),
-        ),
-      );
-    }
 
     components.push(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -995,7 +981,7 @@ export async function handleShiftsSelect(
     return;
   }
 
-  if (customId === "shifts_custom_start_select" || customId === "shifts_custom_start_select_late") {
+  if (customId === "shifts_custom_start_select") {
     const startTime = interaction.values[0];
     state.selectedSlot = { start: startTime, end: startTime };
     state.step = "custom_select_duration";
