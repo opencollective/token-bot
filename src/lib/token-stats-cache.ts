@@ -45,7 +45,7 @@ export async function refreshTokenStats(chain: Chain, address: string, decimals:
 
 /** Warm cache for all configured tokens */
 export async function warmTokenStatsCache(): Promise<void> {
-  const dataDir = getEnv("DATA_DIR") || "./data";
+  const dataDir = getEnv("DATA_DIR") || "/data";
   try {
     for await (const entry of Deno.readDir(dataDir)) {
       if (!entry.isDirectory) continue;

@@ -20,7 +20,7 @@ export interface UserEntry {
 const usersByGuild = new Map<string, Map<string, UserEntry>>();
 
 export async function initUserEmails(): Promise<void> {
-  const dataDir = getEnv("DATA_DIR") || "./data";
+  const dataDir = getEnv("DATA_DIR") || "/data";
   try {
     for await (const entry of Deno.readDir(dataDir)) {
       if (!entry.isDirectory) continue;
@@ -84,7 +84,7 @@ export async function saveUser(guildId: string, user: { discordUserId: string; u
   };
   guildUsers.set(user.discordUserId, entry);
 
-  const dataDir = getEnv("DATA_DIR") || "./data";
+  const dataDir = getEnv("DATA_DIR") || "/data";
   const dirPath = `${dataDir}/${guildId}`;
   const filePath = `${dirPath}/users.jsonl`;
   
