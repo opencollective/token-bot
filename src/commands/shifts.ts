@@ -7,6 +7,7 @@ import {
   Interaction,
   MessageFlags,
   ModalBuilder,
+  TextChannel,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   TextInputBuilder,
@@ -48,19 +49,39 @@ interface ShiftsState {
   pastShiftParticipants?: ShiftSignup[];
 }
 
-interface ShiftSignup {
+export interface ShiftSignup {
   discordUserId: string;
   username: string;
   email?: string;
 }
 
-interface CalendarEvent {
+export interface CalendarEvent {
   id?: string;
   summary?: string;
   description?: string;
   start: { dateTime: string };
   end: { dateTime: string };
-  attendees?: Array<{ email: string }>;
+  attendees?: Array<{ email: string; responseStatus?: string }>;
+}
+
+interface ShiftSignupUpsertParams {
+  existingEvent?: CalendarEvent;
+  selectedDate: Date;
+  selectedSlot: { start: string; end: string };
+  timezone: string;
+  participants: ShiftSignup[];
+  recorderName?: string;
+  timestamp?: string;
+  retroactive?: boolean;
+}
+
+interface ShiftRewardTransactionMessageParams {
+  minterUserId: string;
+  rewards: Array<{ userId: string; username: string; amount: number; hash?: string }>;
+  token: { symbol: string; chain: string; address: string; transactionsChannelId?: string };
+  fallbackChannelId?: string;
+  shiftStart: Date;
+  shiftEnd: Date;
 }
 
 function invalidateShiftCaches() {
@@ -227,6 +248,123 @@ function createDateTime(date: Date, timeStr: string, timezone: string): Date {
   return dateTime;
 }
 
+function dedupeAttendees(attendees: Array<{ email: string; responseStatus?: string }>): Array<{ email: string; responseStatus?: string }> {
+  const seen = new Set<string>();
+  const result: Array<{ email: string; responseStatus?: string }> = [];
+  for (const attendee of attendees) {
+    const key = attendee.email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(attendee);
+  }
+  return result;
+}
+
+export function buildShiftSignupUpsert(params: ShiftSignupUpsertParams): {
+  action: "create" | "update";
+  payload: any;
+  event: CalendarEvent;
+} {
+  const {
+    existingEvent,
+    selectedDate,
+    selectedSlot,
+    timezone,
+    participants,
+    recorderName,
+    retroactive = false,
+  } = params;
+  const timestamp = params.timestamp || formatAuditTimestamp();
+  const startDateTime = createDateTime(selectedDate, selectedSlot.start, timezone);
+  const endDateTime = createDateTime(selectedDate, selectedSlot.end, timezone);
+  const existingSignups = parseShiftSignups(existingEvent?.description || "");
+
+  let desc = existingEvent?.description || "";
+  for (const participant of participants) {
+    if (existingSignups.some(s => s.discordUserId === participant.discordUserId)) continue;
+    const participantName = `<@${participant.username}>`;
+    const retroactiveSuffix = retroactive && recorderName ? ` retroactively by ${recorderName}` : "";
+    desc = appendToDescription(
+      desc,
+      `${timestamp}: ${participantName} signed up (discord:${participant.discordUserId})${retroactiveSuffix}`,
+    );
+  }
+
+  const newAttendees = participants
+    .filter(p => p.email)
+    .map(p => ({ email: p.email! }));
+
+  if (existingEvent) {
+    const attendees = dedupeAttendees([...(existingEvent.attendees || []), ...newAttendees]);
+    const payload: any = { description: desc };
+    if (attendees.length > 0) payload.attendees = attendees;
+    return {
+      action: "update",
+      payload,
+      event: { ...existingEvent, description: desc, attendees },
+    };
+  }
+
+  const payload: any = {
+    summary: `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`,
+    description: desc,
+    location: "Commons Hub Brussels, Rue de la Madeleine 51, 1000 Brussels",
+    start: {
+      dateTime: startDateTime.toISOString(),
+      timeZone: timezone,
+    },
+    end: {
+      dateTime: endDateTime.toISOString(),
+      timeZone: timezone,
+    },
+  };
+  if (newAttendees.length > 0) payload.attendees = dedupeAttendees(newAttendees);
+
+  return {
+    action: "create",
+    payload,
+    event: payload,
+  };
+}
+
+function formatShiftTransactionDate(date: Date): string {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}/${date.getFullYear()}`;
+}
+
+function formatShiftTransactionTime(date: Date): string {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatDurationHours(hours: number): string {
+  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}h`;
+}
+
+export function buildShiftTransactionMessage(params: ShiftRewardTransactionMessageParams): {
+  channelId?: string;
+  content: string;
+} {
+  const { minterUserId, rewards, token, fallbackChannelId, shiftStart, shiftEnd } = params;
+  const channelId = token.transactionsChannelId ||
+    (token.symbol === "CHT" ? CHT_TRANSACTIONS_CHANNEL_ID : fallbackChannelId);
+  const recipients = rewards.map(r => `<@${r.userId}>`).join(", ");
+  const uniqueAmounts = [...new Set(rewards.map(r => r.amount))];
+  const amountText = uniqueAmounts.length === 1
+    ? `${uniqueAmounts[0]} ${token.symbol}`
+    : `${rewards.reduce((total, r) => total + r.amount, 0)} ${token.symbol}`;
+  const durationHours = (shiftEnd.getTime() - shiftStart.getTime()) / (1000 * 60 * 60);
+  const txLinks = rewards
+    .filter(r => r.hash)
+    .map(r => `[[tx]](<https://txinfo.xyz/${token.chain}/tx/${r.hash}>)`)
+    .join(" ");
+
+  let content = `<@${minterUserId}> issued ${amountText} to ${recipients} for a ${formatDurationHours(durationHours)} shift on ${formatShiftTransactionDate(shiftStart)} at ${formatShiftTransactionTime(shiftStart)}`;
+  if (txLinks) content += ` ${txLinks}`;
+
+  return { channelId, content };
+}
+
 function getSlotDurationHours(slot: { start: string; end: string }): number {
   return (timeToMinutes(slot.end) - timeToMinutes(slot.start)) / 60;
 }
@@ -368,6 +506,7 @@ async function getAllUpcomingShifts(calendarId: string): Promise<CalendarEvent[]
 }
 
 const CHT_MINTER_ROLE_ID = "1480923356013269044";
+const CHT_TRANSACTIONS_CHANNEL_ID = "1354115945718878269";
 
 function isShiftsMaster(member: GuildMember, settings: ShiftsSettings): boolean {
   return member.roles.cache.has(settings.shiftsMasterRoleId) || member.roles.cache.has(CHT_MINTER_ROLE_ID);
@@ -1659,6 +1798,7 @@ async function buildRewardResultContent(
   minterUsername: string,
   settings: ShiftsSettings,
   state: ShiftsState,
+  interaction?: ButtonInteraction | StringSelectMenuInteraction,
 ): Promise<string> {
   const guildSettings = await loadGuildSettings(guildId);
   if (!guildSettings) {
@@ -1727,6 +1867,29 @@ async function buildRewardResultContent(
     await calendar.updateEvent(settings.calendarId, state.selectedRewardEvent!.id!, {
       description: desc
     });
+
+    if (interaction) {
+      const shiftStart = new Date(state.selectedRewardEvent!.start.dateTime);
+      const shiftEnd = new Date(state.selectedRewardEvent!.end.dateTime);
+      const message = buildShiftTransactionMessage({
+        minterUserId,
+        rewards: successfulRewards,
+        token,
+        fallbackChannelId: guildSettings.channels?.transactions,
+        shiftStart,
+        shiftEnd,
+      });
+      if (message.channelId) {
+        try {
+          const transactionsChannel = (await interaction.client.channels.fetch(message.channelId)) as TextChannel;
+          if (transactionsChannel) {
+            await transactionsChannel.send(message.content);
+          }
+        } catch (error) {
+          console.error("Error sending shift reward message to transactions channel:", error);
+        }
+      }
+    }
   }
 
   let content = `💰 **Shift rewards processed**\n\n`;
@@ -1783,40 +1946,29 @@ async function processPastShift(
     });
 
     const recorderName = getAuditNameForUser(guildId, userId, interaction.user.username);
-    let desc = existingEvent?.description || "";
-    const existingSignups = parseShiftSignups(desc);
-
-    for (const participant of participants) {
-      if (existingSignups.some(s => s.discordUserId === participant.discordUserId)) {
-        continue;
-      }
-      const participantUser = getUser(guildId, participant.discordUserId);
-      const participantName = participantUser ? `${participantUser.displayName} <@${participantUser.username}>` : `<@${participant.username}>`;
-      desc = appendToDescription(desc, `${formatAuditTimestamp()}: ${participantName} signed up (discord:${participant.discordUserId}) retroactively by ${recorderName}`);
-    }
+    const upsert = buildShiftSignupUpsert({
+      existingEvent,
+      selectedDate,
+      selectedSlot,
+      timezone: settings.timezone,
+      participants: participants.map(participant => {
+        const participantUser = getUser(guildId, participant.discordUserId);
+        return {
+          ...participant,
+          username: participantUser?.username || participant.username,
+          email: participant.email || participantUser?.email || getUserEmail(guildId, participant.discordUserId),
+        };
+      }),
+      recorderName,
+      retroactive: true,
+    });
 
     let shiftEvent: CalendarEvent;
-    if (existingEvent) {
-      shiftEvent = {
-        ...existingEvent,
-        description: desc,
-      };
-      await calendar.updateEvent(settings.calendarId, existingEvent.id!, { description: desc });
+    if (upsert.action === "update") {
+      shiftEvent = upsert.event;
+      await calendar.updateEvent(settings.calendarId, existingEvent!.id!, upsert.payload);
     } else {
-      const eventTitle = `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
-      shiftEvent = await calendar.createEventNoConflictCheck(settings.calendarId, {
-        summary: eventTitle,
-        description: desc,
-        location: "Commons Hub Brussels, Rue de la Madeleine 51, 1000 Brussels",
-        start: {
-          dateTime: startDateTime.toISOString(),
-          timeZone: settings.timezone,
-        },
-        end: {
-          dateTime: endDateTime.toISOString(),
-          timeZone: settings.timezone,
-        },
-      });
+      shiftEvent = await calendar.createEventNoConflictCheck(settings.calendarId, upsert.payload);
     }
 
     const durationHours = (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
@@ -1830,7 +1982,7 @@ async function processPastShift(
     state.rewardParticipants = participants.map(p => p.discordUserId);
     state.rewardAmounts = rewardAmounts;
 
-    const rewardContent = await buildRewardResultContent(guildId, userId, interaction.user.username, settings, state);
+    const rewardContent = await buildRewardResultContent(guildId, userId, interaction.user.username, settings, state, interaction);
     await interaction.editReply({
       content: `✅ **Past shift recorded**\n\n${rewardContent}`,
     });
@@ -1853,7 +2005,7 @@ async function processReward(interaction: ButtonInteraction, userId: string, gui
   });
 
   try {
-    const content = await buildRewardResultContent(guildId, userId, interaction.user.username, settings, state);
+    const content = await buildRewardResultContent(guildId, userId, interaction.user.username, settings, state, interaction);
     await interaction.editReply({ content });
     shiftsStates.delete(userId);
   } catch (error) {
