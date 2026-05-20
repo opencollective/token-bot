@@ -21,6 +21,18 @@ import { getUserEmail, saveUser, getUser } from "../lib/user-emails.ts";
 
 import { mintTokens } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
+import { Discord } from "../lib/discord.ts";
+
+const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
+
+async function logShiftAction(message: string) {
+  try {
+    const discord = Discord.getInstance();
+    await discord?.postToDiscordChannel(message, SHIFTS_LOG_CHANNEL_ID);
+  } catch (err) {
+    console.error("[shifts] Failed to log to #shifts channel:", err);
+  }
+}
 
 interface ShiftsSettings {
   calendarId: string;
@@ -1276,6 +1288,11 @@ export async function handleShiftsSelect(
         content: "✅ Shift cancelled successfully.",
       });
 
+      // Log to #shifts channel
+      const cancelStart = new Date(shiftToCancel.start.dateTime);
+      const cancelEnd = new Date(shiftToCancel.end.dateTime);
+      await logShiftAction(`❌ <@${userId}> cancelled their shift on **${formatDate(cancelStart)}** ${formatTime(cancelStart.toTimeString().substring(0,5))}-${formatTime(cancelEnd.toTimeString().substring(0,5))}`);
+
       // Clear state
       shiftsStates.delete(userId);
 
@@ -1737,6 +1754,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
     // Invalidate caches after signup
     invalidateShiftCaches();
 
+    const slotTimeStr = `${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
     await interaction.editReply({
       content: `✅ **Shift signup confirmed!**
 
@@ -1746,6 +1764,9 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
 
 Your shift has been added to the calendar. Thank you for helping take care of our space! 🙏`,
     });
+
+    // Log to #shifts channel
+    await logShiftAction(`📋 <@${userId}> signed up for a shift on **${formatDate(selectedDate)}** ${slotTimeStr}`);
 
     shiftsStates.delete(userId);
 
@@ -1890,6 +1911,17 @@ async function buildRewardResultContent(
         }
       }
     }
+
+    const rewardEvent = state.selectedRewardEvent!;
+    const rewardStart = new Date(rewardEvent.start.dateTime);
+    const rewardEnd = new Date(rewardEvent.end.dateTime);
+    const shiftLabel = `**${formatDate(rewardStart)}** ${formatTime(rewardStart.toTimeString().substring(0,5))}-${formatTime(rewardEnd.toTimeString().substring(0,5))}`;
+    const userMentions = successfulRewards.map(r => `<@${r.userId}>`).join(", ");
+    const uniqueAmounts = [...new Set(successfulRewards.map(r => r.amount))];
+    const amountText = uniqueAmounts.length === 1
+      ? `${uniqueAmounts[0]} ${settings.rewardTokenSymbol} each`
+      : `${successfulRewards.reduce((total, r) => total + r.amount, 0)} ${settings.rewardTokenSymbol}`;
+    await logShiftAction(`💰 ${userMentions} rewarded ${amountText} for shift on ${shiftLabel}`);
   }
 
   let content = `💰 **Shift rewards processed**\n\n`;
