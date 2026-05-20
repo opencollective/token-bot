@@ -42,6 +42,24 @@ export function parseMessageContent(
   return result;
 }
 
+// Resolves a user-supplied token reference against a list of tokens.
+// Accepts "SYMBOL", "SYMBOL (Name)", or just the name — Discord lets users
+// submit the autocomplete display label, not just its value.
+export function findTokenByInput<T extends { symbol: string; name: string }>(
+  tokens: readonly T[],
+  input: string,
+): T | undefined {
+  const normalized = input.toLowerCase().trim();
+  const beforeParen = normalized.split(" (")[0].trim();
+  return tokens.find(
+    (t) =>
+      t.symbol.toLowerCase() === normalized ||
+      t.symbol.toLowerCase() === beforeParen ||
+      t.name.toLowerCase() === normalized ||
+      t.name.toLowerCase() === beforeParen,
+  );
+}
+
 export function getEnv(key: string): string | undefined {
   try {
     if (typeof Deno !== "undefined" && Deno.env?.get) return Deno.env.get(key);
@@ -52,9 +70,9 @@ export function getEnv(key: string): string | undefined {
   return undefined;
 }
 
-// Get data directory from env or default to ./data
+// Get data directory from env or default to the container-mounted data volume.
 function getDataDir(): string {
-  return getEnv("DATA_DIR") || "./data";
+  return getEnv("DATA_DIR") || "/data";
 }
 
 // Settings cache (invalidated only on save)
@@ -119,17 +137,17 @@ function migrateSettings(raw: any): GuildSettings {
   };
 }
 
-export async function loadGuildFile(
+export async function loadGuildFile<T = any>(
   guildId: string,
   filename: string,
-): Promise<any | null> {
+): Promise<T | null> {
   const dataDir = getDataDir();
   const primaryPath = join(dataDir, guildId, filename);
 
   // Try primary data directory first
   try {
     const content = await Deno.readTextFile(primaryPath);
-    return JSON.parse(content);
+    return JSON.parse(content) as T;
   } catch {
     // Primary path failed, continue to fallback
   }
@@ -139,7 +157,7 @@ export async function loadGuildFile(
     try {
       const fallbackPath = join("./data", guildId, filename);
       const content = await Deno.readTextFile(fallbackPath);
-      return JSON.parse(content);
+      return JSON.parse(content) as T;
     } catch {
       // Fallback also failed
     }

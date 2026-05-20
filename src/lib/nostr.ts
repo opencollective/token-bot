@@ -1,4 +1,4 @@
-import { EventTemplate, finalizeEvent, getPublicKey, nip19, SimplePool } from "npm:nostr-tools";
+import { EventTemplate, finalizeEvent, getPublicKey, nip19, SimplePool } from "nostr-tools";
 import { getEnv } from "./utils.ts";
 
 const DRY_RUN = getEnv("DRY_RUN") === "true";

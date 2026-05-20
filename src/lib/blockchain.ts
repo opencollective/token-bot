@@ -27,6 +27,105 @@ import { getEnv } from "./utils.ts";
 
 export const MINTER_ROLE = "0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6";
 
+export class InsufficientGasBalanceError extends Error {
+  readonly chainSlug: SupportedChain;
+  readonly address: string;
+  readonly balanceWei: bigint;
+  readonly requiredWei: bigint;
+
+  constructor(params: {
+    chainSlug: SupportedChain;
+    address: string;
+    balanceWei: bigint;
+    requiredWei: bigint;
+  }) {
+    super("Insufficient native balance to pay for gas");
+    this.name = "InsufficientGasBalanceError";
+    this.chainSlug = params.chainSlug;
+    this.address = params.address;
+    this.balanceWei = params.balanceWei;
+    this.requiredWei = params.requiredWei;
+  }
+
+  formatMessage(verb: string): string {
+    const chain = ChainConfig[this.chainSlug];
+    const sym = chain.nativeCurrency.symbol;
+    const name = chain.name;
+    const dec = chain.nativeCurrency.decimals;
+    const fmt = (wei: bigint): string => {
+      const full = formatUnits(wei, dec);
+      const [intPart, decPart = ""] = full.split(".");
+      const trimmed = decPart.slice(0, 6).replace(/0+$/, "");
+      return trimmed ? `${intPart}.${trimmed}` : intPart;
+    };
+    const executor = this.address || "(unknown)";
+    const balanceStr = `${fmt(this.balanceWei)} ${sym}`;
+    const requiredStr = this.requiredWei > 0n
+      ? `${fmt(this.requiredWei)} ${sym}`
+      : "unknown (estimated gas not reported by RPC)";
+    return (
+      `Unable to ${verb}. Insufficient native balance to pay for gas on ${name}.\n` +
+      `• Executor: ${executor}\n` +
+      `• Current balance: ${balanceStr}\n` +
+      `• Required for this transaction: ${requiredStr}\n` +
+      `Please top up the executor with ${sym}.`
+    );
+  }
+}
+
+export async function parseInsufficientGasError(
+  err: unknown,
+  chainSlug: SupportedChain,
+  fallbackAddress?: string,
+): Promise<InsufficientGasBalanceError | null> {
+  if (err instanceof InsufficientGasBalanceError) return err;
+  const errObj = err as {
+    message?: string;
+    details?: string;
+    shortMessage?: string;
+    cause?: { details?: string; message?: string; data?: { message?: string } };
+    sender?: string;
+  };
+  const parts = [
+    errObj.message ?? "",
+    errObj.details ?? "",
+    errObj.shortMessage ?? "",
+    errObj.cause?.details ?? "",
+    errObj.cause?.message ?? "",
+    errObj.cause?.data?.message ?? "",
+  ];
+  const combined = parts.join("\n");
+  const isInsufficient = /insufficient funds/i.test(combined) ||
+    /exceeds the balance of the account/i.test(combined);
+  if (!isInsufficient) return null;
+
+  const haveWant = combined.match(/have\s+(\d+)\s+want\s+(\d+)/i);
+  const addrMatch = combined.match(/address\s+(0x[a-fA-F0-9]{40})/);
+  let address = addrMatch?.[1] ?? errObj.sender ?? fallbackAddress ?? "";
+  if (!address) {
+    try {
+      address = (getWalletClient(chainSlug).account?.address as string) ?? "";
+    } catch {
+      // signer unavailable — leave address blank
+    }
+  }
+  let balanceWei = haveWant ? BigInt(haveWant[1]) : 0n;
+  const requiredWei = haveWant ? BigInt(haveWant[2]) : 0n;
+  if (balanceWei === 0n && address) {
+    try {
+      balanceWei = await getNativeBalance(chainSlug, address);
+    } catch {
+      // RPC unavailable — leave balance as 0n
+    }
+  }
+  return new InsufficientGasBalanceError({
+    chainSlug,
+    address,
+    balanceWei,
+    requiredWei,
+  });
+}
+
 export const PROFILE_ADMIN_ROLE =
   "0x224b562a599bb6f57441f98a50de513dff0de3d9b620f342c27a4e4a898ce8e2";
 
@@ -153,13 +252,15 @@ export type Clients = { publicClient: PublicClient; walletClient: WalletClient; 
 
 export async function getBaseFee(chainSlug: SupportedChain): Promise<bigint | undefined> {
   const rpcUrl = RPC_URLS[chainSlug];
-  console.log(">>> ChainConfig[chainSlug]", ChainConfig[chainSlug]);
   const client = createPublicClient({ transport: http(rpcUrl), chain: ChainConfig[chainSlug] });
-  const fees = await getInitialGasParams(client as any);
+  const fees = await getInitialGasParams(client as any, chainSlug);
   return fees.maxFeePerGas;
 }
 
-async function getInitialGasParams(publicClient: PublicClient): Promise<
+async function getInitialGasParams(
+  publicClient: PublicClient,
+  _chainSlug: SupportedChain,
+): Promise<
   | { gasPrice: bigint; maxFeePerGas?: undefined; maxPriorityFeePerGas?: undefined }
   | { gasPrice?: undefined; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }
 > {
@@ -230,12 +331,19 @@ export async function submitTransaction(
     transport: http(RPC_URLS[params.chainSlug]),
     chain: ChainConfig[params.chainSlug],
   });
-  let gasParams = await getInitialGasParams(publicClient as any);
+  let gasParams = await getInitialGasParams(publicClient as any, params.chainSlug);
   const clientAddress = client.account?.address as Address;
   const nonce = options?.nonce ?? await publicClient.getTransactionCount({
     address: clientAddress,
     blockTag: "pending",
   });
+
+  // When eth_estimateGas can't run (e.g. balance < gas × maxFeePerGas), viem
+  // falls back to the block gas limit (~50M on Celo). Set a manual ceiling
+  // for ERC20 ops so the implied budget stays bounded.
+  const manualGasLimit: bigint | undefined = params.chainSlug === "celo"
+    ? 500_000n
+    : undefined;
 
   const writeContractParams = {
     address: params.contractAddress,
@@ -246,6 +354,7 @@ export async function submitTransaction(
     args: params.args,
     nonce,
     ...gasParams,
+    ...(manualGasLimit !== undefined ? { gas: manualGasLimit } : {}),
   };
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -258,10 +367,36 @@ export async function submitTransaction(
       "nonce",
       nonce,
     );
+    const gweiOf = (wei: bigint | undefined) =>
+      wei === undefined ? "n/a" : `${Number(wei) / 1e9} gwei`;
+    if ("gasPrice" in gasParams && gasParams.gasPrice !== undefined) {
+      console.log(`[gas] ${params.chainSlug} gasPrice=${gweiOf(gasParams.gasPrice)}`);
+    } else if ("maxFeePerGas" in gasParams) {
+      console.log(
+        `[gas] ${params.chainSlug} maxFeePerGas=${gweiOf(gasParams.maxFeePerGas)} maxPriorityFeePerGas=${
+          gweiOf(gasParams.maxPriorityFeePerGas)
+        }`,
+      );
+    }
     try {
       const { request } = await publicClient.simulateContract(
         writeContractParams as unknown as SimulateContractParameters,
       );
+      const reqGas = (request as { gas?: bigint }).gas;
+      const sym = ChainConfig[params.chainSlug].nativeCurrency.symbol;
+      const feeCap = "maxFeePerGas" in gasParams
+        ? gasParams.maxFeePerGas
+        : (gasParams as { gasPrice?: bigint }).gasPrice;
+      if (reqGas !== undefined && feeCap !== undefined) {
+        const budgetWei = reqGas * feeCap;
+        console.log(
+          `[gas] ${params.chainSlug} request.gas=${reqGas} → max budget ${
+            formatUnits(budgetWei, ChainConfig[params.chainSlug].nativeCurrency.decimals)
+          } ${sym}`,
+        );
+      } else {
+        console.log(`[gas] ${params.chainSlug} request.gas=${reqGas ?? "(unset, viem will estimate)"}`);
+      }
       if (DRY_RUN) {
         console.log(
           "DRY_RUN: would have submitted transaction with params:",
@@ -292,6 +427,12 @@ export async function submitTransaction(
       gasParams = bumpGasParams(gasParams, gasBumpPercent);
       continue;
     } catch (err: unknown) {
+      const gasBalanceErr = await parseInsufficientGasError(
+        err,
+        params.chainSlug,
+        clientAddress,
+      );
+      if (gasBalanceErr) throw gasBalanceErr;
       const code = (err as { code?: number; cause?: { code?: number } })?.code ?? (
         err as { cause?: { code?: number } }
       )?.cause?.code;
@@ -300,23 +441,17 @@ export async function submitTransaction(
         continue;
       }
       const msg = (err as { message?: string })?.message ?? "";
-      // If previous attempt mined, this is expected — don't keep resending.
+      // Nonce conflict — fetch fresh nonce and retry
       if (msg.includes("Nonce provided") && msg.includes("lower than the current nonce")) {
-        if (attempt === 1) {
-          const newNonce = await publicClient.getTransactionCount({
-            address: clientAddress,
-            blockTag: "pending",
-          });
-          console.log(
-            `Nonce provided (${writeContractParams.nonce}) lower than the current nonce, updating nonce to ${newNonce}`,
-          );
-          writeContractParams.nonce = newNonce;
-        }
+        const newNonce = await publicClient.getTransactionCount({
+          address: clientAddress,
+          blockTag: "pending",
+        });
         console.log(
-          "Previous attempt likely mined; not resending.",
-          writeContractParams.functionName,
-          writeContractParams.args,
+          `Nonce conflict (had ${writeContractParams.nonce}, now ${newNonce}), retrying (attempt ${attempt}/${maxRetries})`,
         );
+        writeContractParams.nonce = newNonce;
+        if (attempt < maxRetries) continue;
       }
       if (attempt === maxRetries) throw err;
       gasParams = bumpGasParams(gasParams, gasBumpPercent);

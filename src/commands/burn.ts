@@ -5,9 +5,14 @@ import {
   MessageFlags,
   TextChannel,
 } from "discord.js";
-import { burnTokensFrom, SupportedChain, ChainConfig } from "../lib/blockchain.ts";
+import {
+  burnTokensFrom,
+  ChainConfig,
+  parseInsufficientGasError,
+  SupportedChain,
+} from "../lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
-import { loadGuildSettings } from "../lib/utils.ts";
+import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
 import { refreshTokenStats } from "../lib/token-stats-cache.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
@@ -91,7 +96,7 @@ export default async function handleBurnCommand(
 
   // Find the token (default to only burnable token if not specified)
   const token = tokenSymbol
-    ? burnableTokens.find((t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase())
+    ? findTokenByInput(burnableTokens, tokenSymbol)
     : burnableTokens.length === 1 ? burnableTokens[0] : null;
   if (!token) {
     const available = burnableTokens.map((t) => `\`${t.symbol}\``).join(", ");
@@ -190,10 +195,16 @@ export default async function handleBurnCommand(
       }
     } catch (error) {
       console.error(`Error burning from ${recipient.label}:`, error);
+      const gasErr = await parseInsufficientGasError(error, chain);
+      const message = gasErr
+        ? gasErr.formatMessage("burn")
+        : error instanceof Error
+        ? error.message
+        : String(error);
       results.push({
         recipient,
         success: false,
-        error: String(error),
+        error: message,
       });
     }
   }

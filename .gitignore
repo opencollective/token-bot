@@ -141,4 +141,5 @@ dist
 
 .*
 !.github/
+!.npmrc
 cache/

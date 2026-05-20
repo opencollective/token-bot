@@ -95,16 +95,10 @@
     "description": "Send tokens to another user",
     "options": [
       {
-        "name": "user",
-        "description": "Discord user to send tokens to",
-        "required": false,
-        "type": 6
-      },
-      {
-        "name": "email",
-        "description": "Email address to send tokens to",
-        "required": false,
-        "type": 3
+        "name": "recipient",
+        "description": "Recipient (@mention or email)",
+        "type": 3,
+        "required": true
       },
       {
         "name": "amount",

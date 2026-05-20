@@ -7,7 +7,7 @@ import {
   StringSelectMenuBuilder,
   TextChannel,
 } from "discord.js";
-import { loadGuildSettings } from "../lib/utils.ts";
+import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { keccak256, toUtf8Bytes, Wallet } from "ethers";
 import {
@@ -22,7 +22,12 @@ import {
   type UserOpExtraData,
 } from "@citizenwallet/sdk";
 import { formatUnits, parseUnits } from "@wevm/viem";
-import { SupportedChain, ChainConfig, getBalance } from "../lib/blockchain.ts";
+import {
+  ChainConfig,
+  getBalance,
+  parseInsufficientGasError,
+  SupportedChain,
+} from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId, getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import type { GuildSettings, Token } from "../types.ts";
 
@@ -132,8 +137,7 @@ export default async function handleSendCommand(
 ) {
   if (!interaction.isChatInputCommand() || !interaction.options) return;
 
-  const recipientUser = interaction.options.getUser("user");
-  const emailInput = interaction.options.getString("email");
+  const recipientInput = interaction.options.getString("recipient", true);
   const amount = interaction.options.getNumber("amount");
   const tokenSymbol = interaction.options.getString("token");
   const description = interaction.options.getString("description") || undefined;
@@ -143,34 +147,35 @@ export default async function handleSendCommand(
     return;
   }
 
-  // Determine recipient
+  // Determine recipient (Discord mention or email)
   let recipientId: string;
   let recipientAccountId: string;
   let recipientName: string;
   let recipientLabel: string;
 
-  if (recipientUser) {
-    if (recipientUser.id === userId) {
+  const trimmed = recipientInput.trim();
+  const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
+  if (mentionMatch) {
+    const mentionedId = mentionMatch[1];
+    if (mentionedId === userId) {
       await interaction.reply({ content: "❌ You cannot send tokens to yourself.", ephemeral: true });
       return;
     }
-    recipientId = recipientUser.id;
-    recipientAccountId = `discord:${recipientUser.id}`;
-    recipientName = recipientUser.username;
-    recipientLabel = `<@${recipientUser.id}>`;
-  } else if (emailInput) {
-    const email = emailInput.trim().toLowerCase();
+    const mentionedUser = interaction.options.resolved?.users?.get(mentionedId);
+    recipientId = mentionedId;
+    recipientAccountId = `discord:${mentionedId}`;
+    recipientName = mentionedUser?.username ?? mentionedId;
+    recipientLabel = `<@${mentionedId}>`;
+  } else {
+    const email = trimmed.toLowerCase();
     if (!EMAIL_REGEX.test(email)) {
-      await interaction.reply({ content: "❌ Invalid email address.", ephemeral: true });
+      await interaction.reply({ content: "❌ Recipient must be a @mention or email address.", ephemeral: true });
       return;
     }
     recipientId = email;
     recipientAccountId = `email:${email}`;
     recipientName = email;
     recipientLabel = email;
-  } else {
-    await interaction.reply({ content: "❌ Specify a user or email address.", ephemeral: true });
-    return;
   }
 
   const guildSettings = await loadGuildSettings(guildId);
@@ -219,9 +224,8 @@ export default async function handleSendCommand(
 
     // If a token was specified via the command option, use it directly
     if (tokenSymbol) {
-      const idx = guildSettings.tokens.findIndex(
-        (t) => t.symbol.toLowerCase() === tokenSymbol.toLowerCase(),
-      );
+      const matched = findTokenByInput(guildSettings.tokens, tokenSymbol);
+      const idx = matched ? guildSettings.tokens.indexOf(matched) : -1;
       if (idx === -1) {
         const available = guildSettings.tokens.map((t) => t.symbol).join(", ");
         await interaction.editReply({
@@ -505,9 +509,13 @@ export async function handleSendInteraction(
       await interaction.editReply({ content: reply });
     } catch (error) {
       console.error("Error executing send:", error);
-      await interaction.editReply({
-        content: `❌ Failed to send: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      const gasErr = await parseInsufficientGasError(error, token.chain as SupportedChain);
+      const message = gasErr
+        ? gasErr.formatMessage("send")
+        : error instanceof Error
+        ? error.message
+        : String(error);
+      await interaction.editReply({ content: `❌ ${message}` });
     }
 
     sendStates.delete(userId);
