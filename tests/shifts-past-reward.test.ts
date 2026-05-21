@@ -1,5 +1,6 @@
 import { expect } from "@std/expect/expect";
 import {
+  buildShiftNostrAnnotations,
   buildShiftSignupUpsert,
   buildShiftTransactionMessage,
   getPastShiftStartOptions,
@@ -117,4 +118,34 @@ Deno.test("shift reward transaction message defaults CHT rewards to #cht-transac
   });
 
   expect(message.channelId).toBe("1354115945718878269");
+});
+
+Deno.test("shift rewards build Nostr metadata annotations for issued token txs", () => {
+  const annotations = buildShiftNostrAnnotations({
+    rewards: [
+      {
+        userId: "111",
+        username: "alice",
+        amount: 20,
+        hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+      { userId: "222", username: "bob", amount: 20 },
+    ],
+    token: {
+      symbol: "CHT",
+      chain: "celo",
+      address: "0x65dd32834927de9e57e72a3e2130a19f81c6371d",
+    },
+    shiftStart: new Date(2026, 4, 20, 9, 0),
+    shiftEnd: new Date(2026, 4, 20, 11, 0),
+  });
+
+  expect(annotations).toHaveLength(1);
+  expect(annotations[0].uri).toBe(
+    "ethereum:42220:tx:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
+  expect(annotations[0].content).toBe(
+    "Issued 20 CHT to alice for a 2h shift on 20/05/2026 at 09:00",
+  );
+  expect(annotations[0].tags).toEqual([["t", "shift"]]);
 });
