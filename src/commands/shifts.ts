@@ -19,9 +19,10 @@ import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { getRoomEventsCache, invalidateRoomEventsCache, ensureRoomEventsCacheReady } from "../lib/room-events-cache.ts";
 import { getUserEmail, saveUser, getUser } from "../lib/user-emails.ts";
 
-import { mintTokens } from "../lib/blockchain.ts";
+import { ChainConfig, mintTokens, SupportedChain } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { Discord } from "../lib/discord.ts";
+import { Nostr, URI } from "../lib/nostr.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
 
@@ -92,6 +93,13 @@ interface ShiftRewardTransactionMessageParams {
   rewards: Array<{ userId: string; username: string; amount: number; hash?: string }>;
   token: { symbol: string; chain: string; address: string; transactionsChannelId?: string };
   fallbackChannelId?: string;
+  shiftStart: Date;
+  shiftEnd: Date;
+}
+
+interface ShiftRewardNostrAnnotationParams {
+  rewards: Array<{ userId: string; username: string; amount: number; hash?: string }>;
+  token: { symbol: string; chain: string; address: string };
   shiftStart: Date;
   shiftEnd: Date;
 }
@@ -395,6 +403,29 @@ export function buildShiftTransactionMessage(params: ShiftRewardTransactionMessa
   if (txLinks) content += ` ${txLinks}`;
 
   return { channelId, content };
+}
+
+export function buildShiftNostrAnnotations(params: ShiftRewardNostrAnnotationParams): Array<{
+  uri: URI;
+  content: string;
+  tags: string[][];
+}> {
+  const { rewards, token, shiftStart, shiftEnd } = params;
+  const chain = token.chain as SupportedChain;
+  const chainId = ChainConfig[chain]?.id;
+  if (!chainId) return [];
+
+  const durationHours = (shiftEnd.getTime() - shiftStart.getTime()) / (1000 * 60 * 60);
+  const shiftDate = formatShiftTransactionDate(shiftStart);
+  const shiftTime = formatShiftTransactionTime(shiftStart);
+
+  return rewards
+    .filter(r => r.hash)
+    .map(r => ({
+      uri: `ethereum:${chainId}:tx:${r.hash}` as URI,
+      content: `Issued ${r.amount} ${token.symbol} to ${r.username} for a ${formatDurationHours(durationHours)} shift on ${shiftDate} at ${shiftTime}`,
+      tags: [["t", "shift"], ["t", "reward"], ["t", "issuance"], ["amount", r.amount.toString()]],
+    }));
 }
 
 function getSlotDurationHours(slot: { start: string; end: string }): number {
@@ -1938,9 +1969,10 @@ async function buildRewardResultContent(
       description: desc
     });
 
+    const shiftStart = new Date(state.selectedRewardEvent!.start.dateTime);
+    const shiftEnd = new Date(state.selectedRewardEvent!.end.dateTime);
+
     if (interaction) {
-      const shiftStart = new Date(state.selectedRewardEvent!.start.dateTime);
-      const shiftEnd = new Date(state.selectedRewardEvent!.end.dateTime);
       const message = buildShiftTransactionMessage({
         minterUserId,
         rewards: successfulRewards,
@@ -1959,6 +1991,18 @@ async function buildRewardResultContent(
           console.error("Error sending shift reward message to transactions channel:", error);
         }
       }
+    }
+
+    try {
+      const nostr = Nostr.getInstance();
+      for (const annotation of buildShiftNostrAnnotations({ rewards: successfulRewards, token, shiftStart, shiftEnd })) {
+        await nostr.publishMetadata(annotation.uri, {
+          content: annotation.content,
+          tags: annotation.tags,
+        });
+      }
+    } catch (error) {
+      console.error("Error publishing shift reward Nostr annotation:", error);
     }
 
     const rewardEvent = state.selectedRewardEvent!;
