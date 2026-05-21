@@ -1,5 +1,23 @@
 import { expect } from "@std/expect/expect";
-import { buildShiftSignupUpsert, buildShiftTransactionMessage } from "../src/commands/shifts.ts";
+import {
+  buildShiftSignupUpsert,
+  buildShiftTransactionMessage,
+  getPastShiftStartOptions,
+} from "../src/commands/shifts.ts";
+
+Deno.test("past shift start options list every half hour instead of regular shift slots", () => {
+  const options = getPastShiftStartOptions();
+
+  expect(options.slice(0, 5)).toEqual([
+    { label: "8am", value: "08:00" },
+    { label: "8:30am", value: "08:30" },
+    { label: "9am", value: "09:00" },
+    { label: "9:30am", value: "09:30" },
+    { label: "10am", value: "10:00" },
+  ]);
+  expect(options.at(-1)).toEqual({ label: "8pm", value: "20:00" });
+  expect(options).toHaveLength(25);
+});
 
 Deno.test("past shift upsert updates existing calendar event like a normal signup", () => {
   const selectedDate = new Date(2026, 4, 20);
