@@ -197,6 +197,26 @@ function getCustomStartOptions(): { label: string; value: string }[] {
   return options;
 }
 
+function formatPastShiftStartLabel(timeStr: string): string {
+  const [hours, minutes] = timeStr.split(':');
+  const hour = parseInt(hours);
+  const ampm = hour >= 12 ? 'pm' : 'am';
+  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return minutes === "00" ? `${displayHour}${ampm}` : `${displayHour}:${minutes}${ampm}`;
+}
+
+export function getPastShiftStartOptions(): { label: string; value: string }[] {
+  const options: { label: string; value: string }[] = [];
+  for (let minutes = 8 * 60; minutes <= 20 * 60; minutes += 30) {
+    const value = minutesToTime(minutes);
+    options.push({
+      label: formatPastShiftStartLabel(value),
+      value,
+    });
+  }
+  return options;
+}
+
 function getCustomDurationOptions(startTime: string): { label: string; value: string }[] {
   const startMinutes = timeToMinutes(startTime);
   const options: { label: string; value: string }[] = [];
@@ -1232,15 +1252,10 @@ export async function handleShiftsSelect(
     state.step = "past_select_slot";
     shiftsStates.set(userId, state);
 
-    const slotOptions = settings.slots.map((slot, index) => ({
-      label: `${formatTime(slot.start)} - ${formatTime(slot.end)}`,
-      value: `${index}`,
-    }));
-
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId("shifts_past_slot_select")
       .setPlaceholder("Select the shift time...")
-      .addOptions(slotOptions.slice(0, 25));
+      .addOptions(getPastShiftStartOptions());
 
     await interaction.update({
       content: `🕐 **Select the time for ${formatDate(state.selectedDate)}:**`,
@@ -1262,8 +1277,42 @@ export async function handleShiftsSelect(
   }
 
   if (customId === "shifts_past_slot_select") {
-    const slotIndex = parseInt(interaction.values[0]);
-    state.selectedSlot = settings.slots[slotIndex];
+    const startTime = interaction.values[0];
+    state.selectedSlot = { start: startTime, end: startTime };
+    state.step = "past_select_duration";
+    shiftsStates.set(userId, state);
+
+    const durationOptions = getCustomDurationOptions(startTime);
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId("shifts_past_duration_select")
+      .setPlaceholder("Select the shift duration...")
+      .addOptions(durationOptions);
+
+    await interaction.update({
+      content: `⏱️ **Select the duration for ${formatDate(state.selectedDate!)} starting at ${formatTime(startTime)}:**`,
+      components: [
+        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId("shifts_record_past")
+            .setLabel("← Back")
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId("shifts_cancel_flow")
+            .setLabel("Cancel")
+            .setStyle(ButtonStyle.Danger),
+        ),
+      ],
+    });
+    return;
+  }
+
+  if (customId === "shifts_past_duration_select") {
+    const durationHours = parseInt(interaction.values[0]);
+    const startTime = state.selectedSlot!.start;
+    const endTime = minutesToTime(timeToMinutes(startTime) + durationHours * 60);
+
+    state.selectedSlot = { start: startTime, end: endTime };
     state.step = "past_record";
     shiftsStates.set(userId, state);
 
