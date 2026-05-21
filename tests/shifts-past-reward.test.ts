@@ -147,7 +147,5 @@ Deno.test("shift rewards build Nostr metadata annotations for issued token txs",
   expect(annotations[0].content).toBe(
     "Issued 20 CHT to alice for a 2h shift on 20/05/2026 at 09:00",
   );
-  expect(annotations[0].tags).toContainEqual(["t", "shift"]);
-  expect(annotations[0].tags).toContainEqual(["t", "issuance"]);
-  expect(annotations[0].tags).toContainEqual(["amount", "20"]);
+  expect(annotations[0].tags).toEqual([["t", "shift"]]);
 });

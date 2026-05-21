@@ -424,7 +424,7 @@ export function buildShiftNostrAnnotations(params: ShiftRewardNostrAnnotationPar
     .map(r => ({
       uri: `ethereum:${chainId}:tx:${r.hash}` as URI,
       content: `Issued ${r.amount} ${token.symbol} to ${r.username} for a ${formatDurationHours(durationHours)} shift on ${shiftDate} at ${shiftTime}`,
-      tags: [["t", "shift"], ["t", "reward"], ["t", "issuance"], ["amount", r.amount.toString()]],
+      tags: [["t", "shift"]],
     }));
 }
 
