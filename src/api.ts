@@ -10,7 +10,9 @@ import { loadGuildFile, loadGuildSettings } from "./lib/utils.ts";
 import { Nostr, URI } from "./lib/nostr.ts";
 import { Product } from "./types.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
-import { Client, TextChannel } from "discord.js";
+import { Client, GuildMember, PermissionsBitField, TextChannel } from "discord.js";
+import { disabledCalendars } from "./lib/calendar-state.ts";
+import { buildUserPermissionReport } from "./lib/permissions.ts";
 
 const API_KEY = Deno.env.get("API_KEY");
 const API_PORT = parseInt(Deno.env.get("API_PORT") || "3000");
@@ -405,6 +407,51 @@ async function handleListRooms(req: Request): Promise<Response> {
   }
 }
 
+async function handlePermissionsCheck(req: Request): Promise<Response> {
+  const authError = checkAuth(req);
+  if (authError) return authError;
+
+  const url = new URL(req.url);
+  const guildId = url.searchParams.get("guildId");
+  const userId = url.searchParams.get("userId");
+
+  if (!guildId || !userId) {
+    return error("Missing required parameters: guildId, userId");
+  }
+  if (!discordClient) {
+    return error("Discord client not ready", 503);
+  }
+
+  try {
+    const guild = await discordClient.guilds.fetch(guildId);
+    const member = await guild.members.fetch(userId).catch(() => null) as GuildMember | null;
+    if (!member) {
+      return error("Member not found", 404);
+    }
+
+    const [guildSettings, products, shiftsSettings] = await Promise.all([
+      loadGuildSettings(guildId),
+      loadGuildFile(guildId, "products.json").catch(() => []) as Promise<Product[]>,
+      loadGuildFile(guildId, "shifts-settings.json").catch(() => null) as Promise<
+        { calendarId?: string; shiftsMasterRoleId?: string } | null
+      >,
+    ]);
+
+    return json(buildUserPermissionReport({
+      userId,
+      isAdministrator: member.permissions.has(PermissionsBitField.Flags.Administrator),
+      roleIds: [...member.roles.cache.keys()],
+      guildSettings,
+      products,
+      shiftsSettings,
+      disabledCalendarIds: disabledCalendars,
+    }));
+  } catch (err: any) {
+    console.error("Error checking permissions:", err);
+    return error(err.message || "Unknown error", 500);
+  }
+}
+
 // Request router
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -444,6 +491,8 @@ async function handleRequest(req: Request): Promise<Response> {
     response = await handleCheckAvailability(req);
   } else if (path === "/api/rooms" && req.method === "GET") {
     response = await handleListRooms(req);
+  } else if (path === "/api/permissions" && req.method === "GET") {
+    response = await handlePermissionsCheck(req);
   } else {
     response = error("Not found", 404);
   }
@@ -470,6 +519,7 @@ export function startApiServer() {
   console.log(`   POST /api/book/execute`);
   console.log(`   POST /api/book/availability`);
   console.log(`   GET  /api/rooms?guildId=...`);
+  console.log(`   GET  /api/permissions?guildId=...&userId=...`);
 
   Deno.serve({ port: API_PORT }, handleRequest);
 }
