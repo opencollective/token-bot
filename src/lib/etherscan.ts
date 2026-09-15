@@ -50,6 +50,34 @@ export type EtherscanConfig = {
   apiKey?: string;
 };
 
+type ExplorerApi = {
+  apiUrl: string;
+  requiresKey: boolean; // Etherscan rejects keyless calls; Blockscout doesn't need one
+  sendChainId: boolean; // Etherscan V2 multiplexes chains via ?chainid=; Blockscout is per-chain
+};
+
+const ETHERSCAN_V2: ExplorerApi = {
+  apiUrl: "https://api.etherscan.io/v2/api",
+  requiresKey: true,
+  sendChainId: true,
+};
+
+// Etherscan's V2 API refuses Gnosis on the free plan ("Free API access is not supported for
+// this chain"), so Gnosis goes through Blockscout's Etherscan-compatible API instead.
+// Override any chain with EXPLORER_API_URL_<chainId> (e.g. EXPLORER_API_URL_100).
+const EXPLORER_API_BY_CHAIN_ID: Record<number, ExplorerApi> = {
+  100: { apiUrl: "https://gnosis.blockscout.com/api", requiresKey: false, sendChainId: false },
+};
+
+export function getExplorerApi(chainId: number): ExplorerApi {
+  const override = Deno.env.get(`EXPLORER_API_URL_${chainId}`);
+  if (override) {
+    const isEtherscan = override.includes("etherscan.io");
+    return { apiUrl: override, requiresKey: isEtherscan, sendChainId: isEtherscan };
+  }
+  return EXPLORER_API_BY_CHAIN_ID[chainId] ?? ETHERSCAN_V2;
+}
+
 /**
  * Client for interacting with Etherscan-compatible APIs (Etherscan, GnosisScan, etc.)
  */
@@ -57,14 +85,17 @@ export class EtherscanClient {
   private apiUrl: string;
   private apiKey?: string;
   private chainId: number;
+  private sendChainId: boolean;
   private rateLimitDelay: number = 200; // 200ms between requests (5 req/sec)
 
   constructor(chainId: number) {
-    this.apiUrl = "https://api.etherscan.io/v2/api";
-    this.apiKey = Deno.env.get("ETHEREUM_ETHERSCAN_API_KEY");
+    const explorer = getExplorerApi(chainId);
+    this.apiUrl = explorer.apiUrl;
+    this.sendChainId = explorer.sendChainId;
+    this.apiKey = explorer.requiresKey ? Deno.env.get("ETHEREUM_ETHERSCAN_API_KEY") : undefined;
     this.chainId = chainId;
 
-    if (!this.apiKey) {
+    if (explorer.requiresKey && !this.apiKey) {
       throw new Error("Etherscan API key is required");
     }
   }
@@ -80,7 +111,9 @@ export class EtherscanClient {
       params.apikey = this.apiKey;
     }
 
-    params.chainid = this.chainId.toString();
+    if (this.sendChainId) {
+      params.chainid = this.chainId.toString();
+    }
 
     // Add all parameters to URL
     Object.entries(params).forEach(([key, value]) => {
@@ -98,7 +131,7 @@ export class EtherscanClient {
     const data = await response.json();
 
     if (data.status === "0" && data.message !== "No transactions found") {
-      throw new Error(`Etherscan API error: ${data.message || data.result}`);
+      throw new Error(`Explorer API error (${this.apiUrl}): ${data.result || data.message}`);
     }
 
     return data.result;

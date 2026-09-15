@@ -3,7 +3,7 @@
     "name": "🏦 monerium savings account",
     "provider": "etherscan",
     "chain": "gnosis",
-    "address": "0x6fDF0AaE33E313d9C98D2Aa19Bcd8EF777912CBf",
+    "address": "0xb01cCCE2d75d517EE520De31eAE6aFCa735aadc1",
     "token": {
       "address": "0x420CA0f9B9b604cE0fd9C18EF134C705e5Fa3430",
       "name": "EURe",
@@ -18,6 +18,20 @@
     "provider": "etherscan",
     "chain": "gnosis",
     "address": "0xD578e7cd845e1ecD979b04784e77068D5eBd8716",
+    "token": {
+      "address": "0x420CA0f9B9b604cE0fd9C18EF134C705e5Fa3430",
+      "name": "EURe",
+      "symbol": "EURe",
+      "decimals": 18
+    },
+    "frequency": ["weekly", "monthly"],
+    "channelId": "1372518467323826259"
+  },
+  {
+    "name": "🏛️ monerium CHB safe",
+    "provider": "etherscan",
+    "chain": "gnosis",
+    "address": "0x646C32CF6843540CEF790F764952a959FB9c49f5",
     "token": {
       "address": "0x420CA0f9B9b604cE0fd9C18EF134C705e5Fa3430",
       "name": "EURe",
