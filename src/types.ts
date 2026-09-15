@@ -17,6 +17,15 @@ export type Token = {
   cardManagerAddress?: BlockchainAddress;
   cardManagerInstanceId?: string;
   minterRoleId?: string; // Role that can mint/burn this token (in addition to admins)
+  // Reaction minting: custom emoji name (or id / <:name:id>) that mints this token when a
+  // minter reacts with it. Defaults to "mint" for the first mintable token if none is configured.
+  mintEmoji?: string;
+  mintReactionAmount?: number; // Amount minted per recipient on reaction (default: 1)
+  // Reaction sending: emoji that sends tokens from the reactor's own balance to the message
+  // author + mentions. Defaults to 🪙 (:coin:) for the first mintable token if none is configured.
+  sendEmoji?: string;
+  sendReactionAmount?: number; // Amount sent per recipient on reaction (default: 1)
+  senderRoleId?: string; // Optional role required to send by reaction (default: anyone)
 };
 
 export type GuildSettings = {

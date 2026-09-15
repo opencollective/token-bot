@@ -4,20 +4,16 @@ import {
   Interaction,
   MessageFlags,
   PermissionsBitField,
-  TextChannel,
 } from "discord.js";
-import {
-  ChainConfig,
-  mintTokens,
-  parseInsufficientGasError,
-  SupportedChain,
-} from "../lib/blockchain.ts";
-import { parseUnits } from "@wevm/viem";
 import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
-import { refreshTokenStats } from "../lib/token-stats-cache.ts";
-import { Nostr, URI } from "../lib/nostr.ts";
-import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
-import type { Token } from "../types.ts";
+import {
+  executeMint,
+  formatMintResults,
+  getMintableTokens,
+  parseRecipients,
+} from "../lib/mint.ts";
+
+export { EMAIL_REGEX, parseRecipients, type Recipient } from "../lib/mint.ts";
 
 // Check if user has permission to mint/burn (admin or mintRoleId)
 export function hasTokenPermission(member: GuildMember, mintRoleId?: string): boolean {
@@ -30,68 +26,6 @@ export function hasTokenPermission(member: GuildMember, mintRoleId?: string): bo
     return true;
   }
   return false;
-}
-
-// Parse user mentions from a string, returns array of user IDs
-export type Recipient = {
-  type: "discord" | "email";
-  id: string; // Discord user ID or email address
-  label: string; // Display label: <@id> or email
-  accountId: string; // Prefixed identifier: "discord:id" or "email:addr"
-};
-
-export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export function parseRecipients(input: string): Recipient[] {
-  const recipients: Recipient[] = [];
-  const seen = new Set<string>();
-
-  // Extract Discord mentions
-  const mentionRegex = /<@!?(\d+)>/g;
-  let match;
-  while ((match = mentionRegex.exec(input)) !== null) {
-    const key = `discord:${match[1]}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      recipients.push({
-        type: "discord",
-        id: match[1],
-        label: `<@${match[1]}>`,
-        accountId: key,
-      });
-    }
-  }
-
-  // Extract email addresses (anything that looks like an email outside of mentions)
-  const withoutMentions = input.replace(/<@!?\d+>/g, " ");
-  const tokens = withoutMentions.split(/[\s,;]+/).filter(Boolean);
-  for (const token of tokens) {
-    const email = token.trim().toLowerCase();
-    if (EMAIL_REGEX.test(email)) {
-      const key = `email:${email}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        recipients.push({
-          type: "email",
-          id: email,
-          label: email,
-          accountId: key,
-        });
-      }
-    }
-  }
-
-  return recipients;
-}
-
-// Get mintable tokens from settings
-function getMintableTokens(tokens: Token[]): Token[] {
-  return tokens.filter((t) => t.mintable === true);
-}
-
-// Format number with thousand separators
-function formatAmount(amount: number): string {
-  return amount.toLocaleString("en-US");
 }
 
 // Handle autocomplete for token selection
@@ -194,146 +128,16 @@ export default async function handleMintCommand(
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const chain = token.chain as SupportedChain;
-  const chainId = ChainConfig[chain].id;
+  const results = await executeMint({
+    client: interaction.client,
+    guildSettings,
+    token,
+    recipients,
+    amount,
+    description,
+    minterId: userId,
+    source: { via: "command" },
+  });
 
-  const results: {
-    recipient: Recipient;
-    success: boolean;
-    hash?: string;
-    error?: string;
-  }[] = [];
-
-  // Mint for each recipient
-  for (const recipient of recipients) {
-    try {
-      let hash: string | null;
-
-      if (token.walletManager === "citizenwallet") {
-        if (recipient.type === "email") throw new Error("CitizenWallet does not support email recipients");
-        const recipientAddress =
-          await getAccountAddressForToken(recipient.id, token);
-        if (!recipientAddress) throw new Error("No wallet address found");
-        hash = await mintTokens(
-          chain, token.address, recipientAddress,
-          amount.toString(), token.decimals,
-        );
-      } else {
-        // Default: opencollective token-factory
-        const { Token: OCToken } = await import("@opencollective/token-factory");
-        const ocToken = new OCToken({
-          name: token.name, symbol: token.symbol,
-          chain: token.chain, tokenAddress: token.address,
-        });
-        const amountWei = parseUnits(amount.toFixed(token.decimals), token.decimals);
-        hash = await ocToken.mintTo(amountWei, recipient.accountId);
-      }
-
-      if (hash) {
-        results.push({ recipient, success: true, hash });
-
-        const txUri = `ethereum:${chainId}:tx:${hash}` as URI;
-
-        // Publish metadata to Nostr
-        try {
-          const nostr = Nostr.getInstance();
-          const nostrContent =
-            description || `Minted ${amount} ${token.symbol} for ${recipient.label}`;
-
-          await nostr.publishMetadata(txUri, {
-            content: nostrContent,
-            tags: [
-              ["t", "mint"],
-              ["amount", amount.toString()],
-            ],
-          });
-        } catch (error) {
-          console.error("Error sending Nostr annotation:", error);
-        }
-      } else {
-        results.push({
-          recipient,
-          success: false,
-          error: "No hash returned",
-        });
-      }
-    } catch (error) {
-      console.error(`Error minting for ${recipient.label}:`, error);
-      const gasErr = await parseInsufficientGasError(error, chain);
-      const message = gasErr
-        ? gasErr.formatMessage("mint")
-        : error instanceof Error
-        ? error.message
-        : String(error);
-      results.push({
-        recipient,
-        success: false,
-        error: message,
-      });
-    }
-  }
-
-  // Build links
-  const tokenUrl = `https://txinfo.xyz/${chain}/token/${token.address}`;
-  const tokenLink = `[${token.symbol}](<${tokenUrl}>)`;
-  const formattedAmount = formatAmount(amount);
-
-  // Post to Discord transactions channel
-  const successfulMints = results.filter((r) => r.success);
-  const txChannelId = token.transactionsChannelId || guildSettings.channels?.transactions;
-  if (successfulMints.length > 0 && txChannelId) {
-    try {
-      const transactionsChannel = (await interaction.client.channels.fetch(
-        txChannelId,
-      )) as TextChannel;
-
-      if (transactionsChannel) {
-        const mintLines = successfulMints.map((r) => {
-          const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
-          return `🪙 <@${userId}> minted ${formattedAmount} ${tokenLink} for ${r.recipient.label} [[tx]](<${txUrl}>)`;
-        });
-        
-        let discordMessage = mintLines.join("\n");
-        if (description) {
-          discordMessage += `\n📝 ${description}`;
-        }
-        await transactionsChannel.send(discordMessage);
-      }
-    } catch (error) {
-      console.error("Error sending message to transactions channel:", error);
-    }
-  }
-
-  // Build reply message
-  const successCount = successfulMints.length;
-  const failCount = results.length - successCount;
-
-  let replyContent = "";
-  if (successCount > 0) {
-    const mintLines = successfulMints.map((r) => {
-      const txUrl = `https://txinfo.xyz/${chain}/tx/${r.hash}`;
-      return `✅ Minted ${formattedAmount} ${tokenLink} for ${r.recipient.label} [[tx]](<${txUrl}>)`;
-    });
-    replyContent = mintLines.join("\n");
-    if (description) {
-      replyContent += `\n📝 ${description}`;
-    }
-  }
-
-  if (failCount > 0) {
-    const failedMints = results.filter((r) => !r.success);
-    const failedLines = failedMints.map((r) => `${r.recipient.label}: ${r.error}`);
-    if (successCount === 0) {
-      replyContent = `❌ Failed to mint:\n${failedLines.join("\n")}`;
-    } else {
-      replyContent += `\n❌ Failed to mint for:\n${failedLines.join("\n")}`;
-    }
-  }
-
-  await interaction.editReply({ content: replyContent });
-
-  // Refresh token stats cache in background after successful mints
-  if (successfulMints.length > 0) {
-    refreshTokenStats(token.chain, token.address, token.decimals).catch(() => {});
-  }
+  await interaction.editReply({ content: formatMintResults(results, token, amount, description) });
 }

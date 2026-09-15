@@ -1,4 +1,4 @@
-import { EventTemplate, finalizeEvent, getPublicKey, nip19, SimplePool } from "nostr-tools";
+import { Event, EventTemplate, Filter, finalizeEvent, getPublicKey, nip19, SimplePool } from "nostr-tools";
 import { getEnv } from "./utils.ts";
 
 const DRY_RUN = getEnv("DRY_RUN") === "true";
@@ -140,6 +140,11 @@ export class Nostr {
     } catch (error) {
       console.error("Failed to publish metadata", error, "event:", event);
     }
+  }
+
+  // Query relays for events (e.g. to check whether a Discord message was already rewarded).
+  async query(filter: Filter, maxWait = 4000): Promise<Event[]> {
+    return await this.pool.querySync(this.relays!, filter, { maxWait });
   }
 
   async publish(event: EventTemplate) {
