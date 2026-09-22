@@ -141,7 +141,15 @@
   },
   {
     "name": "permissions",
-    "description": "Show who can mint/burn tokens on this server"
+    "description": "Check what a user is allowed to do",
+    "options": [
+      {
+        "name": "user",
+        "description": "User to check (defaults to yourself)",
+        "required": false,
+        "type": 6
+      }
+    ]
   },
   {
     "name": "doctor",
