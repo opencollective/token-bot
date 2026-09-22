@@ -12,6 +12,8 @@
  *
  * Runs a full reconciliation every few minutes and right after any RSVP
  * arrives live on a relay, for the standard slots of the next 28 days.
+ * A shift occurrence (kind 31923) is published only once a slot has its
+ * first sign-up, from either app; empty slots publish nothing.
  * Custom-time shifts have no slot on the relays and are left alone.
  */
 
@@ -244,20 +246,20 @@ export async function reconcile(nostr: ShiftsNostr, settings: ShiftsSyncSettings
           console.error(`[shifts-sync] could not publish RSVP for @${member.username} ${day} ${slotCode(slot)}:`, (error as Error).message);
         }
       }
-    }
-  }
 
-  // Occurrences for the horizon, so the website can point RSVPs at them before anyone signs up.
-  for (const { day } of days) {
-    for (const slot of settings.slots) {
-      try {
-        await nostr.ensureShiftOccurrence(day, slot, settings.maxSignupsPerSlot, title(slot));
-      } catch (error) {
-        console.error(`[shifts-sync] could not publish occurrence ${day} ${slotCode(slot)}:`, (error as Error).message);
+      // 4. A slot with a sign-up gets its occurrence (published once, on the first sign-up, like the website did).
+      const taken = fromRelay.some((s) => s.status === "accepted") || parseShiftSignups(event?.description || "").length > 0;
+      if (taken) {
+        try {
+          await nostr.ensureCommunityDefinition(settings.description);
+          await nostr.ensureShiftOccurrence(day, slot, settings.maxSignupsPerSlot, title(slot));
+        } catch (error) {
+          console.error(`[shifts-sync] could not publish occurrence ${day} ${slotCode(slot)}:`, (error as Error).message);
+        }
       }
     }
   }
-  await nostr.ensureCommunityDefinition(settings.description).catch((error) => console.error("[shifts-sync] community definition:", (error as Error).message));
+
 
   if (counters.mirrored || counters.cancelled || counters.published) console.log("[shifts-sync] done:", counters);
   return counters;

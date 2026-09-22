@@ -40,8 +40,9 @@ $> deno task test:cron
 conventions of [commonshub.brussels/docs/nostr.md](https://commonshub.brussels/docs/nostr.md),
 so the website's day pages and the bot show the same shifts:
 
-- the bot is the **coordinator**: it publishes one kind `31923` occurrence per day and
-  slot for the next four weeks, and the kind `34550` community definition;
+- the bot is the **coordinator**: it publishes the kind `31923` occurrence of a slot once
+  that slot has its first sign-up (from Discord or the website), and the kind `34550`
+  community definition;
 - each Discord member gets a key **derived from the bot's `NOSTR_NSEC`** (nothing stored);
   the bot attests it with a kind `31926` (`d = discord:<user id>`) and publishes a kind `0`
   profile for it. RSVPs (kind `31925`, `status` accepted/declined) are signed with that key;
