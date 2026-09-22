@@ -7,11 +7,36 @@
   "maxSignupsPerSlot": 3,
   "shiftsMasterRoleId": "1384167297068957806",
   "slots": [
-    { "start": "08:30", "end": "11:30" },
-    { "start": "11:30", "end": "14:30" },
-    { "start": "14:30", "end": "17:30" },
-    { "start": "17:30", "end": "20:30" },
-    { "start": "20:30", "end": "22:30" }
+    {
+      "start": "08:30",
+      "end": "11:30"
+    },
+    {
+      "start": "11:30",
+      "end": "14:30"
+    },
+    {
+      "start": "14:30",
+      "end": "17:30"
+    },
+    {
+      "start": "17:30",
+      "end": "20:30"
+    },
+    {
+      "start": "20:30",
+      "end": "22:30"
+    }
   ],
-  "timezone": "Europe/Brussels"
+  "timezone": "Europe/Brussels",
+  "nostr": {
+    "_comment": "Shifts live on the community relays (see src/lib/shifts-nostr.ts and https://commonshub.brussels/docs/nostr.md). The bot is the coordinator of the shift occurrences and an identity provider for members' derived keys; its key must be on the relay allow-list.",
+    "relays": [
+      "wss://relay.commonshub.brussels",
+      "wss://relay.commonshub.dev"
+    ],
+    "identityProviders": [
+      "npub1wfaa749vdzd8tnu823rd6fpqj8twhlqen02clnsuv68cgpgcxjfqcyrgut"
+    ]
+  }
 }
