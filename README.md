@@ -32,3 +32,25 @@ Then in another terminal you can run:
 ```
 $> deno task test:cron
 ```
+
+## Shifts on Nostr
+
+`/shifts` sign-ups and cancellations are published to the community relays
+(`wss://relay.commonshub.brussels`, backup `wss://relay.commonshub.dev`) with the
+conventions of [commonshub.brussels/docs/nostr.md](https://commonshub.brussels/docs/nostr.md),
+so the website's day pages and the bot show the same shifts:
+
+- the bot is the **coordinator**: it publishes one kind `31923` occurrence per day and
+  slot for the next four weeks, and the kind `34550` community definition;
+- each Discord member gets a key **derived from the bot's `NOSTR_NSEC`** (nothing stored);
+  the bot attests it with a kind `31926` (`d = discord:<user id>`) and publishes a kind `0`
+  profile for it. RSVPs (kind `31925`, `status` accepted/declined) are signed with that key;
+- a sync (`src/lib/shifts-nostr-sync.ts`) keeps the shifts Google Calendar equal to the
+  relays every 5 minutes and right after any RSVP arrives live: website sign-ups are
+  mirrored into the calendar ("signed up … via nostr"), website cancellations too, and
+  calendar sign-ups the relays do not know get an RSVP.
+
+The bot's key must be on the relay's allow-list (`relay.commonshub.brussels/whitelist`,
+over Tailscale). Settings live under `nostr` in `shifts-settings.json` (`relays`,
+`coordinatorNpub`, `identityProviders`, `enabled`); `DRY_RUN=true` logs instead of publishing.
+Pure builders and parsers are in `src/lib/shifts-nostr.ts` and tested in `tests/shifts-nostr.test.ts`.

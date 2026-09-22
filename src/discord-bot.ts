@@ -69,6 +69,7 @@ import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 import { initRoomEventsCache } from "./lib/room-events-cache.ts";
 import { initUserEmails } from "./lib/user-emails.ts";
 import { startShiftsDeclinePoller } from "./lib/shifts-decline-poller.ts";
+import { startShiftsNostrSync } from "./lib/shifts-nostr-sync.ts";
 import { setDiscordClient, startApiServer } from "./api.ts";
 
 // Display server startup time and timezone
@@ -338,6 +339,8 @@ client.on(Events.ClientReady, async (readyClient) => {
           const shiftsSettings = JSON.parse(content);
           if (shiftsSettings.calendarId) {
             startShiftsDeclinePoller(shiftsSettings.calendarId, entry.name);
+            const guildName = client.guilds.cache.get(entry.name)?.name || "Commons Hub Brussels";
+            startShiftsNostrSync(entry.name, guildName, shiftsSettings, client);
           }
         } catch { /* no shifts settings for this guild */ }
       }

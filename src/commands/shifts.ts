@@ -23,6 +23,7 @@ import { ChainConfig, mintTokens, SupportedChain } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { Discord } from "../lib/discord.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
+import { type DiscordMember, ShiftsNostr, type ShiftsNostrSettings, dayString } from "../lib/shifts-nostr.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
 
@@ -45,6 +46,35 @@ interface ShiftsSettings {
   shiftsMasterRoleId: string;
   slots: { start: string; end: string }[];
   timezone: string;
+  /** Relay settings; see src/lib/shifts-nostr.ts. Nostr is on by default when NOSTR_NSEC is set. */
+  nostr?: ShiftsNostrSettings;
+}
+
+/** Publish a member's sign-up or cancellation to the community relays. Never throws: the calendar is already updated. */
+async function publishShiftToNostr(
+  action: "signup" | "cancel",
+  guildId: string,
+  guildName: string,
+  member: DiscordMember,
+  date: Date,
+  slot: { start: string; end: string },
+  settings: ShiftsSettings,
+): Promise<string | null> {
+  const nostr = ShiftsNostr.forGuild({ guildId, name: guildName }, settings.nostr);
+  if (!nostr) return null;
+  // Only the standard slots exist on the relays; custom times stay calendar-only.
+  if (!settings.slots.some((s) => s.start === slot.start && s.end === slot.end)) return null;
+  try {
+    const event = await nostr.publishRsvp(action, member, dayString(date, settings.timezone), slot, {
+      capacity: settings.maxSignupsPerSlot,
+      title: `Caretaking shift ${slot.start}–${slot.end}`,
+      communityDescription: settings.description,
+    });
+    return event.id;
+  } catch (error) {
+    console.error(`[shifts] could not publish ${action} to nostr:`, (error as Error).message);
+    return null;
+  }
 }
 
 interface ShiftsState {
@@ -151,7 +181,7 @@ function formatShortDate(date: Date): string {
   });
 }
 
-function formatTime(timeStr: string): string {
+export function formatTime(timeStr: string): string {
   const [hours, minutes] = timeStr.split(':');
   const hour = parseInt(hours);
   const ampm = hour >= 12 ? 'PM' : 'AM';
@@ -281,7 +311,7 @@ function getPastDateOptions(days = 30): { label: string; value: string }[] {
   return options.slice(0, 25);
 }
 
-function createDateTime(date: Date, timeStr: string, timezone: string): Date {
+export function createDateTime(date: Date, timeStr: string, timezone: string): Date {
   const [hours, minutes] = timeStr.split(':').map(Number);
   const dateTime = new Date(date);
   dateTime.setHours(hours, minutes, 0, 0);
@@ -432,7 +462,7 @@ function getSlotDurationHours(slot: { start: string; end: string }): number {
   return (timeToMinutes(slot.end) - timeToMinutes(slot.start)) / 60;
 }
 
-function formatAuditTimestamp(): string {
+export function formatAuditTimestamp(): string {
   const now = new Date();
   const day = String(now.getDate()).padStart(2, '0');
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -442,7 +472,7 @@ function formatAuditTimestamp(): string {
   return `${day}/${month}/${year} ${hours}:${minutes}`;
 }
 
-function parseShiftSignups(description: string): ShiftSignup[] {
+export function parseShiftSignups(description: string): ShiftSignup[] {
   const signups: ShiftSignup[] = [];
   const cancelled = new Set<string>();
   if (!description) return signups;
@@ -468,7 +498,7 @@ function parseShiftSignups(description: string): ShiftSignup[] {
   return signups.filter(s => !cancelled.has(s.username));
 }
 
-function appendToDescription(existingDescription: string, line: string): string {
+export function appendToDescription(existingDescription: string, line: string): string {
   const trimmed = existingDescription.trimEnd();
   return trimmed ? `${trimmed}\n${line}` : line;
 }
@@ -1362,7 +1392,12 @@ export async function handleShiftsSelect(
     });
 
     try {
-      await cancelShift(shiftToCancel, userId, guildId, settings);
+      await cancelShift(shiftToCancel, userId, guildId, settings, {
+        id: userId,
+        username: interaction.user.username,
+        displayName: interaction.user.displayName || interaction.user.globalName || interaction.user.username,
+        avatar: interaction.user.displayAvatarURL({ size: 256, extension: "png" }),
+      }, interaction.guild?.name);
       
       await interaction.editReply({
         content: "✅ Shift cancelled successfully.",
@@ -1834,6 +1869,17 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
     // Invalidate caches after signup
     invalidateShiftCaches();
 
+    // The relays are the record shared with the website: publish the member's RSVP.
+    const nostrEventId = await publishShiftToNostr(
+      "signup",
+      guildId,
+      interaction.guild?.name || "Commons Hub Brussels",
+      { id: userId, username: interaction.user.username, displayName, avatar: interaction.user.displayAvatarURL({ size: 256, extension: "png" }) },
+      selectedDate,
+      selectedSlot,
+      settings,
+    );
+
     const slotTimeStr = `${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
     await interaction.editReply({
       content: `✅ **Shift signup confirmed!**
@@ -1842,7 +1888,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
 **Time:** ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}
 **Reward:** ${getSlotDurationHours(selectedSlot) * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}
 
-Your shift has been added to the calendar. Thank you for helping take care of our space! 🙏`,
+Your shift has been added to the calendar${nostrEventId ? " and published on the community relay" : ""}. Thank you for helping take care of our space! 🙏`,
     });
 
     // Log to #shifts channel
@@ -1860,7 +1906,7 @@ Your shift has been added to the calendar. Thank you for helping take care of ou
 }
 
 // Cancel shift
-async function cancelShift(shiftEvent: CalendarEvent, userId: string, guildId: string, settings: ShiftsSettings) {
+async function cancelShift(shiftEvent: CalendarEvent, userId: string, guildId: string, settings: ShiftsSettings, member?: DiscordMember, guildName?: string) {
   const calendar = new GoogleCalendarClient();
   
   const signups = parseShiftSignups(shiftEvent.description || "");
@@ -1891,6 +1937,16 @@ async function cancelShift(shiftEvent: CalendarEvent, userId: string, guildId: s
       description: desc,
     });
   }
+
+  // Tell the relays, so the website and the other apps drop the sign-up too.
+  const start = new Date(shiftEvent.start.dateTime);
+  const end = new Date(shiftEvent.end.dateTime);
+  const slot = {
+    start: start.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: settings.timezone }),
+    end: end.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: settings.timezone }),
+  };
+  const who: DiscordMember = member ?? { id: userId, username: userSignup.username, displayName: user?.displayName || userSignup.username };
+  await publishShiftToNostr("cancel", guildId, guildName || "Commons Hub Brussels", who, start, slot, settings);
 }
 
 async function buildRewardResultContent(
