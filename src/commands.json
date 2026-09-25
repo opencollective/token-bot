@@ -47,6 +47,10 @@
     ]
   },
   {
+    "name": "Mint tokens",
+    "type": 3
+  },
+  {
     "name": "burn",
     "description": "Burn tokens from users",
     "options": [

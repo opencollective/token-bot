@@ -26,7 +26,11 @@
       "address": "0x65dd32834927de9e57e72a3e2130a19f81c6371d",
       "mintable": true,
       "transactionsChannelId": "1354115945718878269",
-      "walletManager": "citizenwallet"
+      "walletManager": "citizenwallet",
+      "mintEmoji": "mint",
+      "mintReactionAmount": 1,
+      "sendEmoji": "🪙",
+      "sendReactionAmount": 1
     },
     {
       "name": "EURchb",

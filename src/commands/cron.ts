@@ -92,27 +92,36 @@ const processCommunity = async (guildId: string) => {
 
   if (monitors) {
     for (const monitor of monitors) {
-      if (monitor.frequency.includes("daily")) {
-        const message = await getYesterdayTransfersSummary(monitor);
-        if (message) {
-          await discord?.postToDiscordChannel(message as string, monitor.channelId);
-        }
-      }
-      if (monitor.frequency.includes("weekly")) {
-        if (dayOfWeek === 1) {
-          const message = await getLastWeekTransfersSummary(monitor);
+      // A failing monitor (explorer API down, bad config…) must not abort the whole run:
+      // the other reports and the role rewards below still have to happen.
+      try {
+        if (monitor.frequency.includes("daily")) {
+          const message = await getYesterdayTransfersSummary(monitor);
           if (message) {
             await discord?.postToDiscordChannel(message as string, monitor.channelId);
           }
         }
-      }
-      if (monitor.frequency.includes("monthly")) {
-        if (day === 1) {
-          const message = await getLastMonthTransfersSummary(monitor);
-          if (message) {
-            await discord?.postToDiscordChannel(message as string, monitor.channelId);
+        if (monitor.frequency.includes("weekly")) {
+          if (dayOfWeek === 1) {
+            const message = await getLastWeekTransfersSummary(monitor);
+            if (message) {
+              await discord?.postToDiscordChannel(message as string, monitor.channelId);
+            }
           }
         }
+        if (monitor.frequency.includes("monthly")) {
+          if (day === 1) {
+            const message = await getLastMonthTransfersSummary(monitor);
+            if (message) {
+              await discord?.postToDiscordChannel(message as string, monitor.channelId);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(
+          `❌ Monitor "${monitor.name}" failed:`,
+          error instanceof Error ? error.message : error,
+        );
       }
     }
   }

@@ -5,31 +5,13 @@ import {
   ButtonStyle,
   Interaction,
   StringSelectMenuBuilder,
-  TextChannel,
 } from "discord.js";
 import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
-import { Nostr, URI } from "../lib/nostr.ts";
-import { keccak256, toUtf8Bytes, Wallet } from "ethers";
-import {
-  BundlerService,
-  CommunityConfig,
-  callOnCardCallData,
-  getAccountAddress,
-  getCardAddress,
-  tokenTransferCallData,
-  tokenTransferEventTopic,
-  type UserOpData,
-  type UserOpExtraData,
-} from "@citizenwallet/sdk";
 import { formatUnits, parseUnits } from "@wevm/viem";
-import {
-  ChainConfig,
-  getBalance,
-  parseInsufficientGasError,
-  SupportedChain,
-} from "../lib/blockchain.ts";
-import { getAccountAddressFromDiscordUserId, getAccountAddressForToken } from "../lib/citizenwallet.ts";
-import type { GuildSettings, Token } from "../types.ts";
+import { getBalance, SupportedChain } from "../lib/blockchain.ts";
+import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
+import { executeSend } from "../lib/send.ts";
+import type { Token } from "../types.ts";
 
 // ── State ───────────────────────────────────────────────────────────────────
 
@@ -54,45 +36,6 @@ interface SendState {
 export const sendStates = new Map<string, SendState>();
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function buildCommunityConfig(guildSettings: GuildSettings, token: Token): any {
-  const chain = token.chain as SupportedChain;
-  const chainId = ChainConfig[chain].id;
-  return {
-    community: {
-      name: guildSettings.guild?.name || "Token Bot Community",
-      description: "Discord Token Bot Community", alias: "token-bot",
-      primary_token: { address: token.address, chain_id: chainId },
-      primary_account_factory: { address: "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2", chain_id: chainId },
-      primary_card_manager: { address: "0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28", chain_id: chainId },
-    },
-    tokens: {
-      [`${chainId}:${token.address}`]: {
-        standard: "erc20", name: token.symbol, address: token.address,
-        symbol: token.symbol, decimals: token.decimals, chain_id: chainId,
-      },
-    },
-    accounts: {
-      [`${chainId}:0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2`]: {
-        chain_id: chainId, entrypoint_address: "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6",
-        paymaster_address: "0xe5Eb4fB0F3312649Eb7b62fba66C9E26579D7208",
-        account_factory_address: "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2", paymaster_type: "cw-safe",
-      },
-    },
-    cards: {
-      [`${chainId}:0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28`]: {
-        chain_id: chainId, instance_id: "cw-discord-1",
-        address: "0xBA861e2DABd8316cf11Ae7CdA101d110CF581f28", type: "safe",
-      },
-    },
-    chains: {
-      [chainId.toString()]: {
-        id: chainId,
-        node: { url: `https://${chainId}.engine.citizenwallet.xyz`, ws_url: `wss://${chainId}.engine.citizenwallet.xyz` },
-      },
-    },
-  };
-}
 
 function fmtBal(balance: bigint, decimals: number): string {
   const num = Number(formatUnits(balance, decimals));
@@ -395,127 +338,29 @@ export async function handleSendInteraction(
       return;
     }
 
-    try {
-      const chain = token.chain as SupportedChain;
-      const chainId = ChainConfig[chain].id;
-      let hash: string;
+    const [result] = await executeSend({
+      client: interaction.client,
+      guildSettings,
+      token,
+      senderId: state.senderId,
+      senderAddress: senderAddr,
+      recipients: [{
+        type: state.recipientAccountId.startsWith("email:") ? "email" : "discord",
+        id: state.recipientId,
+        label: state.recipientLabel,
+        accountId: state.recipientAccountId,
+      }],
+      amount: state.amount,
+      description: state.description,
+      source: { via: "command" },
+    });
 
-      const walletManager = token.walletManager || "opencollective";
-
-      if (walletManager === "opencollective") {
-        // Use @opencollective/token-factory for Safe-based transfers
-        const { Token: OCToken } = await import("@opencollective/token-factory");
-        const ocToken = new OCToken({
-          name: token.name,
-          symbol: token.symbol,
-          chain: token.chain,
-          tokenAddress: token.address,
-        });
-        const amountWei = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
-        hash = await ocToken.transfer(
-          `discord:${state.senderId}`,
-          state.recipientAccountId,
-          amountWei,
-        );
-      } else {
-        // Citizen Wallet bundler-based transfer
-        const community = new CommunityConfig(buildCommunityConfig(guildSettings, token));
-        const senderHashedUserId = keccak256(toUtf8Bytes(state.senderId));
-        const recipientHashedUserId = keccak256(toUtf8Bytes(state.recipientId));
-        const recipientAddress = await getCardAddress(community, recipientHashedUserId);
-
-        if (!recipientAddress) {
-          await interaction.editReply({ content: "❌ Could not find recipient's account." });
-          sendStates.delete(userId);
-          return;
-        }
-
-        const privateKey = Deno.env.get("PRIVATE_KEY");
-        if (!privateKey) {
-          await interaction.editReply({ content: "❌ Bot configuration error: Private key not set." });
-          sendStates.delete(userId);
-          return;
-        }
-
-        const signer = new Wallet(privateKey);
-        const signerAccountAddress = await getAccountAddress(community, signer.address);
-        if (!signerAccountAddress) {
-          await interaction.editReply({ content: "❌ Could not find bot's account address." });
-          sendStates.delete(userId);
-          return;
-        }
-
-        const formattedAmount = parseUnits(state.amount.toFixed(token.decimals), token.decimals);
-        const bundler = new BundlerService(community);
-        const transferCalldata = tokenTransferCallData(recipientAddress, formattedAmount);
-        const calldata = callOnCardCallData(
-          community, senderHashedUserId, token.address, BigInt(0), transferCalldata,
-        );
-
-        const userOpData: UserOpData = {
-          topic: tokenTransferEventTopic,
-          from: senderAddr,
-          to: recipientAddress,
-          value: formattedAmount.toString(),
-        };
-
-        let extraData: UserOpExtraData | undefined;
-        if (state.description) extraData = { description: state.description };
-
-        hash = await bundler.call(
-          signer as any,
-          community.primarySafeCardConfig.address,
-          signerAccountAddress,
-          calldata,
-          BigInt(0),
-          userOpData,
-          extraData,
-        );
-      }
-
-      const txUri = `ethereum:${chainId}:tx:${hash}` as URI;
-
-      // Post to transactions channel (token-specific or default)
-      const txChannelId = token.transactionsChannelId || guildSettings.channels?.transactions;
-      if (txChannelId) {
-        try {
-          const ch = await interaction.client.channels.fetch(txChannelId) as TextChannel;
-          if (ch) {
-            const tokenUrl = `https://txinfo.xyz/${chain}/token/${token.address}`;
-            const tokenLink = `[${token.symbol}](<${tokenUrl}>)`;
-            const txUrl = `https://txinfo.xyz/${chain}/tx/${hash}`;
-            let msg = `💸 <@${userId}> sent ${state.amount.toLocaleString("en-US")} ${tokenLink} to ${state.recipientLabel} [[tx]](<${txUrl}>)`;
-            if (state.description) msg += `\n📝 ${state.description}`;
-            await ch.send(msg);
-          }
-        } catch (err) {
-          console.error("Error posting to transactions channel:", err);
-        }
-      }
-
-      // Nostr
-      try {
-        const nostr = Nostr.getInstance();
-        await nostr.publishMetadata(txUri, {
-          content: state.description || `Sent ${state.amount} ${token.symbol} to ${state.recipientName}`,
-          tags: [["t", "send"], ["t", "transfer"], ["amount", state.amount.toString()]],
-        });
-      } catch (err) {
-        console.error("Error publishing Nostr:", err);
-      }
-
+    if (result?.success) {
       let reply = `✅ Sent **${state.amount.toLocaleString("en-US")} ${token.symbol}** to ${state.recipientLabel}`;
       if (state.description) reply += `\n📝 ${state.description}`;
       await interaction.editReply({ content: reply });
-    } catch (error) {
-      console.error("Error executing send:", error);
-      const gasErr = await parseInsufficientGasError(error, token.chain as SupportedChain);
-      const message = gasErr
-        ? gasErr.formatMessage("send")
-        : error instanceof Error
-        ? error.message
-        : String(error);
-      await interaction.editReply({ content: `❌ ${message}` });
+    } else {
+      await interaction.editReply({ content: `❌ ${result?.error ?? "Unknown error"}` });
     }
 
     sendStates.delete(userId);

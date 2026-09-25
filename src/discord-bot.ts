@@ -11,6 +11,7 @@ import {
   Interaction,
   MessageFlags,
   ModalBuilder,
+  Partials,
   REST,
   RoleSelectMenuBuilder,
   Routes,
@@ -57,6 +58,13 @@ const channelSetupStates = new Map<string, ChannelSetupState>();
 
 import { ChainConfig, getNativeBalance, getWalletClient, hasRole, MINTER_ROLE, SupportedChain } from "./lib/blockchain.ts";
 import handleMintCommand, { handleMintAutocomplete } from "./commands/mint.ts";
+import {
+  handleMintContextMenu,
+  handleMintContextModal,
+  MINT_CONTEXT_COMMAND_NAME,
+  MINT_CONTEXT_MODAL_ID,
+} from "./commands/mint-context.ts";
+import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
 import handleSendCommand, { handleSendAutocomplete, handleSendInteraction, sendStates } from "./commands/send.ts";
@@ -200,7 +208,13 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions,
+    // Privileged intent: only request it when enabled in the Discord developer portal.
+    // Without it, reaction mints still work but can't read the message text for the description.
+    ...(Deno.env.get("DISCORD_MESSAGE_CONTENT_INTENT") === "true" ? [GatewayIntentBits.MessageContent] : []),
   ],
+  // Needed to receive reactions on messages sent before the bot started
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
 
 // Chain config
@@ -353,6 +367,9 @@ client.on(Events.ClientReady, async (readyClient) => {
   // Warm token stats cache on startup
   warmTokenStatsCache().catch(err => console.error("Token stats cache warm failed:", err));
 
+  // Make sure the :mint: emoji exists in every guild with a mintable token
+  ensureMintEmojis(client).catch(err => console.error("Mint emoji setup failed:", err));
+
   // Start API server and pass Discord client reference
   setDiscordClient(client);
   try {
@@ -387,6 +404,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "send") {
         return handleSendAutocomplete(interaction, guildId);
+      }
+      return;
+    }
+
+    // Handle message context menu commands
+    if (interaction.isMessageContextMenuCommand()) {
+      if (interaction.commandName === MINT_CONTEXT_COMMAND_NAME) {
+        return handleMintContextMenu(interaction, userId, guildId);
       }
       return;
     }
@@ -484,6 +509,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId.startsWith("shifts_")) {
         return handleShiftsButton(interaction, userId, guildId);
+      }
+      if (interaction.customId.startsWith("rx_")) {
+        return handleReactionButton(interaction);
       }
       return handleButton(interaction, userId, guildId);
     }
@@ -1521,6 +1549,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return handleShiftsModal(interaction, userId, guildId);
   }
 
+  // Handle "Mint tokens" context menu modal
+  if (interaction.customId === MINT_CONTEXT_MODAL_ID) {
+    try {
+      return await handleMintContextModal(interaction, userId, guildId);
+    } catch (error) {
+      console.error("Error handling mint context modal:", error);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "An error occurred while minting.", flags: MessageFlags.Ephemeral }).catch(console.error);
+      }
+      return;
+    }
+  }
+
   // Handle roles add modal
   if (interaction.customId === "roles_add_modal") {
     const state = rolesAddState.get(userId);
@@ -1803,6 +1844,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // UI helper functions
+// Reaction-based minting (:mint:) and sending (:coin:), confirmed with buttons
+client.on(Events.MessageReactionAdd, (reaction, user) => {
+  handleReactionAdd(reaction, user).catch((err) => console.error("Reaction handler failed:", err));
+});
+
 client.on(Events.Error, (error) => {
   console.error("Discord client error:", error);
 });
