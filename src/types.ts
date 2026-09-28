@@ -113,6 +113,8 @@ export type BookState = {
   guildId?: string;
   name?: string;
   selectedDate?: Date;
+  /** Several dates entered at once; same start time and duration on each. selectedDate is the first. */
+  selectedDates?: Date[];
   selectedHour?: number;
   selectedMinute?: number;
   startTime?: Date;

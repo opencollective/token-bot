@@ -129,10 +129,19 @@ export async function parseInsufficientGasError(
 export const PROFILE_ADMIN_ROLE =
   "0x224b562a599bb6f57441f98a50de513dff0de3d9b620f342c27a4e4a898ce8e2";
 
-// Hard-coded RPC URLs for supported chains
+const envRpc = (name: string): string | undefined => {
+  try {
+    return Deno.env.get(name) || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// RPC URLs for supported chains. CELO_RPC_URL / GNOSIS_RPC_URL override the defaults
+// (a third-party Celo RPC being down made the daily cron fail on 2026-09-27 and 28).
 export const RPC_URLS = {
-  celo: "https://celo-json-rpc.stakely.io",
-  gnosis: "https://rpc.gnosischain.com",
+  celo: envRpc("CELO_RPC_URL") ?? "https://forno.celo.org",
+  gnosis: envRpc("GNOSIS_RPC_URL") ?? "https://rpc.gnosischain.com",
   base_sepolia: "https://base-sepolia-rpc.publicnode.com",
   base: "https://base.llamarpc.com",
   polygon: "https://polygon.llamarpc.com",
