@@ -3,14 +3,14 @@
     "id": "1356972890540736725",
     "name": "shifters",
     "amountToMint": 0,
-    "amountToBurn": 10,
+    "amountToBurn": 0,
     "frequency": "monthly"
   },
   {
     "id": "1356973314794328254",
     "name": "coworker",
     "amountToMint": 0,
-    "amountToBurn": 3,
+    "amountToBurn": 0,
     "frequency": "monthly"
   },
   {

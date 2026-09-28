@@ -19,6 +19,7 @@ import { burnTokensFrom, getBalance, SupportedChain } from "../lib/blockchain.ts
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
+import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
 
 // Helper to update message for both button/select and deferred modal interactions
 async function updateMessage(interaction: Interaction, data: { content: string; components: any[] }) {
@@ -281,7 +282,9 @@ function buildSelectionHeader(state: BookState, product?: Product): string {
     header += `**Room:** ${product.name}\n`;
   }
   
-  if (state.selectedDate) {
+  if (state.selectedDates && state.selectedDates.length > 1) {
+    header += `**Dates (${state.selectedDates.length}):** ${state.selectedDates.map(formatShortDate).join(", ")}\n`;
+  } else if (state.selectedDate) {
     header += `**Date:** ${formatDiscordDate(state.selectedDate)}\n`;
   }
   
@@ -444,7 +447,7 @@ async function showDateSelection(
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("book_date_custom")
-      .setLabel("Enter date...")
+      .setLabel("Enter date(s)...")
       .setStyle(ButtonStyle.Secondary),
   );
   rows.push(row3);
@@ -546,16 +549,16 @@ export async function handleBookButton(
       // Show modal for custom date entry
       const modal = new ModalBuilder()
         .setCustomId("book_date_modal")
-        .setTitle("Enter a Date")
+        .setTitle("Enter one or more dates")
         .addComponents(
           new ActionRowBuilder<TextInputBuilder>().addComponents(
             new TextInputBuilder()
               .setCustomId("custom_date")
-              .setLabel("Date (DD/MM/YYYY)")
+              .setLabel("Date(s), DD/MM/YYYY, comma separated")
               .setStyle(TextInputStyle.Short)
-              .setPlaceholder("e.g., 15/03/2026")
+              .setPlaceholder("15/03/2026  or  15/03/2026, 22/03/2026, 29/03/2026")
               .setRequired(true)
-              .setMaxLength(10),
+              .setMaxLength(200),
           ),
         );
       await interaction.showModal(modal);
@@ -611,6 +614,7 @@ export async function handleBookButton(
     // Parse the selected date
     const selectedDate = parseDateValue(dateValue);
     state.selectedDate = selectedDate;
+    state.selectedDates = undefined;
     state.step = "time";
     bookStates.set(userId, state);
 
@@ -1029,8 +1033,12 @@ async function showTimeSelection(
 
   const header = buildSelectionHeader(state, product);
 
+  const multiNote = state.selectedDates && state.selectedDates.length > 1
+    ? `\n_Availability shown for ${formatShortDate(state.selectedDate)}. The same time is used on every date, and each date is checked before you pay._`
+    : "";
+
   await updateMessage(interaction, {
-    content: `${header}\n${availability}\n\n⏰ **Select start time:** (🔴 = booked)`,
+    content: `${header}\n${availability}${multiNote}\n\n⏰ **Select start time:** (🔴 = booked)`,
     components: [row, navRow],
   });
 }
@@ -1185,12 +1193,13 @@ async function showPaymentSelection(
   }
 
   const hours = state.duration / 60;
+  const dateCount = state.selectedDates?.length || 1;
   const header = buildSelectionHeader(state, product);
 
   // Build payment option buttons
   const paymentButtons: ButtonBuilder[] = [];
   for (const price of product.price) {
-    const totalPrice = (price.amount * hours).toFixed(2);
+    const totalPrice = (price.amount * hours * dateCount).toFixed(2);
     // Check if this token is configured in guild settings
     const tokenConfig = guildSettings.tokens.find(
       (t) => t.symbol.toLowerCase() === price.token.toLowerCase()
@@ -1268,6 +1277,11 @@ async function showConfirmation(
     const errorMsg = { content: "⚠️ Session expired. Please run /book again.", components: [] };
     if (interaction.isButton()) await interaction.update(errorMsg);
     else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
+    return;
+  }
+
+  if (state.selectedDates && state.selectedDates.length > 1) {
+    await showMultiDateConfirmation(interaction, userId, guildId);
     return;
   }
 
@@ -1389,6 +1403,11 @@ async function processBooking(
   if (!interaction.isButton()) return;
 
   const state = bookStates.get(userId);
+  if (state?.selectedDates && state.selectedDates.length > 1) {
+    await processMultiDateBooking(interaction, userId, guildId);
+    return;
+  }
+
   if (!state || !state.productSlug || !state.startTime || !state.endTime) {
     await interaction.update({
       content: "⚠️ Session expired. Please run /book again.",
@@ -1702,6 +1721,235 @@ If the problem persists, contact an administrator with this info:
   }
 }
 
+// ── Several dates, same time and duration ──────────────────────────────────
+
+interface CheckedOccurrence extends Occurrence {
+  conflict?: { summary?: string | null; start: { dateTime?: string | null }; end: { dateTime?: string | null } };
+}
+
+/** Look up every occurrence in the room's calendar; a clash is reported, never booked. */
+async function checkOccurrences(calendarId: string, occurrences: Occurrence[]): Promise<CheckedOccurrence[]> {
+  const calendar = new GoogleCalendarClient();
+  const out: CheckedOccurrence[] = [];
+  for (const occurrence of occurrences) {
+    const dayStart = new Date(occurrence.start);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(occurrence.start);
+    dayEnd.setHours(23, 59, 59, 999);
+    const events = await calendar.listEvents(calendarId, dayStart, dayEnd);
+    out.push({ ...occurrence, conflict: findConflict(occurrence, events) });
+  }
+  return out;
+}
+
+function stateOccurrences(state: BookState): Occurrence[] {
+  const dates = state.selectedDates && state.selectedDates.length > 0 ? state.selectedDates : [state.selectedDate!];
+  return occurrencesFor(dates, state.selectedHour!, state.selectedMinute!, state.duration!);
+}
+
+function occurrenceLine(o: CheckedOccurrence): string {
+  const when = `${formatShortDate(o.start)} ${formatDiscordTime(o.start)}–${formatDiscordTime(o.end)}`;
+  return o.conflict ? `❌ ${when} — already booked (${o.conflict.summary || "busy"})` : `✅ ${when}`;
+}
+
+async function showMultiDateConfirmation(interaction: Interaction, userId: string, guildId: string) {
+  if (!interaction.isButton() && !interaction.isModalSubmit()) return;
+  const reply = async (data: { content: string; components: any[] }) => {
+    if (interaction.isButton()) await interaction.update(data);
+    else if (interaction.isModalSubmit()) await interaction.editReply(data);
+  };
+
+  const state = bookStates.get(userId);
+  if (!state || !state.selectedDates || state.selectedHour === undefined || state.selectedMinute === undefined || !state.duration) {
+    await reply({ content: "⚠️ Session expired. Please run /book again.", components: [] });
+    return;
+  }
+
+  const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+  const product = products?.find((p) => p.slug === state.productSlug);
+  const guildSettings = await loadGuildSettings(guildId);
+  if (!product?.calendarId || !guildSettings) {
+    await reply({ content: "⚠️ This room or the guild settings are not configured.", components: [] });
+    return;
+  }
+  const selectedTokenSymbol = state.selectedToken || product.price[0].token;
+  const selectedPrice = product.price.find((p) => p.token.toLowerCase() === selectedTokenSymbol.toLowerCase()) || product.price[0];
+  const tokenConfig = guildSettings.tokens.find((t) => t.symbol.toLowerCase() === selectedTokenSymbol.toLowerCase());
+  if (!tokenConfig) {
+    await reply({ content: "⚠️ Token configuration not found.", components: [] });
+    return;
+  }
+
+  const checked = await checkOccurrences(product.calendarId, stateOccurrences(state));
+  const free = checked.filter((o) => !o.conflict);
+  state.startTime = free[0]?.start ?? checked[0].start;
+  state.endTime = free[0]?.end ?? checked[0].end;
+  state.step = "confirm";
+  bookStates.set(userId, state);
+
+  const perBooking = selectedPrice.amount * (state.duration / 60);
+  const total = perBooking * free.length;
+  const tokenSymbol = tokenConfig.symbol;
+  const userAddress = await getCachedAddress(userId);
+  const balance = await getBalance(tokenConfig.chain as SupportedChain, tokenConfig.address, userAddress);
+  const balanceFormatted = parseFloat(formatUnits(balance, tokenConfig.decimals)).toFixed(2);
+  const hasEnoughBalance = free.length > 0 && balance >= parseUnits(total.toFixed(tokenConfig.decimals > 6 ? 6 : tokenConfig.decimals), tokenConfig.decimals);
+
+  let content = `📋 **Booking Summary — ${checked.length} dates**
+
+**Event:** ${state.name}
+**Room:** ${product.name}
+**Duration:** ${formatDuration(state.duration)} each
+${checked.map(occurrenceLine).join("\n")}
+
+**Price:** ${free.length} × ${perBooking.toFixed(2)} = ${total.toFixed(2)} ${tokenSymbol}
+**Your balance:** ${balanceFormatted} ${tokenSymbol}`;
+
+  if (free.length === 0) {
+    content += `\n\n⚠️ The room is already booked at that time on every date. Go back and pick another time.`;
+  } else if (free.length < checked.length) {
+    content += `\n\nOnly the ✅ dates will be booked and paid for.`;
+  }
+  if (free.length > 0 && !hasEnoughBalance) {
+    content += `\n\n⚠️ **Insufficient balance**\nYou need ${total.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.\n\n${tokenConfig.mintInstructions || ""}`;
+  }
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("book_confirm")
+      .setLabel(free.length ? `Pay ${total.toFixed(2)} ${tokenSymbol} to book ${free.length} date${free.length > 1 ? "s" : ""}` : "Nothing to book")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(!hasEnoughBalance),
+    new ButtonBuilder().setCustomId("book_back_payment").setLabel("← Back").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("book_cancel").setLabel("Cancel").setStyle(ButtonStyle.Danger),
+  );
+  await reply({ content, components: [row] });
+}
+
+async function processMultiDateBooking(interaction: Interaction, userId: string, guildId: string) {
+  if (!interaction.isButton()) return;
+  const state = bookStates.get(userId);
+  if (!state || !state.productSlug || !state.selectedDates || state.selectedHour === undefined || state.selectedMinute === undefined || !state.duration) {
+    await interaction.update({ content: "⚠️ Session expired. Please run /book again.", components: [] });
+    return;
+  }
+  await interaction.update({ content: "⏳ Checking the dates and processing payment...", components: [] });
+
+  const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+  const product = products?.find((p) => p.slug === state.productSlug);
+  const guildSettings = await loadGuildSettings(guildId);
+  if (!product?.calendarId || !guildSettings) {
+    await interaction.editReply({ content: "⚠️ This room or the guild settings are not configured." });
+    return;
+  }
+  const selectedTokenSymbol = state.selectedToken || product.price[0].token;
+  const selectedPrice = product.price.find((p) => p.token.toLowerCase() === selectedTokenSymbol.toLowerCase()) || product.price[0];
+  const tokenConfig = guildSettings.tokens.find((t) => t.symbol.toLowerCase() === selectedTokenSymbol.toLowerCase());
+  if (!tokenConfig) {
+    await interaction.editReply({ content: `⚠️ Token configuration not found for ${selectedTokenSymbol}.` });
+    return;
+  }
+  const tokenSymbol = tokenConfig.symbol;
+  const calendarUrl = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(product.calendarId)}&ctz=${encodeURIComponent(guildSettings.guild.timezone || "Europe/Brussels")}`;
+
+  // Re-check right before paying: someone may have booked a date since the summary.
+  const checked = await checkOccurrences(product.calendarId, stateOccurrences(state));
+  const free = checked.filter((o) => !o.conflict);
+  if (free.length === 0) {
+    await interaction.editReply({ content: `❌ Nothing booked, nothing paid: the room is already booked at that time on every date.\n\n${checked.map(occurrenceLine).join("\n")}` });
+    return;
+  }
+
+  const perBooking = selectedPrice.amount * (state.duration / 60);
+  const total = perBooking * free.length;
+  const amount = total.toFixed(tokenConfig.decimals > 6 ? 6 : tokenConfig.decimals);
+  console.log(`Processing multi-date payment: ${amount} ${tokenSymbol} for ${free.length} dates on ${tokenConfig.chain}`);
+
+  let txHash: string | null | undefined;
+  try {
+    const userAddress = await getCachedAddress(userId);
+    const balance = await getBalance(tokenConfig.chain as SupportedChain, tokenConfig.address, userAddress);
+    if (balance < parseUnits(amount, tokenConfig.decimals)) {
+      const balanceFormatted = parseFloat(formatUnits(balance, tokenConfig.decimals)).toFixed(2);
+      await interaction.editReply({ content: `❌ **Insufficient balance**\n\n**Balance:** ${balanceFormatted} ${tokenSymbol}\n**Required:** ${total.toFixed(2)} ${tokenSymbol}\n\n${tokenConfig.mintInstructions || ""}` });
+      return;
+    }
+    txHash = await burnTokensFrom(tokenConfig.chain as SupportedChain, tokenConfig.address, userAddress, amount, tokenConfig.decimals);
+  } catch (error: any) {
+    console.error("Error processing multi-date payment:", error);
+    const rawMsg: string = error?.message || "Unknown error";
+    await interaction.editReply({ content: `❌ **Payment failed, nothing was booked.**\n\nPlease try again in a moment. If it persists, contact an administrator.\n• Error: ${rawMsg.length > 200 ? rawMsg.slice(0, 200) + "..." : rawMsg}` });
+    return;
+  }
+  if (!txHash) {
+    await interaction.editReply({ content: "❌ Payment failed. Transaction returned no hash. Nothing was booked." });
+    return;
+  }
+
+  const explorerBaseUrl = tokenConfig.chain === "celo" ? "https://celoscan.io" : tokenConfig.chain === "gnosis" ? "https://gnosisscan.io" : "https://sepolia.basescan.org";
+  const chainId = tokenConfig.chain === "celo" ? 42220 : tokenConfig.chain === "gnosis" ? 100 : 84532;
+  const txUrl = `${explorerBaseUrl}/tx/${txHash}`;
+  const bookingTime = new Date();
+  const calendarClient = new GoogleCalendarClient();
+  await calendarClient.ensureCalendarInList(product.calendarId).catch((e) => console.error("ensureCalendarInList:", e));
+
+  const booked: Occurrence[] = [];
+  const failed: { occurrence: Occurrence; reason: string }[] = [];
+  for (const [i, occurrence] of free.entries()) {
+    let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username}) on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)`;
+    if (state.eventUrl) description += `\nEvent URL: ${state.eventUrl}`;
+    description += `\n\nPlease reach out to @${interaction.user.username} on Discord for questions about this booking.\n\nTo cancel, ${interaction.user.displayName} needs to run the /cancel command in Discord.\n\nUser ID: ${userId}\nBooking TX: ${txHash}\nBooking Chain: ${tokenConfig.chain}`;
+    const event: any = {
+      summary: state.name || "Room Booking",
+      description,
+      start: { dateTime: occurrence.start.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      end: { dateTime: occurrence.end.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    };
+    if (state.eventUrl) event.source = { url: state.eventUrl, title: "Event page" };
+    try {
+      await calendarClient.createEvent(product.calendarId, event);
+      booked.push(occurrence);
+    } catch (error: any) {
+      console.error(`Error creating calendar event for ${occurrence.start.toISOString()}:`, error);
+      failed.push({ occurrence, reason: error?.conflictingEvent ? `taken meanwhile by "${error.conflictingEvent.summary}"` : (error?.message || "unknown error") });
+    }
+  }
+  invalidateRoomEventsCache();
+
+  const whenList = booked.map((o) => `${formatDiscordDate(o.start)} ${formatDiscordTime(o.start)}–${formatDiscordTime(o.end)}`).join(", ");
+  const announcement = `🗓️ <@${userId}> booked ${product.name} on ${booked.length} date${booked.length > 1 ? "s" : ""} (${whenList}) for ${total.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`;
+  for (const channelId of [guildSettings.channels?.transactions, product.channelId]) {
+    if (!channelId || !interaction.guild || booked.length === 0) continue;
+    try {
+      const channel = await interaction.guild.channels.fetch(channelId) as TextChannel;
+      await channel?.send(announcement);
+    } catch (error) {
+      console.error(`Error sending booking message to channel ${channelId}:`, error);
+    }
+  }
+
+  try {
+    await Nostr.getInstance().publishMetadata(`ethereum:${chainId}:tx:${txHash}` as URI, {
+      content: `Booking ${product.name} room for ${booked.length} × ${formatDuration(state.duration)}`,
+      tags: [["t", "booking"], ["t", product.slug]],
+    });
+  } catch (error) {
+    console.error("Error sending Nostr annotation:", error);
+  }
+
+  bookStates.delete(userId);
+  const skipped = checked.filter((o) => o.conflict);
+  let content = booked.length > 0 ? `✅ **Booked ${booked.length} date${booked.length > 1 ? "s" : ""}!**` : "❌ **Payment went through but no date could be booked.**";
+  content += `\n\n**Event:** ${state.name}\n**Room:** ${product.name}\n${booked.map((o) => `✅ ${formatShortDate(o.start)} ${formatDiscordTime(o.start)}–${formatDiscordTime(o.end)}`).join("\n")}`;
+  if (skipped.length) content += `\n${skipped.map(occurrenceLine).join("\n")}\n_Not booked and not charged._`;
+  if (failed.length) {
+    content += `\n${failed.map((f) => `⚠️ ${formatShortDate(f.occurrence.start)} — ${f.reason}`).join("\n")}`;
+    content += `\n\n**${(perBooking * failed.length).toFixed(2)} ${tokenSymbol} was charged for ${failed.length === 1 ? "that date" : "those dates"} but it could not be booked. Please contact an administrator for a refund** (tx below).`;
+  }
+  content += `\n**Paid:** ${total.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}\n\n[View transaction](<${txUrl}>) · [${product.name} calendar](<${calendarUrl}>)`;
+  await interaction.editReply({ content });
+}
+
 // Handle select menu interactions
 export async function handleBookSelect(
   interaction: Interaction,
@@ -1726,6 +1974,7 @@ export async function handleBookSelect(
     const dateValue = interaction.values[0];
     const selectedDate = parseDateValue(dateValue);
     state.selectedDate = selectedDate;
+    state.selectedDates = undefined;
     state.step = "time";
     bookStates.set(userId, state);
 
@@ -1767,52 +2016,19 @@ export async function handleBookModal(
     }
 
     const dateInput = interaction.fields.getTextInputValue("custom_date").trim();
-    
-    // Parse DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-    const match = dateInput.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-    if (!match) {
+
+    // One date, or several separated by commas (DD/MM/YYYY, DD-MM-YYYY or DD.MM.YYYY).
+    const { dates, errors } = parseDateList(dateInput, getLocalToday());
+    if (errors.length > 0 || dates.length === 0) {
       await interaction.reply({
-        content: "❌ Invalid date format. Please use DD/MM/YYYY (e.g., 15/03/2026).",
+        content: `❌ ${errors.length ? errors.join("\n❌ ") : "No date entered."}\n\nUse DD/MM/YYYY, and separate several dates with commas (e.g. 15/03/2026, 22/03/2026). At most ${MAX_BOOKING_DATES} dates.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
-    const [, dayStr, monthStr, yearStr] = match;
-    const day = parseInt(dayStr);
-    const month = parseInt(monthStr);
-    const year = parseInt(yearStr);
-
-    // Validate ranges
-    if (month < 1 || month > 12 || day < 1 || day > 31) {
-      await interaction.reply({
-        content: "❌ Invalid date. Please check the day and month.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const selectedDate = new Date(year, month - 1, day);
-    
-    // Check it's a valid date (handles things like Feb 30)
-    if (selectedDate.getDate() !== day || selectedDate.getMonth() !== month - 1) {
-      await interaction.reply({
-        content: "❌ Invalid date. Please check the day and month.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    // Check it's not in the past
-    const today = getLocalToday();
-    if (selectedDate < today) {
-      await interaction.reply({
-        content: "❌ Can't book in the past. Please enter a future date.",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
+    const selectedDate = dates[0];
+    state.selectedDates = dates.length > 1 ? dates : undefined;
     state.selectedDate = selectedDate;
     state.step = "time";
     bookStates.set(userId, state);

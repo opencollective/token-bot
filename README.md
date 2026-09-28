@@ -45,7 +45,7 @@ description is generic and only the message link is recorded.
 
 ## Cron
 
-You can define minting amount and burning amount in `discord-roles-rewards.json`. 
+Minting and burning amounts per role live in `roles.json` in the bot's data volume (`$DATA_DIR/<guild id>/roles.json`), edited with the `/roles` command; `data/<guild id>/roles.json` in this repo only seeds it on a first deploy. `discord-roles-rewards.json` is legacy (only the vacancies reminder reads it): changing burns there has no effect. 
 Then run the cronjob daily:
 
 ```
