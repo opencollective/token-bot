@@ -8,7 +8,7 @@
  */
 
 import { getEnv } from "./utils.ts";
-import { fetchRoomImage, sendBookingConfirmation } from "./booking-email.ts";
+import { fetchRoomImage, type RoomRates, sendBookingConfirmation } from "./booking-email.ts";
 import { bookingReason, buildDoorLink } from "./door-link.ts";
 
 export interface GuestBookingRecord {
@@ -93,7 +93,7 @@ export async function notifyGuestBookingChanged(
   guildId: string,
   calendarId: string,
   eventId: string,
-  change: { calendarId: string; eventId: string; productSlug: string; roomName: string; start: Date; end: Date; eventUrl?: string; priceTotal: number },
+  change: { calendarId: string; eventId: string; productSlug: string; roomName: string; start: Date; end: Date; eventUrl?: string; priceTotal: number; rates?: RoomRates },
 ): Promise<string> {
   const r = await findGuestBooking(guildId, calendarId, eventId);
   if (!r) return "";
@@ -124,6 +124,7 @@ export async function notifyGuestBookingChanged(
       kind: "updated",
       roomName: change.roomName,
       roomImageUrl: await fetchRoomImage(change.productSlug),
+      rates: change.rates,
       occurrences: [{ start: change.start, end: change.end }],
       previous: { roomName: r.roomName, occurrences: [{ start: new Date(r.start), end: new Date(r.end) }] },
       priceTotal: change.priceTotal,

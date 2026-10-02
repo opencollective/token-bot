@@ -80,6 +80,31 @@ export async function fetchMonthlyCosts(): Promise<MonthlyCosts> {
   return FALLBACK_COSTS;
 }
 
+export interface RoomRates {
+  eurPerHour?: number;
+  tokensPerHour?: number;
+  tokenSymbol?: string;
+}
+
+/** The room's usual rates from its /book prices: a euro token (EURb, EURe…) and the community token (CHT). */
+export function ratesFromPrices(prices: { token: string; amount: number }[] | undefined): RoomRates {
+  const eur = prices?.find((p) => /^eur/i.test(p.token));
+  const tok = prices?.find((p) => !/^eur/i.test(p.token));
+  return { eurPerHour: eur?.amount, tokensPerHour: tok?.amount, tokenSymbol: tok?.token };
+}
+
+const num = (n: number) => Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
+
+/** "Usual rate: €35 or 1 CHT per hour", or "" when nothing is known. */
+export function rateLine(r?: RoomRates): string {
+  if (!r) return "";
+  const parts = [
+    r.eurPerHour ? `€${num(r.eurPerHour)}` : "",
+    r.tokensPerHour ? `${num(r.tokensPerHour)} ${r.tokenSymbol || "CHT"}` : "",
+  ].filter(Boolean);
+  return parts.length ? `Usual rate: ${parts.join(" or ")} per hour` : "";
+}
+
 /** Whole euros, no decimals: €6,547. */
 export const eurRounded = (n: number) => "€" + Math.round(n).toLocaleString("en-GB");
 
@@ -226,6 +251,8 @@ export interface BookingEmailDetails {
   kind?: "confirmed" | "updated" | "cancelled";
   /** The room's cover image (fetchRoomImage). */
   roomImageUrl?: string;
+  /** The room's usual hourly rates, shown under the photo (ratesFromPrices). */
+  rates?: RoomRates;
   /** Calendar identity per occurrence (same order), so updates and cancellations replace the guest's entry. */
   uids?: string[];
   sequence?: number;
@@ -302,7 +329,8 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
 <tr><td style="padding:8px 28px 32px">
   <h1 style="font-size:22px;line-height:1.3;margin:12px 0 8px">Hi ${esc(d.guestName)}, ${heading}</h1>
   <p style="margin:0 0 16px">${esc(paragraphs.intro)}</p>
-  ${d.roomImageUrl && kind !== "cancelled" ? `<img src="${esc(d.roomImageUrl)}" alt="${esc(d.roomName)}" width="544" style="display:block;width:100%;max-width:544px;height:auto;border:0;border-radius:10px;margin:0 0 16px">` : ""}
+  ${d.roomImageUrl && kind !== "cancelled" ? `<img src="${esc(d.roomImageUrl)}" alt="${esc(d.roomName)}" width="544" style="display:block;width:100%;max-width:544px;height:auto;border:0;border-radius:10px;margin:0 0 ${rateLine(d.rates) ? "6px" : "16px"}">` : ""}
+  ${rateLine(d.rates) && kind !== "cancelled" ? `<p style="margin:0 0 16px;font-size:14px;color:#5d625e">${esc(d.roomName)} · ${esc(rateLine(d.rates))}</p>` : ""}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF4F2;border-radius:10px">
     <tr><td style="padding:16px 18px;font-size:15px">
       <div style="margin-bottom:6px"><strong>${esc(d.eventName)}</strong></div>
@@ -345,7 +373,7 @@ ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
     paragraphs.intro,
     "",
     d.eventName,
-    `Room: ${d.roomName}`,
+    `Room: ${d.roomName}${rateLine(d.rates) && kind !== "cancelled" ? ` (${rateLine(d.rates).replace(/^Usual rate: /, "usual rate ")})` : ""}`,
     `When: ${dates.join("; ")}`,
     `Where: ${HUB.address} (right in front of Brussels Central Station)`,
     `Booked by: ${d.bookerName}${d.bookerEmail ? ` (${d.bookerEmail}, in cc)` : ""}`,

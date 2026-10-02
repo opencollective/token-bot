@@ -21,7 +21,7 @@ import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
-import { fetchRoomImage, sendBookingConfirmation } from "../lib/booking-email.ts";
+import { fetchRoomImage, ratesFromPrices, sendBookingConfirmation } from "../lib/booking-email.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -87,6 +87,7 @@ async function emailGuest(
       doorLinks,
       uids,
       roomImageUrl: await fetchRoomImage(product.slug),
+      rates: ratesFromPrices(product.price),
       guestName: f.name,
       guestEmail: f.email,
       bookerName: interaction.user.displayName || interaction.user.username,
