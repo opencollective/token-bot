@@ -52,6 +52,9 @@ Deno.test("the email has the booking, CHT, house rule, membership and costs, and
   expect(html).toContain("in fixed costs, every month");
   expect(html).toContain("background:#2a78d6");
   expect(html).toContain(">Contribute</a>");
+  expect(html).not.toContain("background:#FF4C02;color:#ffffff"); // buttons are white with an orange border
+  expect(html).toContain("border:2px solid #FF4C02");
+  expect(html).toContain('padding:8px 28px 32px'); // space between the last button and the footer line
   expect(text).toContain("- Rent: €6,547");
   for (const t of [text, html]) {
     expect(t).toContain("2 CHT");

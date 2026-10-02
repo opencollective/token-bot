@@ -41,6 +41,7 @@ Deno.test("the email shows a door button per date with the validity window", () 
   const base = { guestName: "Ana", guestEmail: "a@example.com", bookerName: "Xavier", eventName: "Planning", roomName: "Mush Room", priceTotal: 4, tokenSymbol: "CHT", bookingId: "t", occurrences };
   const one = buildBookingEmail({ ...base, occurrences: occurrences.slice(0, 1), doorLinks: ["https://door.commonshub.brussels/open?x=1"] }, FALLBACK_COSTS);
   expect(one.html).toContain("🚪 Open the door</a>");
+  expect(one.html).toContain("background:#ffffff;color:#001309;border:2px solid #001309");
   expect(one.text).toContain("(09:30–12:30)"); // 10:00–12:00 Brussels, ±30 min
   expect(one.text).toContain("#door channel");
   const two = buildBookingEmail({ ...base, doorLinks: ["https://door/1", "https://door/2"] }, FALLBACK_COSTS);
