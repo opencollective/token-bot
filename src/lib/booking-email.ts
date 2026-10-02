@@ -25,7 +25,8 @@ export const HUB = {
 
 export interface CostLine {
   label: string;
-  share: number; // percent of the monthly total
+  amountEur: number;
+  color: string;
 }
 export interface MonthlyCosts {
   totalEur: number;
@@ -33,31 +34,38 @@ export interface MonthlyCosts {
   source: "live" | "fallback";
 }
 
+/** The website's cost palette (src/components/contribute/fixed-costs-chart.tsx, light mode), by slot. */
+export const COST_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
+
 /** Figures from commonshub.brussels/contribute on 2026-10-02, used if the live page cannot be read. */
 export const FALLBACK_COSTS: MonthlyCosts = {
   totalEur: 9820.23,
   lines: [
-    { label: "Rent", share: 67 },
-    { label: "Property tax (regional)", share: 13 },
-    { label: "Office tax (local)", share: 11 },
-    { label: "Furniture rental", share: 6 },
-    { label: "Electricity (Engie)", share: 2 },
-    { label: "Internet (Proximus)", share: 0.6 },
+    { label: "Rent", amountEur: 6546.76, color: COST_COLORS[0] },
+    { label: "Property tax (regional)", amountEur: 1266.27, color: COST_COLORS[1] },
+    { label: "Office tax (local)", amountEur: 1076.58, color: COST_COLORS[2] },
+    { label: "Furniture rental", amountEur: 637.67, color: COST_COLORS[3] },
+    { label: "Electricity (Engie)", amountEur: 238.5, color: COST_COLORS[4] },
+    { label: "Internet (Proximus)", amountEur: 54.45, color: COST_COLORS[5] },
   ],
   source: "fallback",
 };
 
-/** Parse the fixed-costs summary the contribute page exposes for screen readers. */
-export function parseCostsLabel(html: string): MonthlyCosts | null {
-  const m = html.match(/aria-label="Fixed costs, €([\d,.]+) a month: ([^"]+)"/);
-  if (!m) return null;
-  const totalEur = parseFloat(m[1].replace(/,/g, ""));
-  const lines = m[2].split(/,\s*(?=[A-Z])/).map((part) => {
-    const lm = part.trim().match(/^(.*\S)\s+([\d.]+)%$/);
-    return lm ? { label: lm[1], share: parseFloat(lm[2]) } : null;
-  }).filter((l): l is CostLine => !!l);
-  if (!isFinite(totalEur) || lines.length === 0) return null;
-  return { totalEur, lines, source: "live" };
+/**
+ * Read the fixed costs from the contribute page's cost bar: each segment is
+ * <a title="Rent: €6,546.76 a month, 67%" style="…background-color:var(--cost-1)" …>.
+ */
+export function parseCosts(html: string): MonthlyCosts | null {
+  const lines: CostLine[] = [];
+  for (const tag of html.match(/<a [^>]*title="[^"]*: €[\d,.]+ a month[^"]*"[^>]*>/g) ?? []) {
+    const t = tag.match(/title="([^"]+?): €([\d,.]+) a month/);
+    if (!t) continue;
+    const slot = parseInt(tag.match(/var\(--cost-(\d+)\)/)?.[1] ?? "0");
+    const label = t[1].replace(/&amp;/g, "&").replace(/&#x27;|&#39;/g, "'");
+    lines.push({ label, amountEur: parseFloat(t[2].replace(/,/g, "")), color: COST_COLORS[slot - 1] ?? "#8a8f8b" });
+  }
+  if (lines.length === 0 || lines.some((l) => !isFinite(l.amountEur))) return null;
+  return { totalEur: lines.reduce((sum, l) => sum + l.amountEur, 0), lines, source: "live" };
 }
 
 export async function fetchMonthlyCosts(): Promise<MonthlyCosts> {
@@ -66,9 +74,35 @@ export async function fetchMonthlyCosts(): Promise<MonthlyCosts> {
     const timer = setTimeout(() => controller.abort(), 4000);
     const res = await fetch(HUB.contributeUrl, { signal: controller.signal });
     clearTimeout(timer);
-    if (res.ok) return parseCostsLabel(await res.text()) ?? FALLBACK_COSTS;
+    if (res.ok) return parseCosts(await res.text()) ?? FALLBACK_COSTS;
   } catch { /* fall back */ }
   return FALLBACK_COSTS;
+}
+
+/** Whole euros, no decimals: €6,547. */
+export const eurRounded = (n: number) => "€" + Math.round(n).toLocaleString("en-GB");
+
+/** The website's cost card, as email-safe tables: total, a stacked bar, and a legend with amounts. */
+export function costsCardHtml(costs: MonthlyCosts): string {
+  const total = costs.totalEur || 1;
+  const segments = costs.lines.map((l, i) => {
+    const width = Math.max(0.5, (l.amountEur / total) * 100).toFixed(2);
+    const gap = i < costs.lines.length - 1 ? "border-right:2px solid #ffffff;" : "";
+    return `<td width="${width}%" style="background:${l.color};height:16px;line-height:16px;font-size:0;${gap}">&nbsp;</td>`;
+  }).join("");
+  const legend = costs.lines.map((l) => `<tr>
+        <td width="14" style="padding:5px 10px 5px 0;vertical-align:middle"><div style="width:12px;height:12px;border-radius:3px;background:${l.color}"></div></td>
+        <td style="padding:5px 0;font-size:15px;color:#001309">${l.label.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</td>
+        <td align="right" style="padding:5px 0;font-size:15px;color:#001309;white-space:nowrap">${eurRounded(l.amountEur)}</td>
+      </tr>`).join("");
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eaded9;border-radius:10px;margin:12px 0 0">
+    <tr><td style="padding:18px 20px">
+      <div style="font-size:30px;font-weight:700;line-height:1.1;color:#001309">${eurRounded(costs.totalEur)}</div>
+      <div style="font-size:14px;color:#5d625e;margin-top:2px">in fixed costs, every month</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;border-radius:6px;overflow:hidden;table-layout:fixed"><tr>${segments}</tr></table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px">${legend}</table>
+    </td></tr>
+  </table>`;
 }
 
 // ── ICS ─────────────────────────────────────────────────────────────────────
@@ -154,7 +188,6 @@ export interface BookingEmailDetails {
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const eur = (n: number) => "€" + n.toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
 function whenLine(o: { start: Date; end: Date }, tz: string): string {
   const day = o.start.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: tz });
@@ -168,14 +201,13 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   const firstDay = d.occurrences[0].start.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: tz });
   const subject = `Your booking at the Commons Hub: ${d.roomName}, ${firstDay}${d.occurrences.length > 1 ? ` (+${d.occurrences.length - 1} more)` : ""}`;
   const price = `${Number(d.priceTotal.toFixed(2))} ${d.tokenSymbol}`;
-  const costLines = costs.lines.map((l) => `${l.label} (${l.share}%)`).join(", ");
 
   const paragraphs = {
     intro: `${d.bookerName} booked the ${d.roomName} at the ${HUB.name} for you.`,
-    cht: `This booking was paid with ${price}. CHT, the Commons Hub Token, is how our community keeps track of time given to the place: members earn it by stewarding the space (hosting shifts, cleaning, keeping the plants alive, welcoming people, running the newsletter…) and can spend it on rooms like this one. So this room is yours for this time because ${d.bookerName} gave time to the community.`,
+    cht: `This booking was paid with ${price}. CHT, the Commons Hub Token, is how our community keeps track of time given to the place: members earn it by stewarding the space (doing shifts, cleaning, keeping the plants alive, welcoming people, running the newsletter…) and can spend it on rooms like this one. So this room is yours for this time because ${d.bookerName} gave time to the community.`,
     house: `The Commons Hub is a community space, not a rental venue. We ask everyone to treat it as if it were their own house. Unless you are messy at home, in which case please take care of it as if it were somebody else's house 🙂 Leave the room as you found it, put the chairs and tables back, and take your trash with you.`,
     member: `If you like the place, become a member: members can call this place home, book rooms, and steward it together with us.`,
-    costs: `Keeping the doors open costs about ${eur(costs.totalEur)} a month in fixed costs: ${costLines}. It is all paid by the community, through memberships, room bookings and contributions. If this space is useful to you, you can help sustain it.`,
+    costs: `Keeping the doors open costs about ${eurRounded(costs.totalEur)} a month in fixed costs. It is all paid by the community, through memberships, room bookings and contributions. If this space is useful to you, you can help sustain it.`,
   };
 
   const doors = (d.doorLinks ?? []).map((url, i) => ({ url, o: d.occurrences[i] })).filter((x): x is { url: string; o: { start: Date; end: Date } } => !!x.url && !!x.o);
@@ -235,7 +267,8 @@ ${doorHtml}
 
   <h2 style="font-size:17px;margin:28px 0 6px">What it costs to keep the hub open</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.costs)}</p>
-  <p style="margin:12px 0 0"><a href="${HUB.contributeUrl}" style="color:#b83500;font-weight:600">Contribute on commonshub.brussels/contribute</a></p>
+  ${costsCardHtml(costs)}
+  <p style="margin:16px 0 0"><a href="${HUB.contributeUrl}" style="display:inline-block;background:#FF4C02;color:#ffffff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:8px">Contribute</a></p>
 </td></tr>
 <tr><td style="padding:28px;font-size:13px;color:#5d625e;border-top:1px solid #eaded9;margin-top:24px">
   ${HUB.name} · ${esc(HUB.address)} · <a href="${HUB.website}" style="color:#5d625e">commonshub.brussels</a><br>
@@ -269,6 +302,7 @@ ${doorHtml}
     "",
     "WHAT IT COSTS TO KEEP THE HUB OPEN",
     paragraphs.costs,
+    ...costs.lines.map((l) => `- ${l.label}: ${eurRounded(l.amountEur)}`),
     `Contribute: ${HUB.contributeUrl}`,
     "",
     `${HUB.name} · ${HUB.address} · ${HUB.website}`,
