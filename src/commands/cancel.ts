@@ -7,6 +7,7 @@ import {
   StringSelectMenuBuilder,
   TextChannel,
 } from "discord.js";
+import { notifyGuestBookingCancelled } from "../lib/guest-bookings.ts";
 import { CalendarEvent, GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { invalidateRoomEventsCache } from "../lib/room-events-cache.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
@@ -425,6 +426,8 @@ export async function handleCancelButton(
         selectedItem.calendarId,
         selectedItem.event.id,
       );
+      const guestNote = await notifyGuestBookingCancelled(guildId, selectedItem.calendarId, selectedItem.event.id)
+        .catch((e) => { console.error("[cancel] guest cancel notice failed:", e); return ""; });
 
       // Invalidate room events cache
       invalidateRoomEventsCache();
@@ -525,7 +528,7 @@ Your booking for "${
 
 **Refund:** ${refundAmount.toFixed(2)} ${tokenSymbol} (${refundPercentage}%)
 
-[View refund transaction](<${txUrl}>)`,
+[View refund transaction](<${txUrl}>)${guestNote ? `\n\n${guestNote}` : ""}`,
       });
     } catch (error) {
       console.error("Error cancelling booking:", error);

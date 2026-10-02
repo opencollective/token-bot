@@ -21,7 +21,8 @@ import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
-import { sendBookingConfirmation } from "../lib/booking-email.ts";
+import { fetchRoomImage, sendBookingConfirmation } from "../lib/booking-email.ts";
+import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
 
@@ -66,7 +67,7 @@ async function emailGuest(
   guildId: string,
   userId: string,
   product: Product,
-  occurrences: Occurrence[],
+  occurrences: (Occurrence & { eventId?: string })[],
   total: number,
   tokenSymbol: string,
   txUrl: string,
@@ -81,8 +82,11 @@ async function emailGuest(
       buildDoorLink({ name: f.name, host: bookerName, reason: bookingReason(product.name, o.start, o.end), start: o.start, end: o.end })
         .catch((error) => { console.error("[book] door link failed:", error?.message || error); return null; })
     ));
+    const uids = occurrences.map((o, i) => o.eventId ? `${o.eventId}@commonshub.brussels` : `${bookingId}-${i}@commonshub.brussels`);
     await sendBookingConfirmation({
       doorLinks,
+      uids,
+      roomImageUrl: await fetchRoomImage(product.slug),
       guestName: f.name,
       guestEmail: f.email,
       bookerName: interaction.user.displayName || interaction.user.username,
@@ -96,6 +100,19 @@ async function emailGuest(
       txUrl,
       bookingId,
     });
+    // Remember it, so the guest can be told if the booking is changed or cancelled.
+    for (const [i, o] of occurrences.entries()) {
+      if (!o.eventId || !product.calendarId) continue;
+      await recordGuestBooking(guildId, {
+        calendarId: product.calendarId, eventId: o.eventId, uid: uids[i], sequence: 0,
+        productSlug: product.slug, roomName: product.name,
+        guestName: f.name, guestEmail: f.email,
+        bookerId: userId, bookerName, bookerEmail,
+        eventName: state.name || "Room booking",
+        start: o.start.toISOString(), end: o.end.toISOString(), eventUrl: state.eventUrl,
+        tokenSymbol, priceTotal: total / occurrences.length, status: "active",
+      }).catch((error) => console.error("[book] could not record the guest booking:", error?.message || error));
+    }
     const withDoor = doorLinks.some(Boolean) ? ", with a link to open the door" : "";
     return `📨 Confirmation email sent to ${f.name}${withDoor}${bookerEmail ? " (you are in cc)" : ""}.\n\n`;
   } catch (error: any) {
@@ -129,25 +146,25 @@ async function createBookingEvent(
   calendarId: string,
   event: any,
   invitees: string[],
-): Promise<{ invited: boolean; inviteError?: string }> {
+): Promise<{ invited: boolean; inviteError?: string; eventId?: string }> {
   const asUser = Deno.env.get("BOOKING_CALENDAR_IMPERSONATE_USER") || Deno.env.get("GOOGLE_CALENDAR_IMPERSONATE_USER");
   if (invitees.length > 0 && asUser) {
     try {
-      await new GoogleCalendarClient({ impersonateUser: asUser }).createEvent(
+      const created: any = await new GoogleCalendarClient({ impersonateUser: asUser }).createEvent(
         calendarId,
         { ...event, attendees: invitees.map((email) => ({ email })) },
         { sendUpdates: "all" },
       );
-      return { invited: true };
+      return { invited: true, eventId: created?.id };
     } catch (error: any) {
       if (error?.conflictingEvent) throw error;
       console.error(`[book] could not create the event with invitations as ${asUser}, retrying without:`, error?.message || error);
-      await new GoogleCalendarClient().createEvent(calendarId, event);
-      return { invited: false, inviteError: String(error?.message || error).slice(0, 160) };
+      const created: any = await new GoogleCalendarClient().createEvent(calendarId, event);
+      return { invited: false, inviteError: String(error?.message || error).slice(0, 160), eventId: created?.id };
     }
   }
-  await new GoogleCalendarClient().createEvent(calendarId, event);
-  return { invited: false, inviteError: invitees.length ? "no Workspace account configured to send invitations" : undefined };
+  const created: any = await new GoogleCalendarClient().createEvent(calendarId, event);
+  return { invited: false, inviteError: invitees.length ? "no Workspace account configured to send invitations" : undefined, eventId: created?.id };
 }
 
 // Clicks that open a modal must answer with the modal itself, so they are not deferred.
@@ -1851,7 +1868,7 @@ Booking Chain: ${tokenConfig.chain}`;
         }
       }
 
-      const mailNote = await emailGuest(state, interaction, guildId, userId, product, [{ start: state.startTime, end: state.endTime }], priceAmount, tokenSymbol, txUrl, txHash);
+      const mailNote = await emailGuest(state, interaction, guildId, userId, product, [{ start: state.startTime, end: state.endTime, eventId: invite.eventId }], priceAmount, tokenSymbol, txUrl, txHash);
 
       bookStates.delete(userId);
 
@@ -2112,10 +2129,10 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   const calendarClient = new GoogleCalendarClient();
   await calendarClient.ensureCalendarInList(product.calendarId).catch((e) => console.error("ensureCalendarInList:", e));
 
-  const booked: Occurrence[] = [];
+  const booked: (Occurrence & { eventId?: string })[] = [];
   const failed: { occurrence: Occurrence; reason: string }[] = [];
   const invitees = inviteEmails(state, guildId, userId);
-  let invite: { invited: boolean; inviteError?: string } = { invited: false };
+  let invite: { invited: boolean; inviteError?: string; eventId?: string } = { invited: false };
   for (const [i, occurrence] of free.entries()) {
     let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)`;
     if (state.eventUrl) description += `\nEvent URL: ${state.eventUrl}`;
@@ -2129,7 +2146,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     if (state.eventUrl) event.source = { url: state.eventUrl, title: "Event page" };
     try {
       invite = await createBookingEvent(product.calendarId, event, invitees);
-      booked.push(occurrence);
+      booked.push({ ...occurrence, eventId: invite.eventId });
     } catch (error: any) {
       console.error(`Error creating calendar event for ${occurrence.start.toISOString()}:`, error);
       failed.push({ occurrence, reason: error?.conflictingEvent ? `taken meanwhile by "${error.conflictingEvent.summary}"` : (error?.message || "unknown error") });
