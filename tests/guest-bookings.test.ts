@@ -108,3 +108,24 @@ Deno.test("a guest booking is remembered, then the guest is emailed when it chan
     Deno.env.delete("RESEND_API_KEY");
   }
 });
+
+import { rateLine, ratesFromPrices } from "../src/lib/booking-email.ts";
+
+Deno.test("room rates come from the /book prices and show under the photo", () => {
+  const rates = ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 35 }]);
+  expect(rates).toEqual({ eurPerHour: 35, tokensPerHour: 1, tokenSymbol: "CHT" });
+  expect(rateLine(rates)).toBe("Usual rate: €35 or 1 CHT per hour");
+  expect(rateLine(ratesFromPrices([{ token: "CHT", amount: 0.5 }]))).toBe("Usual rate: 0.5 CHT per hour");
+  expect(rateLine(undefined)).toBe("");
+
+  const withRates = { ...base, roomImageUrl: "https://x/img.jpg", rates };
+  const confirmed = buildBookingEmail(withRates, FALLBACK_COSTS);
+  expect(confirmed.html).toContain("Mush Room · Usual rate: €35 or 1 CHT per hour");
+  expect(confirmed.html.indexOf("https://x/img.jpg")).toBeLessThan(confirmed.html.indexOf("Usual rate"));
+  expect(confirmed.text).toContain("Room: Mush Room (usual rate €35 or 1 CHT per hour)");
+  const updated = buildBookingEmail({ ...withRates, kind: "updated" }, FALLBACK_COSTS);
+  expect(updated.html).toContain("Usual rate: €35 or 1 CHT per hour");
+  const cancelled = buildBookingEmail({ ...withRates, kind: "cancelled" }, FALLBACK_COSTS);
+  expect(cancelled.html).not.toContain("Usual rate");
+  expect(cancelled.text).not.toContain("usual rate");
+});

@@ -24,6 +24,7 @@ import {
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { notifyGuestBookingCancelled, notifyGuestBookingChanged } from "../lib/guest-bookings.ts";
+import { ratesFromPrices } from "../lib/booking-email.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -1144,6 +1145,7 @@ async function processEdit(
     end: newEndTime,
     eventUrl: effectiveUrl,
     priceTotal: newTotalPrice,
+    rates: ratesFromPrices(newProduct.price),
   }).catch((e) => { console.error("[bookings] guest change notice failed:", e); return ""; });
 
   // Done
