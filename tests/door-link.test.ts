@@ -1,14 +1,14 @@
 import { expect } from "@std/expect/expect";
 import { verifyMessage, Wallet } from "ethers";
-import { buildDoorLink, DOOR_URL } from "../src/lib/door-link.ts";
+import { bookingReason, buildDoorLink, DOOR_URL, timeRange } from "../src/lib/door-link.ts";
 import { buildBookingEmail, FALLBACK_COSTS } from "../src/lib/booking-email.ts";
 
 /** What the door server does with req.query (server/index.js verifyEventOrganizerSignature). */
 function doorVerify(url: string): string {
   const q = Object.fromEntries(new URL(url).searchParams);
-  const message = q.eventUrl
-    ? `name=${q.name}&host=${q.host}&reason=${q.reason}&timestamp=${q.timestamp}&startTime=${q.startTime}&duration=${q.duration}&eventUrl=${q.eventUrl}`
-    : `name=${q.name}&host=${q.host}&reason=${q.reason}&timestamp=${q.timestamp}&startTime=${q.startTime}&duration=${q.duration}`;
+  let message = `name=${q.name}&host=${q.host}&reason=${q.reason}&timestamp=${q.timestamp}&startTime=${q.startTime}&duration=${q.duration}`;
+  if (q.eventUrl) message += `&eventUrl=${q.eventUrl}`;
+  if (q.booking === "1") message += "&booking=1";
   return verifyMessage(message, q.sig);
 }
 
@@ -48,4 +48,23 @@ Deno.test("the email shows a door button per date with the validity window", () 
   expect(two.html).toContain("Open the door · Thu 22 Oct");
   const none = buildBookingEmail({ ...base, doorLinks: [null, null] }, FALLBACK_COSTS);
   expect(none.html).not.toContain("Getting in");
+});
+
+Deno.test("booking links are marked booking=1 and read '<room> booking today from 5-7pm'", async () => {
+  const w = Wallet.createRandom();
+  const start = new Date("2026-10-15T15:00:00Z"), end = new Date("2026-10-15T17:00:00Z"); // 5-7pm in Brussels
+  const reason = bookingReason("Mush Room", start, end);
+  expect(reason).toBe("Mush Room booking today from 5-7pm");
+  const url = (await buildDoorLink({ name: "Ana", host: "Xavier", reason, start, end }, w.privateKey))!;
+  const q = new URL(url).searchParams;
+  expect(q.get("booking")).toBe("1");
+  expect(q.get("name")).toBe("Ana");
+  expect(doorVerify(url)).toBe(w.address);
+});
+
+Deno.test("time ranges read naturally", () => {
+  const at = (iso: string) => new Date(iso);
+  expect(timeRange(at("2026-10-15T07:30:00Z"), at("2026-10-15T10:00:00Z"))).toBe("9:30am-12pm");
+  expect(timeRange(at("2026-10-15T09:00:00Z"), at("2026-10-15T11:00:00Z"))).toBe("11am-1pm");
+  expect(timeRange(at("2026-12-15T16:00:00Z"), at("2026-12-15T18:30:00Z"))).toBe("5-7:30pm"); // winter time, UTC+1
 });

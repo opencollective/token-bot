@@ -5,11 +5,12 @@
  *
  *   https://door.commonshub.brussels/open?name&host&reason&timestamp&startTime&duration[&eventUrl]&sig
  *
- * sig is an EIP-191 signature of "name=…&host=…&reason=…&timestamp=…&startTime=…&duration=…[&eventUrl=…]"
+ * sig is an EIP-191 signature of "name=…&host=…&reason=…&timestamp=…&startTime=…&duration=…[&eventUrl=…]&booking=1"
  * (raw values, not URL-encoded) by a key listed in the door's authorized_keys.json; here
  * DOOR_SIGNING_KEY ("token-bot /book guests"). The door opens from 30 min before startTime until
- * 30 min after startTime + duration, and posts "🚪 {name} opened the door for {reason} hosted by
- * {host}" in the door channel.
+ * 30 min after startTime + duration. booking=1 (signed) makes the door post
+ * "🚪 {name} opened the door for {reason} (booked by {host})" in the door channel
+ * (commonshub/door server/lib/signed-link.js).
  */
 
 import { Wallet } from "ethers";
@@ -28,8 +29,26 @@ export interface DoorLinkParams {
 
 /** The exact string the door server verifies. */
 export function doorMessage(p: { name: string; host: string; reason: string; timestamp: number; startTime: number; duration: number; eventUrl?: string }): string {
-  const base = `name=${p.name}&host=${p.host}&reason=${p.reason}&timestamp=${p.timestamp}&startTime=${p.startTime}&duration=${p.duration}`;
-  return p.eventUrl ? `${base}&eventUrl=${p.eventUrl}` : base;
+  let message = `name=${p.name}&host=${p.host}&reason=${p.reason}&timestamp=${p.timestamp}&startTime=${p.startTime}&duration=${p.duration}`;
+  if (p.eventUrl) message += `&eventUrl=${p.eventUrl}`;
+  return message + "&booking=1";
+}
+
+/** "5-7pm", "9:30am-12pm", "11am-1pm" in Brussels time. */
+export function timeRange(start: Date, end: Date, timezone = "Europe/Brussels"): string {
+  const parts = (d: Date) => {
+    const [h, m] = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: timezone }).split(":").map(Number);
+    const suffix = h >= 12 ? "pm" : "am";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return { label: m ? `${h12}:${String(m).padStart(2, "0")}` : `${h12}`, suffix };
+  };
+  const a = parts(start), b = parts(end);
+  return a.suffix === b.suffix ? `${a.label}-${b.label}${b.suffix}` : `${a.label}${a.suffix}-${b.label}${b.suffix}`;
+}
+
+/** The reason shown in #door: "Mush Room booking today from 5-7pm". The link only works that day. */
+export function bookingReason(room: string, start: Date, end: Date): string {
+  return `${room} booking today from ${timeRange(start, end)}`;
 }
 
 /** Keep values free of characters that would make the signed string ambiguous. */
@@ -55,6 +74,7 @@ export async function buildDoorLink(p: DoorLinkParams, privateKey = getEnv("DOOR
     startTime: String(fields.startTime),
     duration: String(fields.duration),
     ...(fields.eventUrl ? { eventUrl: fields.eventUrl } : {}),
+    booking: "1",
     sig,
   });
   return `${DOOR_URL}/open?${q.toString()}`;
