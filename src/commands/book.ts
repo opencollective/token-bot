@@ -21,13 +21,28 @@ import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
 
-// Helper to update message for both button/select and deferred modal interactions
-async function updateMessage(interaction: Interaction, data: { content: string; components: any[] }) {
-  if ((interaction.isButton() || interaction.isStringSelectMenu()) && 'update' in interaction) {
-    await interaction.update(data);
+// Update the /book message. Clicks are acknowledged right away (deferUpdate, see
+// ackClick) so the slow work after them (Google Calendar, wallet, balance) is not
+// bound by Discord's 3-second limit; once acknowledged, the message is edited.
+async function updateMessage(interaction: Interaction, data: { content: string; components?: any[] }) {
+  if (!interaction.isRepliable()) return;
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply(data);
+  } else if ((interaction.isButton() || interaction.isStringSelectMenu()) && "update" in interaction) {
+    await updateMessage(interaction, data);
   } else if (interaction.isModalSubmit()) {
     await interaction.editReply(data);
   }
+}
+
+// Clicks that open a modal must answer with the modal itself, so they are not deferred.
+const MODAL_BUTTONS = new Set(["book_date_custom", "book_custom_name"]);
+
+/** Acknowledge a /book click immediately (Discord allows 3 s); the message is updated afterwards. */
+async function ackClick(interaction: Interaction): Promise<void> {
+  if (!(interaction.isButton() || interaction.isStringSelectMenu())) return;
+  if (interaction.deferred || interaction.replied || MODAL_BUTTONS.has(interaction.customId)) return;
+  await interaction.deferUpdate();
 }
 
 // Cache for Discord ID to blockchain address mapping
@@ -467,7 +482,7 @@ async function showDateSelection(
 
   const header = buildSelectionHeader(state, product);
 
-  await interaction.update({
+  await updateMessage(interaction, {
     content: `${header}\n📅 **Select a date:**`,
     components: rows,
   });
@@ -482,11 +497,12 @@ export async function handleBookButton(
 
   const customId = interaction.customId;
   const state = bookStates.get(userId);
+  await ackClick(interaction);
 
   // Cancel button
   if (customId === "book_cancel") {
     bookStates.delete(userId);
-    await interaction.update({
+    await updateMessage(interaction, {
       content: "❌ Booking cancelled.",
       components: [],
     });
@@ -496,7 +512,7 @@ export async function handleBookButton(
   // Room selection
   if (customId.startsWith("book_room_")) {
     if (!state) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -510,7 +526,7 @@ export async function handleBookButton(
     const product = products?.find((p) => p.slug === roomSlug);
 
     if (!product || !product.calendarId) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ This room is not available for booking.",
         components: [],
       });
@@ -518,7 +534,7 @@ export async function handleBookButton(
     }
 
     if (disabledCalendars.has(product.calendarId)) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ This room's calendar is currently unavailable (missing write permissions). Please contact an administrator.",
         components: [],
       });
@@ -536,7 +552,7 @@ export async function handleBookButton(
   // Date selection
   if (customId.startsWith("book_date_")) {
     if (!state) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -604,7 +620,7 @@ export async function handleBookButton(
       const product = products?.find((p) => p.slug === state.productSlug);
       const header = buildSelectionHeader(state, product);
 
-      await interaction.update({
+      await updateMessage(interaction, {
         content: `${header}\n📅 **Select a date from the next 2 weeks:**`,
         components: [row, cancelRow],
       });
@@ -625,7 +641,7 @@ export async function handleBookButton(
   // Back to date selection
   if (customId === "book_back_date") {
     if (!state) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -703,7 +719,7 @@ export async function handleBookButton(
     const product = products?.find((p) => p.slug === state.productSlug);
     const header = buildSelectionHeader(state, product);
 
-    await interaction.update({
+    await updateMessage(interaction, {
       content: `${header}\n📅 **Select a date:**`,
       components: rows,
     });
@@ -713,7 +729,7 @@ export async function handleBookButton(
   // Back to room selection
   if (customId === "book_back_room") {
     if (!state) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -770,7 +786,7 @@ export async function handleBookButton(
     );
     rows.push(cancelRow);
 
-    await interaction.update({
+    await updateMessage(interaction, {
       content: `🗓️ **Book a Room**\n\n${roomList}\n🏠 **Select a room:**`,
       components: rows,
     });
@@ -780,7 +796,7 @@ export async function handleBookButton(
   // Back to time selection
   if (customId === "book_back_time") {
     if (!state || !state.selectedDate) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -800,7 +816,7 @@ export async function handleBookButton(
   // Duration selection
   if (customId.startsWith("book_duration_")) {
     if (!state || !state.selectedDate || state.selectedHour === undefined || state.selectedMinute === undefined) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -819,7 +835,7 @@ export async function handleBookButton(
   // Back to duration selection
   if (customId === "book_back_duration") {
     if (!state || !state.selectedDate || state.selectedHour === undefined) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -838,7 +854,7 @@ export async function handleBookButton(
   // Use default name
   if (customId === "book_use_default_name") {
     if (!state || !state.selectedDate || state.selectedHour === undefined || !state.duration) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -856,7 +872,7 @@ export async function handleBookButton(
   // Payment method selection
   if (customId.startsWith("book_pay_")) {
     if (!state || !state.name || !state.duration) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -875,7 +891,7 @@ export async function handleBookButton(
   // Back from confirmation - go to payment if multiple options, otherwise back to name
   if (customId === "book_back_payment") {
     if (!state || !state.name) {
-      await interaction.update({
+      await updateMessage(interaction, {
         content: "⚠️ Session expired. Please run /book again.",
         components: [],
       });
@@ -1088,7 +1104,7 @@ async function showDurationSelection(
 
   const header = buildSelectionHeader(state, product);
 
-  await interaction.update({
+  await updateMessage(interaction, {
     content: `${header}\n⏱️ **Select duration:**`,
     components: [row1, row2, navRow],
   });
@@ -1134,7 +1150,7 @@ async function showNameInput(
 
   const header = buildSelectionHeader(state, product);
 
-  await interaction.update({
+  await updateMessage(interaction, {
     content: `${header}\n📝 **Event name:**`,
     components: [row, navRow],
   });
@@ -1152,7 +1168,7 @@ async function showPaymentSelection(
   if (!state || !state.name || !state.duration || !state.productSlug) {
     const errorMsg = { content: "⚠️ Session expired. Please run /book again.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update(errorMsg);
+      await updateMessage(interaction, errorMsg);
     } else if (interaction.isModalSubmit()) {
       await interaction.editReply(errorMsg);
     }
@@ -1165,7 +1181,7 @@ async function showPaymentSelection(
   if (!product || !product.price || product.price.length === 0) {
     const errorMsg = { content: "⚠️ No payment options configured for this room.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update(errorMsg);
+      await updateMessage(interaction, errorMsg);
     } else if (interaction.isModalSubmit()) {
       await interaction.editReply(errorMsg);
     }
@@ -1176,7 +1192,7 @@ async function showPaymentSelection(
   if (!guildSettings || guildSettings.tokens.length === 0) {
     const errorMsg = { content: "⚠️ No tokens configured.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update(errorMsg);
+      await updateMessage(interaction, errorMsg);
     } else if (interaction.isModalSubmit()) {
       await interaction.editReply(errorMsg);
     }
@@ -1218,7 +1234,7 @@ async function showPaymentSelection(
   if (paymentButtons.length === 0) {
     const errorMsg = { content: "⚠️ No valid payment tokens configured.", components: [] };
     if (interaction.isButton()) {
-      await interaction.update(errorMsg);
+      await updateMessage(interaction, errorMsg);
     } else if (interaction.isModalSubmit()) {
       await interaction.editReply(errorMsg);
     }
@@ -1258,7 +1274,7 @@ async function showPaymentSelection(
   };
 
   if (interaction.isButton()) {
-    await interaction.update(updateContent);
+    await updateMessage(interaction, updateContent);
   } else if (interaction.isModalSubmit()) {
     await interaction.editReply(updateContent);
   }
@@ -1275,7 +1291,7 @@ async function showConfirmation(
   const state = bookStates.get(userId);
   if (!state || !state.selectedDate || state.selectedHour === undefined || state.selectedMinute === undefined || !state.duration) {
     const errorMsg = { content: "⚠️ Session expired. Please run /book again.", components: [] };
-    if (interaction.isButton()) await interaction.update(errorMsg);
+    if (interaction.isButton()) await updateMessage(interaction, errorMsg);
     else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
@@ -1301,7 +1317,7 @@ async function showConfirmation(
 
   if (!product) {
     const errorMsg = { content: "⚠️ Product not found.", components: [] };
-    if (interaction.isButton()) await interaction.update(errorMsg);
+    if (interaction.isButton()) await updateMessage(interaction, errorMsg);
     else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
@@ -1309,7 +1325,7 @@ async function showConfirmation(
   const guildSettings = await loadGuildSettings(guildId);
   if (!guildSettings) {
     const errorMsg = { content: "⚠️ Guild settings not found.", components: [] };
-    if (interaction.isButton()) await interaction.update(errorMsg);
+    if (interaction.isButton()) await updateMessage(interaction, errorMsg);
     else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
@@ -1325,7 +1341,7 @@ async function showConfirmation(
 
   if (!tokenConfig) {
     const errorMsg = { content: "⚠️ Token configuration not found.", components: [] };
-    if (interaction.isButton()) await interaction.update(errorMsg);
+    if (interaction.isButton()) await updateMessage(interaction, errorMsg);
     else if (interaction.isModalSubmit()) await interaction.editReply(errorMsg);
     return;
   }
@@ -1388,7 +1404,7 @@ async function showConfirmation(
   }
 
   if (interaction.isButton()) {
-    await interaction.update({ content, components: [row] });
+    await updateMessage(interaction, { content, components: [row] });
   } else if (interaction.isModalSubmit()) {
     await interaction.editReply({ content, components: [row] });
   }
@@ -1409,14 +1425,14 @@ async function processBooking(
   }
 
   if (!state || !state.productSlug || !state.startTime || !state.endTime) {
-    await interaction.update({
+    await updateMessage(interaction, {
       content: "⚠️ Session expired. Please run /book again.",
       components: [],
     });
     return;
   }
 
-  await interaction.update({
+  await updateMessage(interaction, {
     content: "⏳ Processing payment...",
     components: [],
   });
@@ -1755,7 +1771,7 @@ function occurrenceLine(o: CheckedOccurrence): string {
 async function showMultiDateConfirmation(interaction: Interaction, userId: string, guildId: string) {
   if (!interaction.isButton() && !interaction.isModalSubmit()) return;
   const reply = async (data: { content: string; components: any[] }) => {
-    if (interaction.isButton()) await interaction.update(data);
+    if (interaction.isButton()) await updateMessage(interaction, data);
     else if (interaction.isModalSubmit()) await interaction.editReply(data);
   };
 
@@ -1830,10 +1846,10 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   if (!interaction.isButton()) return;
   const state = bookStates.get(userId);
   if (!state || !state.productSlug || !state.selectedDates || state.selectedHour === undefined || state.selectedMinute === undefined || !state.duration) {
-    await interaction.update({ content: "⚠️ Session expired. Please run /book again.", components: [] });
+    await updateMessage(interaction, { content: "⚠️ Session expired. Please run /book again.", components: [] });
     return;
   }
-  await interaction.update({ content: "⏳ Checking the dates and processing payment...", components: [] });
+  await updateMessage(interaction, { content: "⏳ Checking the dates and processing payment...", components: [] });
 
   const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
   const product = products?.find((p) => p.slug === state.productSlug);
@@ -1960,9 +1976,10 @@ export async function handleBookSelect(
 
   const customId = interaction.customId;
   const state = bookStates.get(userId);
+  await ackClick(interaction);
 
   if (!state) {
-    await interaction.update({
+    await updateMessage(interaction, {
       content: "⚠️ Session expired. Please run /book again.",
       components: [],
     });

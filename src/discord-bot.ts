@@ -380,6 +380,13 @@ client.on(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  // Diagnostics: how late a click reaches us and how long we take. Discord fails an
+  // interaction that is not answered within 3 s ("This interaction failed").
+  const receivedAt = Date.now();
+  const what = interaction.isCommand()
+    ? `/${interaction.commandName}`
+    : "customId" in interaction ? String(interaction.customId) : `type ${interaction.type}`;
+  console.log(`[interaction] ${what} by ${interaction.user?.username} age=${receivedAt - interaction.createdTimestamp}ms`);
   try {
     const userId = interaction.user.id;
     const guildId = interaction.guildId;
@@ -545,7 +552,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return handleRoleSelectMenu(interaction, userId, guildId);
     }
   } catch (error) {
-    console.error("Error handling interaction:", error);
+    console.error(`Error handling interaction ${what}:`, error);
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
       await interaction.reply({
         content: "An error occurred while processing your request.",
@@ -1848,6 +1855,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageReactionAdd, (reaction, user) => {
   handleReactionAdd(reaction, user).catch((err) => console.error("Reaction handler failed:", err));
 });
+
+// Diagnostics: gateway connection drops. While disconnected, clicks get "This interaction failed".
+client.on(Events.ShardDisconnect, (event, shardId) => console.warn(`[gateway] shard ${shardId} disconnected (code ${event?.code})`));
+client.on(Events.ShardReconnecting, (shardId) => console.warn(`[gateway] shard ${shardId} reconnecting`));
+client.on(Events.ShardResume, (shardId, replayed) => console.warn(`[gateway] shard ${shardId} resumed, ${replayed} events replayed`));
+client.on(Events.ShardReady, (shardId) => console.log(`[gateway] shard ${shardId} ready`));
+client.on(Events.ShardError, (error, shardId) => console.error(`[gateway] shard ${shardId} error:`, error));
+client.on(Events.Invalidated, () => console.error("[gateway] session invalidated"));
 
 client.on(Events.Error, (error) => {
   console.error("Discord client error:", error);
