@@ -23,6 +23,7 @@ import {
 } from "../lib/blockchain.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
+import { notifyGuestBookingCancelled, notifyGuestBookingChanged } from "../lib/guest-bookings.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -1087,6 +1088,7 @@ async function processEdit(
   const effectiveUrl = state.newUrl !== undefined ? (state.newUrl || undefined) : booking.eventUrl;
   const sourceField = effectiveUrl ? { url: effectiveUrl, title: "Event page" } : undefined;
 
+  let newEventId = booking.event.id!;
   if (newCalendarId !== oldCalendarId) {
     // Moving to different calendar: delete old, create new
     await calendarClient.deleteEvent(oldCalendarId, booking.event.id!);
@@ -1098,7 +1100,8 @@ async function processEdit(
       end: { dateTime: newEndTime.toISOString(), timeZone: tz },
     };
     if (sourceField) newEvent.source = sourceField;
-    await calendarClient.createEvent(newCalendarId, newEvent);
+    const created: any = await calendarClient.createEvent(newCalendarId, newEvent);
+    if (created?.id) newEventId = created.id;
   } else {
     // Same calendar: update in place
     const updatePayload: any = {
@@ -1131,6 +1134,18 @@ async function processEdit(
     } catch (e) { console.error("Error posting edit to transactions:", e); }
   }
 
+  // If it was booked for a guest, tell them
+  const guestNote = await notifyGuestBookingChanged(guildId, oldCalendarId, booking.event.id!, {
+    calendarId: newCalendarId,
+    eventId: newEventId,
+    productSlug: newProduct.slug,
+    roomName: newProduct.name,
+    start: newStartTime,
+    end: newEndTime,
+    eventUrl: effectiveUrl,
+    priceTotal: newTotalPrice,
+  }).catch((e) => { console.error("[bookings] guest change notice failed:", e); return ""; });
+
   // Done
   bookingsStates.delete(userId);
 
@@ -1142,6 +1157,7 @@ async function processEdit(
   content += `**New price:** ${newTotalPrice.toFixed(2)} ${booking.tokenSymbol}\n`;
   if (state.newUrl) content += `**URL:** ${state.newUrl}\n`;
   if (txUrl) content += `\n[View transaction](<${txUrl}>)`;
+  if (guestNote) content += `\n\n${guestNote}`;
 
   await interaction.editReply({ content });
 }
@@ -1185,6 +1201,8 @@ async function processCancellation(
   // Delete calendar event
   const calendarClient = new GoogleCalendarClient();
   await calendarClient.deleteEvent(booking.calendarId, booking.event.id!);
+  const guestNote = await notifyGuestBookingCancelled(guildId, booking.calendarId, booking.event.id!)
+    .catch((e) => { console.error("[bookings] guest cancel notice failed:", e); return ""; });
 
   const txUrl = getExplorerUrl(tokenConfig.chain, txHash);
   const calendarUrl = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(booking.calendarId)}&ctz=${encodeURIComponent(guildSettings.guild.timezone || "Europe/Brussels")}`;
@@ -1213,7 +1231,7 @@ async function processCancellation(
   } catch { /* ignore */ }
 
   await interaction.editReply({
-    content: `✅ **Booking Cancelled!**\n\nYour booking for "${booking.event.summary || "Room Booking"}" in ${booking.product.name} has been cancelled.\n\n**Refund:** ${refundAmount.toFixed(2)} ${booking.tokenSymbol} (${refundPct}%)\n\n[View refund transaction](<${txUrl}>)`,
+    content: `✅ **Booking Cancelled!**\n\nYour booking for "${booking.event.summary || "Room Booking"}" in ${booking.product.name} has been cancelled.\n\n**Refund:** ${refundAmount.toFixed(2)} ${booking.tokenSymbol} (${refundPct}%)\n\n[View refund transaction](<${txUrl}>)${guestNote ? `\n\n${guestNote}` : ""}`,
   });
 }
 

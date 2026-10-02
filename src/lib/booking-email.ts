@@ -69,13 +69,14 @@ export function parseCosts(html: string): MonthlyCosts | null {
 }
 
 export async function fetchMonthlyCosts(): Promise<MonthlyCosts> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
     const res = await fetch(HUB.contributeUrl, { signal: controller.signal });
-    clearTimeout(timer);
     if (res.ok) return parseCosts(await res.text()) ?? FALLBACK_COSTS;
-  } catch { /* fall back */ }
+  } catch { /* fall back */ } finally {
+    clearTimeout(timer);
+  }
   return FALLBACK_COSTS;
 }
 
@@ -103,6 +104,39 @@ export function costsCardHtml(costs: MonthlyCosts): string {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px">${legend}</table>
     </td></tr>
   </table>`;
+}
+
+// ── room photo ──────────────────────────────────────────────────────────────
+
+/** token-bot product slug → website room slug and its cover image (src/settings/rooms.json heroImage, 2026-10-02). */
+export const ROOM_PAGES: Record<string, { slug: string; heroImage: string }> = {
+  satoshiroom: { slug: "satoshi", heroImage: "/images/satoshi-room.jpg" },
+  phonebooth: { slug: "phonebooth", heroImage: "/images/phonebooth.jpg" },
+  mushroom: { slug: "mushroom", heroImage: "/images/mush-room.jpg" },
+  angelroom: { slug: "angel", heroImage: "/images/angel-room.jpeg" },
+  ostromroom: { slug: "ostrom", heroImage: "/images/img-2144.jpeg" },
+  coworking: { slug: "coworking", heroImage: "/images/chb-facade.avif" },
+};
+
+/** The website serves room covers through its image proxy as JPEG, which every mail app can show. */
+export const proxiedImage = (path: string, size = "md") => `${HUB.website}/api/image-proxy?url=${encodeURIComponent(path)}&size=${size}`;
+
+/** The room's cover image as shown on its page on the website (looked up live, fallback to the known image). */
+export async function fetchRoomImage(productSlug: string): Promise<string | undefined> {
+  const room = ROOM_PAGES[productSlug];
+  if (!room) return undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  try {
+    const res = await fetch(`${HUB.website}/rooms/${room.slug}`, { signal: controller.signal });
+    if (res.ok) {
+      const src = (await res.text()).match(/src="(\/api\/image-proxy\?url=([^"&]+)[^"]*)"/);
+      if (src) return proxiedImage(decodeURIComponent(src[2]));
+    }
+  } catch { /* fall back */ } finally {
+    clearTimeout(timer);
+  }
+  return proxiedImage(room.heroImage);
 }
 
 // ── ICS ─────────────────────────────────────────────────────────────────────
@@ -133,6 +167,8 @@ function fold(line: string): string {
 
 export interface IcsEvent {
   uid: string;
+  sequence?: number;
+  cancelled?: boolean;
   start: Date;
   end: Date;
   summary: string;
@@ -142,17 +178,20 @@ export interface IcsEvent {
 }
 
 export function buildIcs(events: IcsEvent[], now = new Date()): string {
+  const cancelling = events.length > 0 && events.every((e) => e.cancelled);
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//Commons Hub Brussels//token-bot booking//EN",
     "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
+    cancelling ? "METHOD:CANCEL" : "METHOD:PUBLISH",
   ];
   for (const e of events) {
     lines.push(
       "BEGIN:VEVENT",
       `UID:${e.uid}`,
+      `SEQUENCE:${e.sequence ?? 0}`,
+      ...(e.cancelled ? ["STATUS:CANCELLED"] : []),
       `DTSTAMP:${icsDate(now)}`,
       `DTSTART:${icsDate(e.start)}`,
       `DTEND:${icsDate(e.end)}`,
@@ -183,6 +222,15 @@ export interface BookingEmailDetails {
   txUrl?: string;
   bookingId: string;
   timezone?: string;
+  /** What happened: a new booking (default), a change, or a cancellation. */
+  kind?: "confirmed" | "updated" | "cancelled";
+  /** The room's cover image (fetchRoomImage). */
+  roomImageUrl?: string;
+  /** Calendar identity per occurrence (same order), so updates and cancellations replace the guest's entry. */
+  uids?: string[];
+  sequence?: number;
+  /** For a change: what it was before. */
+  previous?: { roomName: string; occurrences: { start: Date; end: Date }[] };
   /** Signed door link per occurrence (same order), when DOOR_SIGNING_KEY is set. */
   doorLinks?: (string | null)[];
 }
@@ -199,11 +247,22 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   const tz = d.timezone || "Europe/Brussels";
   const dates = d.occurrences.map((o) => whenLine(o, tz));
   const firstDay = d.occurrences[0].start.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: tz });
-  const subject = `Your booking at the Commons Hub: ${d.roomName}, ${firstDay}${d.occurrences.length > 1 ? ` (+${d.occurrences.length - 1} more)` : ""}`;
+  const kind = d.kind ?? "confirmed";
+  const subjectPrefix = { confirmed: "Your booking at the Commons Hub", updated: "Your booking at the Commons Hub was changed", cancelled: "Your booking at the Commons Hub was cancelled" }[kind];
+  const subject = `${subjectPrefix}: ${d.roomName}, ${firstDay}${d.occurrences.length > 1 ? ` (+${d.occurrences.length - 1} more)` : ""}`;
+  const heading = { confirmed: "your room is booked", updated: "your booking was changed", cancelled: "your booking was cancelled" }[kind];
+  const previousLine = d.previous ? `Before: ${d.previous.roomName}, ${d.previous.occurrences.map((o) => whenLine(o, tz)).join("; ")}.` : "";
+  const contact = d.bookerEmail
+    ? `If you have any question about this booking, please contact ${d.bookerName} (${d.bookerEmail}), who booked it for you and is in cc of this email: just reply to this email.`
+    : `If you have any question about this booking, please contact ${d.bookerName}, who booked it for you.`;
   const price = `${Number(d.priceTotal.toFixed(2))} ${d.tokenSymbol}`;
 
   const paragraphs = {
-    intro: `${d.bookerName} booked the ${d.roomName} at the ${HUB.name} for you.`,
+    intro: {
+      confirmed: `${d.bookerName} booked the ${d.roomName} at the ${HUB.name} for you.`,
+      updated: `${d.bookerName} changed the booking they made for you at the ${HUB.name}. Here are the new details.`,
+      cancelled: `${d.bookerName} cancelled the booking they made for you at the ${HUB.name}. The room is no longer reserved for you at this time.`,
+    }[kind],
     cht: `This booking was paid with ${price}. CHT, the Commons Hub Token, is how our community keeps track of time given to the place: members earn it by stewarding the space (doing shifts, cleaning, keeping the plants alive, welcoming people, running the newsletter…) and can spend it on rooms like this one. So this room is yours for this time because ${d.bookerName} gave time to the community.`,
     house: `The Commons Hub is a community space, not a rental venue. We ask everyone to treat it as if it were their own house. Unless you are messy at home, in which case please take care of it as if it were somebody else's house 🙂 Leave the room as you found it, put the chairs and tables back, and take your trash with you.`,
     member: `If you like the place, become a member: members can call this place home, book rooms, and steward it together with us.`,
@@ -241,8 +300,9 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   <a href="${HUB.website}"><img src="${HUB.logoUrl}" alt="${HUB.name}" width="120" style="display:block;width:120px;height:auto;border:0"></a>
 </td></tr>
 <tr><td style="padding:8px 28px 32px">
-  <h1 style="font-size:22px;line-height:1.3;margin:12px 0 8px">Hi ${esc(d.guestName)}, your room is booked</h1>
+  <h1 style="font-size:22px;line-height:1.3;margin:12px 0 8px">Hi ${esc(d.guestName)}, ${heading}</h1>
   <p style="margin:0 0 16px">${esc(paragraphs.intro)}</p>
+  ${d.roomImageUrl && kind !== "cancelled" ? `<img src="${esc(d.roomImageUrl)}" alt="${esc(d.roomName)}" width="544" style="display:block;width:100%;max-width:544px;height:auto;border:0;border-radius:10px;margin:0 0 16px">` : ""}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF4F2;border-radius:10px">
     <tr><td style="padding:16px 18px;font-size:15px">
       <div style="margin-bottom:6px"><strong>${esc(d.eventName)}</strong></div>
@@ -251,11 +311,13 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
       <div><strong>Where:</strong> ${esc(HUB.address)} (right in front of Brussels Central Station)</div>
       <div><strong>Booked by:</strong> ${esc(d.bookerName)}${d.bookerEmail ? ` (${esc(d.bookerEmail)}, in cc)` : ""}</div>
       ${d.eventUrl ? `<div><strong>Event page:</strong> <a href="${esc(d.eventUrl)}" style="color:#b83500">${esc(d.eventUrl)}</a></div>` : ""}
+      ${previousLine ? `<div style="margin-top:6px;color:#5d625e">${esc(previousLine)}</div>` : ""}
     </td></tr>
   </table>
-  <p style="margin:12px 0 0;font-size:14px;color:#5d625e">The calendar file is attached: open it to add the booking to your calendar.</p>
-${doorHtml}
-
+  <p style="margin:12px 0 0;font-size:14px;color:#5d625e">${kind === "cancelled" ? "The attached calendar file removes the booking from your calendar." : kind === "updated" ? "The attached calendar file updates the booking in your calendar." : "The calendar file is attached: open it to add the booking to your calendar."}</p>
+  <p style="margin:12px 0 0">${esc(contact)}</p>
+${kind === "cancelled" ? "" : doorHtml}
+${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
   <h2 style="font-size:17px;margin:28px 0 6px">Paid with time, not money</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.cht)}</p>
   ${d.txUrl ? `<p style="margin:0;font-size:14px"><a href="${esc(d.txUrl)}" style="color:#b83500">See the transaction</a></p>` : ""}
@@ -268,17 +330,17 @@ ${doorHtml}
   <h2 style="font-size:17px;margin:28px 0 6px">What it costs to keep the hub open</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.costs)}</p>
   ${costsCardHtml(costs)}
-  <p style="margin:16px 0 0"><a href="${HUB.contributeUrl}" style="display:inline-block;background:#ffffff;color:#b83500;border:2px solid #FF4C02;text-decoration:none;font-weight:600;padding:9px 18px;border-radius:8px">Contribute</a></p>
+  <p style="margin:16px 0 0"><a href="${HUB.contributeUrl}" style="display:inline-block;background:#ffffff;color:#b83500;border:2px solid #FF4C02;text-decoration:none;font-weight:600;padding:9px 18px;border-radius:8px">Contribute</a></p>`}
 </td></tr>
 <tr><td style="padding:24px 28px 28px;font-size:13px;color:#5d625e;border-top:1px solid #eaded9">
   ${HUB.name} · ${esc(HUB.address)} · <a href="${HUB.website}" style="color:#5d625e">commonshub.brussels</a><br>
-  Questions about this booking? Reply to this email or ask ${esc(d.bookerName)}.
+  Questions about this booking? Contact ${esc(d.bookerName)}${d.bookerEmail ? ` (${esc(d.bookerEmail)}), in cc: reply to this email` : ""}.
 </td></tr>
 </table></td></tr></table>
 </body></html>`;
 
   const text = [
-    `Hi ${d.guestName}, your room is booked`,
+    `Hi ${d.guestName}, ${heading}`,
     "",
     paragraphs.intro,
     "",
@@ -288,8 +350,11 @@ ${doorHtml}
     `Where: ${HUB.address} (right in front of Brussels Central Station)`,
     `Booked by: ${d.bookerName}${d.bookerEmail ? ` (${d.bookerEmail}, in cc)` : ""}`,
     ...(d.eventUrl ? [`Event page: ${d.eventUrl}`] : []),
-    "The calendar file is attached.",
-    ...doorText,
+    ...(previousLine ? [previousLine] : []),
+    kind === "cancelled" ? "The attached calendar file removes the booking from your calendar." : "The calendar file is attached.",
+    "",
+    contact,
+    ...(kind === "cancelled" ? [] : [...doorText,
     "",
     "PAID WITH TIME, NOT MONEY",
     paragraphs.cht,
@@ -303,7 +368,7 @@ ${doorHtml}
     "WHAT IT COSTS TO KEEP THE HUB OPEN",
     paragraphs.costs,
     ...costs.lines.map((l) => `- ${l.label}: ${eurRounded(l.amountEur)}`),
-    `Contribute: ${HUB.contributeUrl}`,
+    `Contribute: ${HUB.contributeUrl}`]),
     "",
     `${HUB.name} · ${HUB.address} · ${HUB.website}`,
   ].join("\n");
@@ -311,14 +376,17 @@ ${doorHtml}
   return { subject, html, text };
 }
 
-/** Build and send the confirmation. Throws on failure; callers decide what to tell the booker. */
+/** Build and send a confirmation, change or cancellation email. Throws on failure; callers decide what to tell the booker. */
 export async function sendBookingConfirmation(d: BookingEmailDetails): Promise<{ id: string }> {
   const apiKey = getEnv("RESEND_API_KEY");
   if (!apiKey) throw new Error("RESEND_API_KEY is not set");
   const costs = await fetchMonthlyCosts();
   const { subject, html, text } = buildBookingEmail(d, costs);
+  const cancelled = d.kind === "cancelled";
   const ics = buildIcs(d.occurrences.map((o, i) => ({
-    uid: `${d.bookingId}-${i}@commonshub.brussels`,
+    uid: d.uids?.[i] ?? `${d.bookingId}-${i}@commonshub.brussels`,
+    sequence: d.sequence ?? 0,
+    cancelled,
     start: o.start,
     end: o.end,
     summary: `${d.eventName} (${d.roomName}, Commons Hub Brussels)`,
@@ -333,14 +401,14 @@ export async function sendBookingConfirmation(d: BookingEmailDetails): Promise<{
       from: HUB.from,
       to: [d.guestEmail],
       ...(d.bookerEmail && d.bookerEmail.toLowerCase() !== d.guestEmail.toLowerCase() ? { cc: [d.bookerEmail] } : {}),
-      reply_to: d.bookerEmail ? [d.bookerEmail, HUB.replyTo] : [HUB.replyTo],
+      reply_to: d.bookerEmail ? [d.bookerEmail] : [HUB.replyTo],
       subject,
       html,
       text,
       attachments: [{
         filename: "commonshub-booking.ics",
         content: btoa(String.fromCharCode(...new TextEncoder().encode(ics))),
-        content_type: "text/calendar; charset=utf-8; method=PUBLISH",
+        content_type: `text/calendar; charset=utf-8; method=${cancelled ? "CANCEL" : "PUBLISH"}`,
       }],
     }),
   });
