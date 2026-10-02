@@ -223,7 +223,7 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   ];
   const doorHtml = doors.length === 0 ? "" : `
   <h2 style="font-size:17px;margin:28px 0 6px">Getting in</h2>
-  ${doors.map(({ url, o }) => `<p style="margin:8px 0"><a href="${esc(url)}" style="display:inline-block;background:#001309;color:#ffffff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:8px">🚪 Open the door${doors.length > 1 ? ` · ${esc(shortDay(o))}` : ""}</a></p>`).join("")}
+  ${doors.map(({ url, o }) => `<p style="margin:8px 0"><a href="${esc(url)}" style="display:inline-block;background:#ffffff;color:#001309;border:2px solid #001309;text-decoration:none;font-weight:600;padding:9px 18px;border-radius:8px">🚪 Open the door${doors.length > 1 ? ` · ${esc(shortDay(o))}` : ""}</a></p>`).join("")}
   <ul style="margin:8px 0 0;padding-left:20px;font-size:15px">${doorNotes.map((n) => `<li style="margin-bottom:4px">${esc(n)}</li>`).join("")}</ul>`;
   const doorText = doors.length === 0 ? [] : [
     "",
@@ -240,7 +240,7 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
 <tr><td style="padding:28px 28px 8px" align="left">
   <a href="${HUB.website}"><img src="${HUB.logoUrl}" alt="${HUB.name}" width="120" style="display:block;width:120px;height:auto;border:0"></a>
 </td></tr>
-<tr><td style="padding:8px 28px 0">
+<tr><td style="padding:8px 28px 32px">
   <h1 style="font-size:22px;line-height:1.3;margin:12px 0 8px">Hi ${esc(d.guestName)}, your room is booked</h1>
   <p style="margin:0 0 16px">${esc(paragraphs.intro)}</p>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF4F2;border-radius:10px">
@@ -263,14 +263,14 @@ ${doorHtml}
   <h2 style="font-size:17px;margin:28px 0 6px">A community space</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.house)}</p>
   <p style="margin:0 0 8px">${esc(paragraphs.member)}</p>
-  <p style="margin:12px 0 0"><a href="${HUB.membershipUrl}" style="display:inline-block;background:#FF4C02;color:#ffffff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:8px">Become a member</a></p>
+  <p style="margin:12px 0 0"><a href="${HUB.membershipUrl}" style="display:inline-block;background:#ffffff;color:#b83500;border:2px solid #FF4C02;text-decoration:none;font-weight:600;padding:9px 18px;border-radius:8px">Become a member</a></p>
 
   <h2 style="font-size:17px;margin:28px 0 6px">What it costs to keep the hub open</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.costs)}</p>
   ${costsCardHtml(costs)}
-  <p style="margin:16px 0 0"><a href="${HUB.contributeUrl}" style="display:inline-block;background:#FF4C02;color:#ffffff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:8px">Contribute</a></p>
+  <p style="margin:16px 0 0"><a href="${HUB.contributeUrl}" style="display:inline-block;background:#ffffff;color:#b83500;border:2px solid #FF4C02;text-decoration:none;font-weight:600;padding:9px 18px;border-radius:8px">Contribute</a></p>
 </td></tr>
-<tr><td style="padding:28px;font-size:13px;color:#5d625e;border-top:1px solid #eaded9;margin-top:24px">
+<tr><td style="padding:24px 28px 28px;font-size:13px;color:#5d625e;border-top:1px solid #eaded9">
   ${HUB.name} · ${esc(HUB.address)} · <a href="${HUB.website}" style="color:#5d625e">commonshub.brussels</a><br>
   Questions about this booking? Reply to this email or ask ${esc(d.bookerName)}.
 </td></tr>
