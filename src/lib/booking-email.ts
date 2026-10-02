@@ -149,6 +149,8 @@ export interface BookingEmailDetails {
   txUrl?: string;
   bookingId: string;
   timezone?: string;
+  /** Signed door link per occurrence (same order), when DOOR_SIGNING_KEY is set. */
+  doorLinks?: (string | null)[];
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -176,6 +178,28 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
     costs: `Keeping the doors open costs about ${eur(costs.totalEur)} a month in fixed costs: ${costLines}. It is all paid by the community, through memberships, room bookings and contributions. If this space is useful to you, you can help sustain it.`,
   };
 
+  const doors = (d.doorLinks ?? []).map((url, i) => ({ url, o: d.occurrences[i] })).filter((x): x is { url: string; o: { start: Date; end: Date } } => !!x.url && !!x.o);
+  const shortDay = (o: { start: Date }) => o.start.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: tz });
+  const t = (x: Date) => x.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: tz });
+  const early = (o: { start: Date }) => t(new Date(o.start.getTime() - 30 * 60000));
+  const late = (o: { end: Date }) => t(new Date(o.end.getTime() + 30 * 60000));
+  const doorNotes = [
+    `Tap the button when you are at the door: it opens the door for you.`,
+    `It works from 30 minutes before your booking until 30 minutes after it${doors.length === 1 ? ` (${early(doors[0].o)}–${late(doors[0].o)})` : ""}.`,
+    `The link is personal: please don't share it. Everyone in the community sees in our #door channel that you opened the door.`,
+    `Please close the door behind you. If it doesn't work, ring the bell or contact ${d.bookerName}.`,
+  ];
+  const doorHtml = doors.length === 0 ? "" : `
+  <h2 style="font-size:17px;margin:28px 0 6px">Getting in</h2>
+  ${doors.map(({ url, o }) => `<p style="margin:8px 0"><a href="${esc(url)}" style="display:inline-block;background:#001309;color:#ffffff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:8px">🚪 Open the door${doors.length > 1 ? ` · ${esc(shortDay(o))}` : ""}</a></p>`).join("")}
+  <ul style="margin:8px 0 0;padding-left:20px;font-size:15px">${doorNotes.map((n) => `<li style="margin-bottom:4px">${esc(n)}</li>`).join("")}</ul>`;
+  const doorText = doors.length === 0 ? [] : [
+    "",
+    "GETTING IN",
+    ...doors.map(({ url, o }) => `Open the door${doors.length > 1 ? ` (${shortDay(o)})` : ""}: ${url}`),
+    ...doorNotes.map((n) => `- ${n}`),
+  ];
+
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(subject)}</title></head>
 <body style="margin:0;padding:0;background:#FBF4F2;color:#001309;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.55">
@@ -198,6 +222,7 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
     </td></tr>
   </table>
   <p style="margin:12px 0 0;font-size:14px;color:#5d625e">The calendar file is attached: open it to add the booking to your calendar.</p>
+${doorHtml}
 
   <h2 style="font-size:17px;margin:28px 0 6px">Paid with time, not money</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.cht)}</p>
@@ -231,6 +256,7 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
     `Booked by: ${d.bookerName}${d.bookerEmail ? ` (${d.bookerEmail}, in cc)` : ""}`,
     ...(d.eventUrl ? [`Event page: ${d.eventUrl}`] : []),
     "The calendar file is attached.",
+    ...doorText,
     "",
     "PAID WITH TIME, NOT MONEY",
     paragraphs.cht,
