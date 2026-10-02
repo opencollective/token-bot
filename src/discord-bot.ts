@@ -544,6 +544,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return handleStringSelect(interaction, userId, guildId);
     }
     if (interaction.isUserSelectMenu()) {
+      if (interaction.customId === "book_for_member_select") {
+        return handleBookSelect(interaction, userId, guildId);
+      }
       if (interaction.customId.startsWith("shifts_")) {
         return handleShiftsSelect(interaction, userId, guildId);
       }
@@ -1542,7 +1545,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const guildId = interaction.guildId!;
 
   // Handle book modals
-  if (interaction.customId === "book_name_modal" || interaction.customId === "book_date_modal") {
+  if (interaction.customId === "book_name_modal" || interaction.customId === "book_date_modal" || interaction.customId === "book_guest_modal") {
     return handleBookModal(interaction, userId, guildId);
   }
 
