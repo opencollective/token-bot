@@ -275,6 +275,7 @@ export class GoogleCalendarClient {
   async createEvent(
     calendarId: string,
     event: CalendarEvent,
+    options: { sendUpdates?: "all" | "externalOnly" | "none" } = {},
   ): Promise<CalendarEvent> {
     const startTime = new Date(event.start.dateTime);
     const endTime = new Date(event.end.dateTime);
@@ -299,6 +300,7 @@ export class GoogleCalendarClient {
       const response = await this.calendar.events.insert({
         calendarId,
         requestBody: event,
+        ...(options.sendUpdates ? { sendUpdates: options.sendUpdates } : {}),
       });
       return response.data;
     } catch (error) {

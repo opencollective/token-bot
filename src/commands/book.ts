@@ -9,6 +9,7 @@ import {
   TextChannel,
   TextInputBuilder,
   TextInputStyle,
+  UserSelectMenuBuilder,
 } from "discord.js";
 import { BookState, Product } from "../types.ts";
 import { loadGuildFile, loadGuildSettings } from "../lib/utils.ts";
@@ -19,6 +20,7 @@ import { burnTokensFrom, getBalance, SupportedChain } from "../lib/blockchain.ts
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
+import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
 
 // Update the /book message. Clicks are acknowledged right away (deferUpdate, see
@@ -28,19 +30,85 @@ async function updateMessage(interaction: Interaction, data: { content: string; 
   if (!interaction.isRepliable()) return;
   if (interaction.deferred || interaction.replied) {
     await interaction.editReply(data);
-  } else if ((interaction.isButton() || interaction.isStringSelectMenu()) && "update" in interaction) {
+  } else if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) && "update" in interaction) {
     await updateMessage(interaction, data);
   } else if (interaction.isModalSubmit()) {
     await interaction.editReply(data);
   }
 }
 
+// ── Booking on behalf of another member or a guest ─────────────────────────
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Short label for who the booking is for ("Ana (guest)", "<@123>"), or "" when it is for the booker. */
+function forLabel(state: BookState, mention = true): string {
+  const f = state.bookedFor;
+  if (!f) return "";
+  if (f.kind === "guest") return `${f.name} (guest)`;
+  return mention ? `<@${f.discordUserId}>` : f.displayName;
+}
+
+/** One line for the booker about the calendar invitation, or "" when the booking is for themselves. */
+function inviteNote(state: BookState, invite: { invited: boolean; inviteError?: string }): string {
+  if (!state.bookedFor) return "";
+  if (invite.invited) return `📧 Calendar invitation sent to ${forLabel(state, false)}.\n\n`;
+  if (state.bookedFor.kind === "member" && !state.bookedFor.email) return `ℹ️ No calendar invitation: we don't know ${forLabel(state, false)}'s email.\n\n`;
+  return `⚠️ The booking is made, but the calendar invitation could not be sent (${invite.inviteError || "unknown error"}). Please forward the details to ${forLabel(state, false)}.\n\n`;
+}
+
+/** Emails to invite to the calendar event: the guest or member it is for, and the booker when known. */
+function inviteEmails(state: BookState, guildId: string, bookerId: string): string[] {
+  const emails = new Set<string>();
+  const f = state.bookedFor;
+  if (f?.kind === "guest") emails.add(f.email.toLowerCase());
+  if (f?.kind === "member") {
+    const email = f.email || getUserEmail(guildId, f.discordUserId);
+    if (email) emails.add(email.toLowerCase());
+  }
+  if (f) {
+    const bookerEmail = getUserEmail(guildId, bookerId);
+    if (bookerEmail) emails.add(bookerEmail.toLowerCase());
+  }
+  return [...emails];
+}
+
+/**
+ * Create the booking event. With invitees it goes through a Workspace account the service
+ * account may act for (service accounts cannot invite guests), which needs writer access to
+ * the room calendar. If that fails the event is still created, without invitations.
+ */
+async function createBookingEvent(
+  calendarId: string,
+  event: any,
+  invitees: string[],
+): Promise<{ invited: boolean; inviteError?: string }> {
+  const asUser = Deno.env.get("BOOKING_CALENDAR_IMPERSONATE_USER") || Deno.env.get("GOOGLE_CALENDAR_IMPERSONATE_USER");
+  if (invitees.length > 0 && asUser) {
+    try {
+      await new GoogleCalendarClient({ impersonateUser: asUser }).createEvent(
+        calendarId,
+        { ...event, attendees: invitees.map((email) => ({ email })) },
+        { sendUpdates: "all" },
+      );
+      return { invited: true };
+    } catch (error: any) {
+      if (error?.conflictingEvent) throw error;
+      console.error(`[book] could not create the event with invitations as ${asUser}, retrying without:`, error?.message || error);
+      await new GoogleCalendarClient().createEvent(calendarId, event);
+      return { invited: false, inviteError: String(error?.message || error).slice(0, 160) };
+    }
+  }
+  await new GoogleCalendarClient().createEvent(calendarId, event);
+  return { invited: false, inviteError: invitees.length ? "no Workspace account configured to send invitations" : undefined };
+}
+
 // Clicks that open a modal must answer with the modal itself, so they are not deferred.
-const MODAL_BUTTONS = new Set(["book_date_custom", "book_custom_name"]);
+const MODAL_BUTTONS = new Set(["book_date_custom", "book_custom_name", "book_for_guest"]);
 
 /** Acknowledge a /book click immediately (Discord allows 3 s); the message is updated afterwards. */
 async function ackClick(interaction: Interaction): Promise<void> {
-  if (!(interaction.isButton() || interaction.isStringSelectMenu())) return;
+  if (!(interaction.isButton() || interaction.isStringSelectMenu() || interaction.isUserSelectMenu())) return;
   if (interaction.deferred || interaction.replied || MODAL_BUTTONS.has(interaction.customId)) return;
   await interaction.deferUpdate();
 }
@@ -312,6 +380,10 @@ function buildSelectionHeader(state: BookState, product?: Product): string {
   
   if (state.duration) {
     header += `**Duration:** ${formatDuration(state.duration)}\n`;
+  }
+
+  if (state.bookedFor) {
+    header += `**For:** ${forLabel(state)}\n`;
   }
   
   return header;
@@ -852,6 +924,69 @@ export async function handleBookButton(
   }
 
   // Use default name
+  if (customId === "book_for_me" || customId === "book_for_back") {
+    if (!state || !state.selectedDate || !state.duration) {
+      await updateMessage(interaction, { content: "⚠️ Session expired. Please run /book again.", components: [] });
+      return;
+    }
+    if (customId === "book_for_me") state.bookedFor = undefined;
+    bookStates.set(userId, state);
+    await showNameInput(interaction, userId, guildId);
+    return;
+  }
+
+  if (customId === "book_for_member") {
+    if (!state || !state.selectedDate || !state.duration) {
+      await updateMessage(interaction, { content: "⚠️ Session expired. Please run /book again.", components: [] });
+      return;
+    }
+    const picker = new UserSelectMenuBuilder()
+      .setCustomId("book_for_member_select")
+      .setPlaceholder("Select the member this booking is for")
+      .setMinValues(1)
+      .setMaxValues(1);
+    await updateMessage(interaction, {
+      content: `${buildSelectionHeader(state)}\n👤 **Who is this booking for?** You pay; they get the calendar invitation if we know their email.`,
+      components: [
+        new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(picker),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId("book_for_back").setLabel("← Back").setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId("book_cancel").setLabel("Cancel").setStyle(ButtonStyle.Danger),
+        ),
+      ],
+    });
+    return;
+  }
+
+  if (customId === "book_for_guest") {
+    if (!state || !state.selectedDate || !state.duration) {
+      await updateMessage(interaction, { content: "⚠️ Session expired. Please run /book again.", components: [] });
+      return;
+    }
+    const knownEmail = getUserEmail(guildId, userId);
+    const modal = new ModalBuilder().setCustomId("book_guest_modal").setTitle("Book for a guest");
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId("guest_name").setLabel("Guest name").setStyle(TextInputStyle.Short)
+          .setRequired(true).setMaxLength(80).setValue(state.bookedFor?.kind === "guest" ? state.bookedFor.name : ""),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId("guest_email").setLabel("Guest email (receives the calendar invite)").setStyle(TextInputStyle.Short)
+          .setRequired(true).setMaxLength(120).setPlaceholder("guest@example.com").setValue(state.bookedFor?.kind === "guest" ? state.bookedFor.email : ""),
+      ),
+    );
+    if (!knownEmail) {
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId("booker_email").setLabel("Your email (we don't have it yet)").setStyle(TextInputStyle.Short)
+            .setRequired(true).setMaxLength(120).setPlaceholder("you@example.com"),
+        ),
+      );
+    }
+    await interaction.showModal(modal);
+    return;
+  }
+
   if (customId === "book_use_default_name") {
     if (!state || !state.selectedDate || state.selectedHour === undefined || !state.duration) {
       await updateMessage(interaction, {
@@ -861,7 +996,7 @@ export async function handleBookButton(
       return;
     }
 
-    state.name = `${interaction.user.displayName}'s booking`;
+    state.name = `${state.bookedFor ? forLabel(state, false).replace(/ \(guest\)$/, "") : interaction.user.displayName}'s booking`.slice(0, 100);
     state.step = "payment";
     bookStates.set(userId, state);
 
@@ -1116,7 +1251,7 @@ async function showNameInput(
   userId: string,
   guildId: string,
 ) {
-  if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
+  if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isUserSelectMenu() && !interaction.isModalSubmit()) return;
 
   const state = bookStates.get(userId);
   if (!state || !state.selectedDate || !state.duration) return;
@@ -1124,7 +1259,8 @@ async function showNameInput(
   const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
   const product = products?.find((p) => p.slug === state.productSlug);
 
-  const defaultName = `${interaction.user.displayName}'s booking`;
+  const who = state.bookedFor ? forLabel(state, false).replace(/ \(guest\)$/, "") : interaction.user.displayName;
+  const defaultName = `${who}'s booking`.slice(0, 70);
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -1135,6 +1271,21 @@ async function showNameInput(
       .setCustomId("book_custom_name")
       .setLabel("Custom name...")
       .setStyle(ButtonStyle.Secondary),
+  );
+
+  const forRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("book_for_me")
+      .setLabel("For me")
+      .setStyle(state.bookedFor ? ButtonStyle.Secondary : ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("book_for_member")
+      .setLabel(state.bookedFor?.kind === "member" ? `For ${forLabel(state, false)}`.slice(0, 80) : "For another member...")
+      .setStyle(state.bookedFor?.kind === "member" ? ButtonStyle.Success : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("book_for_guest")
+      .setLabel(state.bookedFor?.kind === "guest" ? `For ${forLabel(state, false)}`.slice(0, 80) : "For a guest...")
+      .setStyle(state.bookedFor?.kind === "guest" ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
 
   const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -1149,10 +1300,13 @@ async function showNameInput(
   );
 
   const header = buildSelectionHeader(state, product);
+  const forNote = state.bookedFor
+    ? `\n_You pay; ${forLabel(state)} gets the calendar invitation${getUserEmail(guildId, userId) ? " (you too)" : ""}._`
+    : "";
 
   await updateMessage(interaction, {
-    content: `${header}\n📝 **Event name:**`,
-    components: [row, navRow],
+    content: `${header}${forNote}\n👤 **Who is it for?**\n📝 **Event name:**`,
+    components: [forRow, row, navRow],
   });
 }
 
@@ -1389,7 +1543,7 @@ async function showConfirmation(
 
   let content = `📋 **Booking Summary**
 
-**Event:** ${state.name}
+**Event:** ${state.name}${state.bookedFor ? `\n**For:** ${forLabel(state)} (you pay)` : ""}
 **Room:** ${product.name}
 **When:** ${startDateStr} at ${startTimeStr}
 **Until:** ${endTimeStr}
@@ -1560,7 +1714,7 @@ ${mintInstructions}`,
             const endTimeStr = formatDiscordTime(state.endTime);
 
             const message = await transactionsChannel.send(
-              `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
+              `🗓️ <@${userId}> booked ${product.name}${state.bookedFor ? ` for ${forLabel(state)}` : ""} on ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
                 priceAmount.toFixed(2)
               } ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
             );
@@ -1574,7 +1728,7 @@ ${mintInstructions}`,
       }
 
       let eventDescription =
-        `Booked by ${interaction.user.displayName} (@${interaction.user.username}) on ${bookingDateStr} at ${bookingTimeStr} for ${
+        `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${bookingDateStr} at ${bookingTimeStr} for ${
           priceAmount.toFixed(2)
         } ${tokenSymbol}`;
       if (transactionMessageLink) {
@@ -1607,7 +1761,7 @@ Booking Chain: ${tokenConfig.chain}`;
         calendarEvent.source = { url: state.eventUrl, title: "Event page" };
       }
 
-      await calendarClient.createEvent(product.calendarId, calendarEvent);
+      const invite = await createBookingEvent(product.calendarId, calendarEvent, inviteEmails(state, guildId, userId));
 
       // Invalidate room events cache so /shifts and /book show updated data
       invalidateRoomEventsCache();
@@ -1640,7 +1794,7 @@ Booking Chain: ${tokenConfig.chain}`;
             const endTimeStr = formatDiscordTime(state.endTime);
 
             await roomChannel.send(
-              `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
+              `🗓️ <@${userId}> booked ${product.name}${state.bookedFor ? ` for ${forLabel(state)}` : ""} on ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
                 priceAmount.toFixed(2)
               } ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
             );
@@ -1655,13 +1809,13 @@ Booking Chain: ${tokenConfig.chain}`;
       await interaction.editReply({
         content: `✅ **Booking Confirmed!**
 
-**Event:** ${state.name}
+**Event:** ${state.name}${state.bookedFor ? `\n**For:** ${forLabel(state)}` : ""}
 **Room:** ${product.name}
 **Start:** ${state.startTime.toLocaleString()}
 **End:** ${state.endTime.toLocaleString()}
 **Paid:** ${priceAmount.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}
 
-[View transaction](<${txUrl}>)
+${inviteNote(state, invite)}[View transaction](<${txUrl}>)
 
 You can view the calendar of all bookings for the ${product.name} room on its [public calendar](<${calendarUrl}>).`,
       });
@@ -1813,7 +1967,7 @@ async function showMultiDateConfirmation(interaction: Interaction, userId: strin
 
   let content = `📋 **Booking Summary — ${checked.length} dates**
 
-**Event:** ${state.name}
+**Event:** ${state.name}${state.bookedFor ? `\n**For:** ${forLabel(state)} (you pay)` : ""}
 **Room:** ${product.name}
 **Duration:** ${formatDuration(state.duration)} each
 ${checked.map(occurrenceLine).join("\n")}
@@ -1911,8 +2065,10 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
 
   const booked: Occurrence[] = [];
   const failed: { occurrence: Occurrence; reason: string }[] = [];
+  const invitees = inviteEmails(state, guildId, userId);
+  let invite: { invited: boolean; inviteError?: string } = { invited: false };
   for (const [i, occurrence] of free.entries()) {
-    let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username}) on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)`;
+    let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)`;
     if (state.eventUrl) description += `\nEvent URL: ${state.eventUrl}`;
     description += `\n\nPlease reach out to @${interaction.user.username} on Discord for questions about this booking.\n\nTo cancel, ${interaction.user.displayName} needs to run the /cancel command in Discord.\n\nUser ID: ${userId}\nBooking TX: ${txHash}\nBooking Chain: ${tokenConfig.chain}`;
     const event: any = {
@@ -1923,7 +2079,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     };
     if (state.eventUrl) event.source = { url: state.eventUrl, title: "Event page" };
     try {
-      await calendarClient.createEvent(product.calendarId, event);
+      invite = await createBookingEvent(product.calendarId, event, invitees);
       booked.push(occurrence);
     } catch (error: any) {
       console.error(`Error creating calendar event for ${occurrence.start.toISOString()}:`, error);
@@ -1933,7 +2089,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   invalidateRoomEventsCache();
 
   const whenList = booked.map((o) => `${formatDiscordDate(o.start)} ${formatDiscordTime(o.start)}–${formatDiscordTime(o.end)}`).join(", ");
-  const announcement = `🗓️ <@${userId}> booked ${product.name} on ${booked.length} date${booked.length > 1 ? "s" : ""} (${whenList}) for ${total.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`;
+  const announcement = `🗓️ <@${userId}> booked ${product.name}${state.bookedFor ? ` for ${forLabel(state)}` : ""} on ${booked.length} date${booked.length > 1 ? "s" : ""} (${whenList}) for ${total.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`;
   for (const channelId of [guildSettings.channels?.transactions, product.channelId]) {
     if (!channelId || !interaction.guild || booked.length === 0) continue;
     try {
@@ -1956,13 +2112,13 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   bookStates.delete(userId);
   const skipped = checked.filter((o) => o.conflict);
   let content = booked.length > 0 ? `✅ **Booked ${booked.length} date${booked.length > 1 ? "s" : ""}!**` : "❌ **Payment went through but no date could be booked.**";
-  content += `\n\n**Event:** ${state.name}\n**Room:** ${product.name}\n${booked.map((o) => `✅ ${formatShortDate(o.start)} ${formatDiscordTime(o.start)}–${formatDiscordTime(o.end)}`).join("\n")}`;
+  content += `\n\n**Event:** ${state.name}${state.bookedFor ? `\n**For:** ${forLabel(state)}` : ""}\n**Room:** ${product.name}\n${booked.map((o) => `✅ ${formatShortDate(o.start)} ${formatDiscordTime(o.start)}–${formatDiscordTime(o.end)}`).join("\n")}`;
   if (skipped.length) content += `\n${skipped.map(occurrenceLine).join("\n")}\n_Not booked and not charged._`;
   if (failed.length) {
     content += `\n${failed.map((f) => `⚠️ ${formatShortDate(f.occurrence.start)} — ${f.reason}`).join("\n")}`;
     content += `\n\n**${(perBooking * failed.length).toFixed(2)} ${tokenSymbol} was charged for ${failed.length === 1 ? "that date" : "those dates"} but it could not be booked. Please contact an administrator for a refund** (tx below).`;
   }
-  content += `\n**Paid:** ${total.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}\n\n[View transaction](<${txUrl}>) · [${product.name} calendar](<${calendarUrl}>)`;
+  content += `\n${inviteNote(state, invite)}**Paid:** ${total.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}\n\n[View transaction](<${txUrl}>) · [${product.name} calendar](<${calendarUrl}>)`;
   await interaction.editReply({ content });
 }
 
@@ -1972,11 +2128,38 @@ export async function handleBookSelect(
   userId: string,
   guildId: string,
 ) {
-  if (!interaction.isStringSelectMenu()) return;
+  if (!interaction.isStringSelectMenu() && !interaction.isUserSelectMenu()) return;
 
   const customId = interaction.customId;
   const state = bookStates.get(userId);
   await ackClick(interaction);
+
+  // Booking on behalf of another member
+  if (customId === "book_for_member_select" && interaction.isUserSelectMenu()) {
+    if (!state || !state.selectedDate || !state.duration) {
+      await updateMessage(interaction, { content: "⚠️ Session expired. Please run /book again.", components: [] });
+      return;
+    }
+    const memberId = interaction.values[0];
+    const member = interaction.members?.get(memberId) as any;
+    const user = interaction.users.get(memberId);
+    if (!user || user.bot) {
+      await updateMessage(interaction, { content: "⚠️ Please pick a person, not a bot.", components: [] });
+      return;
+    }
+    if (memberId === userId) {
+      state.bookedFor = undefined;
+    } else {
+      const known = getUser(guildId, memberId);
+      const displayName = member?.nick || member?.displayName || user.globalName || user.username;
+      state.bookedFor = { kind: "member", discordUserId: memberId, username: user.username, displayName, email: known?.email };
+    }
+    bookStates.set(userId, state);
+    await showNameInput(interaction, userId, guildId);
+    return;
+  }
+
+  if (!interaction.isStringSelectMenu()) return;
 
   if (!state) {
     await updateMessage(interaction, {
@@ -2052,6 +2235,39 @@ export async function handleBookModal(
 
     await interaction.deferUpdate();
     await showTimeSelection(interaction, userId, guildId);
+    return;
+  }
+
+  if (interaction.customId === "book_guest_modal") {
+    const state = bookStates.get(userId);
+    if (!state) {
+      await interaction.reply({ content: "⚠️ Session expired. Please run /book again.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const name = interaction.fields.getTextInputValue("guest_name").trim();
+    const email = interaction.fields.getTextInputValue("guest_email").trim().toLowerCase();
+    let bookerEmail = "";
+    try { bookerEmail = interaction.fields.getTextInputValue("booker_email").trim().toLowerCase(); } catch { /* already known */ }
+    const problems: string[] = [];
+    if (!name) problems.push("the guest name is empty");
+    if (!EMAIL_RE.test(email)) problems.push(`"${email}" is not a valid email for the guest`);
+    if (bookerEmail && !EMAIL_RE.test(bookerEmail)) problems.push(`"${bookerEmail}" is not a valid email for you`);
+    if (problems.length) {
+      await interaction.reply({ content: `❌ ${problems.join("; ")}. Click "For a guest..." again.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (bookerEmail) {
+      await saveUser(guildId, {
+        discordUserId: userId,
+        username: interaction.user.username,
+        displayName: interaction.user.displayName || interaction.user.username,
+        email: bookerEmail,
+      });
+    }
+    state.bookedFor = { kind: "guest", name, email };
+    bookStates.set(userId, state);
+    await interaction.deferUpdate();
+    await showNameInput(interaction, userId, guildId);
     return;
   }
 

@@ -122,4 +122,8 @@ export type BookState = {
   duration?: number;
   selectedToken?: string; // Token symbol for payment (e.g., "CHT", "EURb")
   eventUrl?: string; // Optional URL (Luma, Eventbrite, etc.)
+  /** Who the booking is for, when not the person booking (and paying). */
+  bookedFor?:
+    | { kind: "member"; discordUserId: string; username: string; displayName: string; email?: string }
+    | { kind: "guest"; name: string; email: string };
 };
