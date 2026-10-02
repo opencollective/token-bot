@@ -21,6 +21,7 @@ import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
+import { sendBookingConfirmation } from "../lib/booking-email.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
 
 // Update the /book message. Clicks are acknowledged right away (deferUpdate, see
@@ -55,6 +56,44 @@ function inviteNote(state: BookState, invite: { invited: boolean; inviteError?: 
   if (invite.invited) return `📧 Calendar invitation sent to ${forLabel(state, false)}.\n\n`;
   if (state.bookedFor.kind === "member" && !state.bookedFor.email) return `ℹ️ No calendar invitation: we don't know ${forLabel(state, false)}'s email.\n\n`;
   return `⚠️ The booking is made, but the calendar invitation could not be sent (${invite.inviteError || "unknown error"}). Please forward the details to ${forLabel(state, false)}.\n\n`;
+}
+
+/** Email the guest a confirmation (cc the booker) and return one line for the booker's reply. */
+async function emailGuest(
+  state: BookState,
+  interaction: Interaction,
+  guildId: string,
+  userId: string,
+  product: Product,
+  occurrences: Occurrence[],
+  total: number,
+  tokenSymbol: string,
+  txUrl: string,
+  bookingId: string,
+): Promise<string> {
+  const f = state.bookedFor;
+  if (f?.kind !== "guest" || occurrences.length === 0) return "";
+  const bookerEmail = getUserEmail(guildId, userId);
+  try {
+    await sendBookingConfirmation({
+      guestName: f.name,
+      guestEmail: f.email,
+      bookerName: interaction.user.displayName || interaction.user.username,
+      bookerEmail,
+      eventName: state.name || "Room booking",
+      roomName: product.name,
+      occurrences,
+      priceTotal: total,
+      tokenSymbol,
+      eventUrl: state.eventUrl,
+      txUrl,
+      bookingId,
+    });
+    return `📨 Confirmation email sent to ${f.name}${bookerEmail ? " (you are in cc)" : ""}.\n\n`;
+  } catch (error: any) {
+    console.error("[book] guest confirmation email failed:", error?.message || error);
+    return `⚠️ The confirmation email to ${f.name} could not be sent (${String(error?.message || error).slice(0, 120)}).\n\n`;
+  }
 }
 
 /** Emails to invite to the calendar event: the guest or member it is for, and the booker when known. */
@@ -1804,6 +1843,8 @@ Booking Chain: ${tokenConfig.chain}`;
         }
       }
 
+      const mailNote = await emailGuest(state, interaction, guildId, userId, product, [{ start: state.startTime, end: state.endTime }], priceAmount, tokenSymbol, txUrl, txHash);
+
       bookStates.delete(userId);
 
       await interaction.editReply({
@@ -1815,7 +1856,7 @@ Booking Chain: ${tokenConfig.chain}`;
 **End:** ${state.endTime.toLocaleString()}
 **Paid:** ${priceAmount.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}
 
-${inviteNote(state, invite)}[View transaction](<${txUrl}>)
+${inviteNote(state, invite)}${mailNote}[View transaction](<${txUrl}>)
 
 You can view the calendar of all bookings for the ${product.name} room on its [public calendar](<${calendarUrl}>).`,
       });
@@ -2109,6 +2150,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     console.error("Error sending Nostr annotation:", error);
   }
 
+  const mailNote = await emailGuest(state, interaction, guildId, userId, product, booked, perBooking * booked.length, tokenSymbol, txUrl, txHash);
   bookStates.delete(userId);
   const skipped = checked.filter((o) => o.conflict);
   let content = booked.length > 0 ? `✅ **Booked ${booked.length} date${booked.length > 1 ? "s" : ""}!**` : "❌ **Payment went through but no date could be booked.**";
@@ -2118,7 +2160,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     content += `\n${failed.map((f) => `⚠️ ${formatShortDate(f.occurrence.start)} — ${f.reason}`).join("\n")}`;
     content += `\n\n**${(perBooking * failed.length).toFixed(2)} ${tokenSymbol} was charged for ${failed.length === 1 ? "that date" : "those dates"} but it could not be booked. Please contact an administrator for a refund** (tx below).`;
   }
-  content += `\n${inviteNote(state, invite)}**Paid:** ${total.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}\n\n[View transaction](<${txUrl}>) · [${product.name} calendar](<${calendarUrl}>)`;
+  content += `\n${inviteNote(state, invite)}${mailNote}**Paid:** ${total.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}\n\n[View transaction](<${txUrl}>) · [${product.name} calendar](<${calendarUrl}>)`;
   await interaction.editReply({ content });
 }
 
