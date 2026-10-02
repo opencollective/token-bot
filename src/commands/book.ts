@@ -22,6 +22,7 @@ import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
 import { sendBookingConfirmation } from "../lib/booking-email.ts";
+import { buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
 
 // Update the /book message. Clicks are acknowledged right away (deferUpdate, see
@@ -74,8 +75,14 @@ async function emailGuest(
   const f = state.bookedFor;
   if (f?.kind !== "guest" || occurrences.length === 0) return "";
   const bookerEmail = getUserEmail(guildId, userId);
+  const bookerName = interaction.user.displayName || interaction.user.username;
   try {
+    const doorLinks = await Promise.all(occurrences.map((o) =>
+      buildDoorLink({ name: `${f.name} (guest)`, host: bookerName, reason: state.name || `${product.name} booking`, start: o.start, end: o.end, eventUrl: state.eventUrl })
+        .catch((error) => { console.error("[book] door link failed:", error?.message || error); return null; })
+    ));
     await sendBookingConfirmation({
+      doorLinks,
       guestName: f.name,
       guestEmail: f.email,
       bookerName: interaction.user.displayName || interaction.user.username,
@@ -89,7 +96,8 @@ async function emailGuest(
       txUrl,
       bookingId,
     });
-    return `📨 Confirmation email sent to ${f.name}${bookerEmail ? " (you are in cc)" : ""}.\n\n`;
+    const withDoor = doorLinks.some(Boolean) ? ", with a link to open the door" : "";
+    return `📨 Confirmation email sent to ${f.name}${withDoor}${bookerEmail ? " (you are in cc)" : ""}.\n\n`;
   } catch (error: any) {
     console.error("[book] guest confirmation email failed:", error?.message || error);
     return `⚠️ The confirmation email to ${f.name} could not be sent (${String(error?.message || error).slice(0, 120)}).\n\n`;
