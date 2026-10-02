@@ -22,7 +22,7 @@ import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
 import { sendBookingConfirmation } from "../lib/booking-email.ts";
-import { buildDoorLink } from "../lib/door-link.ts";
+import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
 
 // Update the /book message. Clicks are acknowledged right away (deferUpdate, see
@@ -78,7 +78,7 @@ async function emailGuest(
   const bookerName = interaction.user.displayName || interaction.user.username;
   try {
     const doorLinks = await Promise.all(occurrences.map((o) =>
-      buildDoorLink({ name: `${f.name} (guest)`, host: bookerName, reason: state.name || `${product.name} booking`, start: o.start, end: o.end, eventUrl: state.eventUrl })
+      buildDoorLink({ name: f.name, host: bookerName, reason: bookingReason(product.name, o.start, o.end), start: o.start, end: o.end })
         .catch((error) => { console.error("[book] door link failed:", error?.message || error); return null; })
     ));
     await sendBookingConfirmation({
