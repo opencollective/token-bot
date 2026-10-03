@@ -96,16 +96,16 @@ export function ratesFromPrices(prices: { token: string; amount: number }[] | un
 
 const num = (n: number) => Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
 
-/** "Mush Room · up to 10 people · €35 · 1 CHT per hour": name, capacity and hourly prices. */
+/** "Mush Room · up to 10 people · €35/h or 1 token/h": name, capacity and hourly prices. */
 export function roomLine(roomName: string, r?: RoomRates): string {
   const prices = [
-    r?.eurPerHour ? `€${num(r.eurPerHour)}` : "",
-    r?.tokensPerHour ? `${num(r.tokensPerHour)} ${r.tokenSymbol || "CHT"}` : "",
+    r?.eurPerHour ? `€${num(r.eurPerHour)}/h` : "",
+    r?.tokensPerHour ? `${num(r.tokensPerHour)} ${r.tokensPerHour > 1 ? "tokens" : "token"}/h` : "",
   ].filter(Boolean);
   return [
     roomName,
     r?.capacity ? `up to ${r.capacity} ${r.capacity === 1 ? "person" : "people"}` : "",
-    prices.length ? `${prices.join(" · ")} per hour` : "",
+    prices.join(" or "),
   ].filter(Boolean).join(" · ");
 }
 

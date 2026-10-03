@@ -114,15 +114,16 @@ import { ratesFromPrices, roomLine } from "../src/lib/booking-email.ts";
 Deno.test("under the photo: room name, capacity and hourly prices in euros and tokens", () => {
   const rates = ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 35 }], 10);
   expect(rates).toEqual({ eurPerHour: 35, tokensPerHour: 1, tokenSymbol: "CHT", capacity: 10 });
-  expect(roomLine("Mush Room", rates)).toBe("Mush Room · up to 10 people · €35 · 1 CHT per hour");
-  expect(roomLine("Phone booth", ratesFromPrices([{ token: "CHT", amount: 0.5 }, { token: "EURb", amount: 10 }], 1))).toBe("Phone booth · up to 1 person · €10 · 0.5 CHT per hour");
+  expect(roomLine("Mush Room", rates)).toBe("Mush Room · up to 10 people · €35/h or 1 token/h");
+  expect(roomLine("Phone booth", ratesFromPrices([{ token: "CHT", amount: 0.5 }, { token: "EURb", amount: 10 }], 1))).toBe("Phone booth · up to 1 person · €10/h or 0.5 token/h");
   expect(roomLine("Room", undefined)).toBe("Room");
+  expect(roomLine("Satoshi Room", ratesFromPrices([{ token: "CHT", amount: 2 }, { token: "EURb", amount: 50 }], 15))).toBe("Satoshi Room · up to 15 people · €50/h or 2 tokens/h");
 
   const withRates = { ...base, roomImageUrl: "https://x/img.jpg", rates };
   const confirmed = buildBookingEmail(withRates, FALLBACK_COSTS);
-  expect(confirmed.html).toContain(">Mush Room · up to 10 people · €35 · 1 CHT per hour</p>");
+  expect(confirmed.html).toContain(">Mush Room · up to 10 people · €35/h or 1 token/h</p>");
   expect(confirmed.html.indexOf("https://x/img.jpg")).toBeLessThan(confirmed.html.indexOf("up to 10 people"));
-  expect(confirmed.text).toContain("Room: Mush Room · up to 10 people · €35 · 1 CHT per hour");
+  expect(confirmed.text).toContain("Room: Mush Room · up to 10 people · €35/h or 1 token/h");
   for (const t of [confirmed.html, confirmed.text]) expect(t.toLowerCase()).not.toContain("usual rate");
   expect(buildBookingEmail({ ...withRates, kind: "updated" }, FALLBACK_COSTS).html).toContain("up to 10 people");
   const cancelled = buildBookingEmail({ ...withRates, kind: "cancelled" }, FALLBACK_COSTS);
