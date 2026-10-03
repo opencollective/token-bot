@@ -84,25 +84,29 @@ export interface RoomRates {
   eurPerHour?: number;
   tokensPerHour?: number;
   tokenSymbol?: string;
+  capacity?: number;
 }
 
 /** The room's usual rates from its /book prices: a euro token (EURb, EURe…) and the community token (CHT). */
-export function ratesFromPrices(prices: { token: string; amount: number }[] | undefined): RoomRates {
+export function ratesFromPrices(prices: { token: string; amount: number }[] | undefined, capacity?: number): RoomRates {
   const eur = prices?.find((p) => /^eur/i.test(p.token));
   const tok = prices?.find((p) => !/^eur/i.test(p.token));
-  return { eurPerHour: eur?.amount, tokensPerHour: tok?.amount, tokenSymbol: tok?.token };
+  return { eurPerHour: eur?.amount, tokensPerHour: tok?.amount, tokenSymbol: tok?.token, ...(capacity ? { capacity } : {}) };
 }
 
 const num = (n: number) => Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
 
-/** "Usual rate: €35 or 1 CHT per hour", or "" when nothing is known. */
-export function rateLine(r?: RoomRates): string {
-  if (!r) return "";
-  const parts = [
-    r.eurPerHour ? `€${num(r.eurPerHour)}` : "",
-    r.tokensPerHour ? `${num(r.tokensPerHour)} ${r.tokenSymbol || "CHT"}` : "",
+/** "Mush Room · up to 10 people · €35 · 1 CHT per hour": name, capacity and hourly prices. */
+export function roomLine(roomName: string, r?: RoomRates): string {
+  const prices = [
+    r?.eurPerHour ? `€${num(r.eurPerHour)}` : "",
+    r?.tokensPerHour ? `${num(r.tokensPerHour)} ${r.tokenSymbol || "CHT"}` : "",
   ].filter(Boolean);
-  return parts.length ? `Usual rate: ${parts.join(" or ")} per hour` : "";
+  return [
+    roomName,
+    r?.capacity ? `up to ${r.capacity} ${r.capacity === 1 ? "person" : "people"}` : "",
+    prices.length ? `${prices.join(" · ")} per hour` : "",
+  ].filter(Boolean).join(" · ");
 }
 
 /** Whole euros, no decimals: €6,547. */
@@ -329,8 +333,8 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
 <tr><td style="padding:8px 28px 32px">
   <h1 style="font-size:22px;line-height:1.3;margin:12px 0 8px">Hi ${esc(d.guestName)}, ${heading}</h1>
   <p style="margin:0 0 16px">${esc(paragraphs.intro)}</p>
-  ${d.roomImageUrl && kind !== "cancelled" ? `<img src="${esc(d.roomImageUrl)}" alt="${esc(d.roomName)}" width="544" style="display:block;width:100%;max-width:544px;height:auto;border:0;border-radius:10px;margin:0 0 ${rateLine(d.rates) ? "6px" : "16px"}">` : ""}
-  ${rateLine(d.rates) && kind !== "cancelled" ? `<p style="margin:0 0 16px;font-size:14px;color:#5d625e">${esc(d.roomName)} · ${esc(rateLine(d.rates))}</p>` : ""}
+  ${d.roomImageUrl && kind !== "cancelled" ? `<img src="${esc(d.roomImageUrl)}" alt="${esc(d.roomName)}" width="544" style="display:block;width:100%;max-width:544px;height:auto;border:0;border-radius:10px;margin:0 0 ${d.rates ? "6px" : "16px"}">` : ""}
+  ${d.rates && kind !== "cancelled" ? `<p style="margin:0 0 16px;font-size:14px;color:#5d625e">${esc(roomLine(d.roomName, d.rates))}</p>` : ""}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF4F2;border-radius:10px">
     <tr><td style="padding:16px 18px;font-size:15px">
       <div style="margin-bottom:6px"><strong>${esc(d.eventName)}</strong></div>
@@ -373,7 +377,7 @@ ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
     paragraphs.intro,
     "",
     d.eventName,
-    `Room: ${d.roomName}${rateLine(d.rates) && kind !== "cancelled" ? ` (${rateLine(d.rates).replace(/^Usual rate: /, "usual rate ")})` : ""}`,
+    `Room: ${d.rates && kind !== "cancelled" ? roomLine(d.roomName, d.rates) : d.roomName}`,
     `When: ${dates.join("; ")}`,
     `Where: ${HUB.address} (right in front of Brussels Central Station)`,
     `Booked by: ${d.bookerName}${d.bookerEmail ? ` (${d.bookerEmail}, in cc)` : ""}`,

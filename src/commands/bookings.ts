@@ -1145,7 +1145,7 @@ async function processEdit(
     end: newEndTime,
     eventUrl: effectiveUrl,
     priceTotal: newTotalPrice,
-    rates: ratesFromPrices(newProduct.price),
+    rates: ratesFromPrices(newProduct.price, newProduct.capacity),
   }).catch((e) => { console.error("[bookings] guest change notice failed:", e); return ""; });
 
   // Done

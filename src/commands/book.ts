@@ -87,7 +87,7 @@ async function emailGuest(
       doorLinks,
       uids,
       roomImageUrl: await fetchRoomImage(product.slug),
-      rates: ratesFromPrices(product.price),
+      rates: ratesFromPrices(product.price, product.capacity),
       guestName: f.name,
       guestEmail: f.email,
       bookerName: interaction.user.displayName || interaction.user.username,
