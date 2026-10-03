@@ -109,23 +109,23 @@ Deno.test("a guest booking is remembered, then the guest is emailed when it chan
   }
 });
 
-import { rateLine, ratesFromPrices } from "../src/lib/booking-email.ts";
+import { ratesFromPrices, roomLine } from "../src/lib/booking-email.ts";
 
-Deno.test("room rates come from the /book prices and show under the photo", () => {
-  const rates = ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 35 }]);
-  expect(rates).toEqual({ eurPerHour: 35, tokensPerHour: 1, tokenSymbol: "CHT" });
-  expect(rateLine(rates)).toBe("Usual rate: €35 or 1 CHT per hour");
-  expect(rateLine(ratesFromPrices([{ token: "CHT", amount: 0.5 }]))).toBe("Usual rate: 0.5 CHT per hour");
-  expect(rateLine(undefined)).toBe("");
+Deno.test("under the photo: room name, capacity and hourly prices in euros and tokens", () => {
+  const rates = ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 35 }], 10);
+  expect(rates).toEqual({ eurPerHour: 35, tokensPerHour: 1, tokenSymbol: "CHT", capacity: 10 });
+  expect(roomLine("Mush Room", rates)).toBe("Mush Room · up to 10 people · €35 · 1 CHT per hour");
+  expect(roomLine("Phone booth", ratesFromPrices([{ token: "CHT", amount: 0.5 }, { token: "EURb", amount: 10 }], 1))).toBe("Phone booth · up to 1 person · €10 · 0.5 CHT per hour");
+  expect(roomLine("Room", undefined)).toBe("Room");
 
   const withRates = { ...base, roomImageUrl: "https://x/img.jpg", rates };
   const confirmed = buildBookingEmail(withRates, FALLBACK_COSTS);
-  expect(confirmed.html).toContain("Mush Room · Usual rate: €35 or 1 CHT per hour");
-  expect(confirmed.html.indexOf("https://x/img.jpg")).toBeLessThan(confirmed.html.indexOf("Usual rate"));
-  expect(confirmed.text).toContain("Room: Mush Room (usual rate €35 or 1 CHT per hour)");
-  const updated = buildBookingEmail({ ...withRates, kind: "updated" }, FALLBACK_COSTS);
-  expect(updated.html).toContain("Usual rate: €35 or 1 CHT per hour");
+  expect(confirmed.html).toContain(">Mush Room · up to 10 people · €35 · 1 CHT per hour</p>");
+  expect(confirmed.html.indexOf("https://x/img.jpg")).toBeLessThan(confirmed.html.indexOf("up to 10 people"));
+  expect(confirmed.text).toContain("Room: Mush Room · up to 10 people · €35 · 1 CHT per hour");
+  for (const t of [confirmed.html, confirmed.text]) expect(t.toLowerCase()).not.toContain("usual rate");
+  expect(buildBookingEmail({ ...withRates, kind: "updated" }, FALLBACK_COSTS).html).toContain("up to 10 people");
   const cancelled = buildBookingEmail({ ...withRates, kind: "cancelled" }, FALLBACK_COSTS);
-  expect(cancelled.html).not.toContain("Usual rate");
-  expect(cancelled.text).not.toContain("usual rate");
+  expect(cancelled.html).not.toContain("up to 10 people");
+  expect(cancelled.text).toContain("Room: Mush Room\n");
 });
