@@ -1545,7 +1545,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const guildId = interaction.guildId!;
 
   // Handle book modals
-  if (interaction.customId === "book_name_modal" || interaction.customId === "book_date_modal" || interaction.customId === "book_guest_modal") {
+  if (interaction.customId === "book_name_modal" || interaction.customId === "book_date_modal" || interaction.customId === "book_guest_modal" || interaction.customId === "book_my_email_modal") {
     return handleBookModal(interaction, userId, guildId);
   }
 

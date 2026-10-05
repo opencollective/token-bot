@@ -96,17 +96,27 @@ export function ratesFromPrices(prices: { token: string; amount: number }[] | un
 
 const num = (n: number) => Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
 
-/** "Mush Room · up to 10 people · €35/h or 1 token/h": name, capacity and hourly prices. */
-export function roomLine(roomName: string, r?: RoomRates): string {
-  const prices = [
-    r?.eurPerHour ? `€${num(r.eurPerHour)}/h` : "",
+/** "€40/h + VAT or 1 token/h": a room's hourly prices. Euro prices are excl. VAT. */
+export function hourlyRates(r?: RoomRates): string {
+  return [
+    r?.eurPerHour ? `€${num(r.eurPerHour)}/h + VAT` : "",
     r?.tokensPerHour ? `${num(r.tokensPerHour)} ${r.tokensPerHour > 1 ? "tokens" : "token"}/h` : "",
-  ].filter(Boolean);
+  ].filter(Boolean).join(" or ");
+}
+
+/** "Mush Room · up to 10 people · €40/h + VAT or 1 token/h": name, capacity and hourly prices. */
+export function roomLine(roomName: string, r?: RoomRates): string {
   return [
     roomName,
     r?.capacity ? `up to ${r.capacity} ${r.capacity === 1 ? "person" : "people"}` : "",
-    prices.join(" or "),
+    hourlyRates(r),
   ].filter(Boolean).join(" · ");
+}
+
+/** What was paid: "€130 (paid in EURb, excl. VAT)" for euro tokens, "3 CHT" otherwise. */
+export function paidLine(amount: number, tokenSymbol: string): string {
+  const n = Number(amount.toFixed(2));
+  return /^eur/i.test(tokenSymbol) ? `€${n} (paid in ${tokenSymbol}, excl. VAT)` : `${n} ${tokenSymbol}`;
 }
 
 /** Whole euros, no decimals: €6,547. */
@@ -264,6 +274,8 @@ export interface BookingEmailDetails {
   previous?: { roomName: string; occurrences: { start: Date; end: Date }[] };
   /** Signed door link per occurrence (same order), when DOOR_SIGNING_KEY is set. */
   doorLinks?: (string | null)[];
+  /** The booker booked for themselves: the email is their own record, not a note to a guest. */
+  forSelf?: boolean;
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -283,18 +295,29 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   const subject = `${subjectPrefix}: ${d.roomName}, ${firstDay}${d.occurrences.length > 1 ? ` (+${d.occurrences.length - 1} more)` : ""}`;
   const heading = { confirmed: "your room is booked", updated: "your booking was changed", cancelled: "your booking was cancelled" }[kind];
   const previousLine = d.previous ? `Before: ${d.previous.roomName}, ${d.previous.occurrences.map((o) => whenLine(o, tz)).join("; ")}.` : "";
-  const contact = d.bookerEmail
+  const self = d.forSelf === true;
+  const contact = self
+    ? `If you have any question about this booking, just reply to this email.`
+    : d.bookerEmail
     ? `If you have any question about this booking, please contact ${d.bookerName} (${d.bookerEmail}), who booked it for you and is in cc of this email: just reply to this email.`
     : `If you have any question about this booking, please contact ${d.bookerName}, who booked it for you.`;
   const price = `${Number(d.priceTotal.toFixed(2))} ${d.tokenSymbol}`;
+  const paid = paidLine(d.priceTotal, d.tokenSymbol);
+  const paidWithTime = !/^eur/i.test(d.tokenSymbol);
 
   const paragraphs = {
-    intro: {
-      confirmed: `${d.bookerName} booked the ${d.roomName} at the ${HUB.name} for you.`,
-      updated: `${d.bookerName} changed the booking they made for you at the ${HUB.name}. Here are the new details.`,
-      cancelled: `${d.bookerName} cancelled the booking they made for you at the ${HUB.name}. The room is no longer reserved for you at this time.`,
-    }[kind],
-    cht: `This booking was paid with ${price}. CHT, the Commons Hub Token, is how our community keeps track of time given to the place: members earn it by stewarding the space (doing shifts, cleaning, keeping the plants alive, welcoming people, running the newsletter…) and can spend it on rooms like this one. So this room is yours for this time because ${d.bookerName} gave time to the community.`,
+    intro: self
+      ? {
+        confirmed: `You booked the ${d.roomName} at the ${HUB.name}. Here are the details, for your records.`,
+        updated: `Your booking at the ${HUB.name} was changed. Here are the new details.`,
+        cancelled: `Your booking at the ${HUB.name} was cancelled. The room is no longer reserved for you at this time.`,
+      }[kind]
+      : {
+        confirmed: `${d.bookerName} booked the ${d.roomName} at the ${HUB.name} for you.`,
+        updated: `${d.bookerName} changed the booking they made for you at the ${HUB.name}. Here are the new details.`,
+        cancelled: `${d.bookerName} cancelled the booking they made for you at the ${HUB.name}. The room is no longer reserved for you at this time.`,
+      }[kind],
+    cht: `This booking was paid with ${price}. CHT, the Commons Hub Token, is how our community keeps track of time given to the place: members earn it by stewarding the space (doing shifts, cleaning, keeping the plants alive, welcoming people, running the newsletter…) and can spend it on rooms like this one. So this room is yours for this time because ${self ? "you" : d.bookerName} gave time to the community.`,
     house: `The Commons Hub is a community space, not a rental venue. We ask everyone to treat it as if it were their own house. Unless you are messy at home, in which case please take care of it as if it were somebody else's house 🙂 Leave the room as you found it, put the chairs and tables back, and take your trash with you.`,
     member: `If you like the place, become a member: members can call this place home, book rooms, and steward it together with us.`,
     costs: `Keeping the doors open costs about ${eurRounded(costs.totalEur)} a month in fixed costs. It is all paid by the community, through memberships, room bookings and contributions. If this space is useful to you, you can help sustain it.`,
@@ -309,7 +332,7 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
     `Tap the button when you are at the door: it opens the door for you.`,
     `It works from 30 minutes before your booking until 30 minutes after it${doors.length === 1 ? ` (${early(doors[0].o)}–${late(doors[0].o)})` : ""}.`,
     `The link is personal: please don't share it. Everyone in the community sees in our #door channel that you opened the door.`,
-    `Please close the door behind you. If it doesn't work, ring the bell or contact ${d.bookerName}.`,
+    `Please close the door behind you. If it doesn't work, ring the bell or ${self ? "reply to this email" : `contact ${d.bookerName}`}.`,
   ];
   const doorHtml = doors.length === 0 ? "" : `
   <h2 style="font-size:17px;margin:28px 0 6px">Getting in</h2>
@@ -341,7 +364,8 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
       <div><strong>Room:</strong> ${esc(d.roomName)}</div>
       <div><strong>When:</strong> ${dates.map(esc).join("<br>")}</div>
       <div><strong>Where:</strong> ${esc(HUB.address)} (right in front of Brussels Central Station)</div>
-      <div><strong>Booked by:</strong> ${esc(d.bookerName)}${d.bookerEmail ? ` (${esc(d.bookerEmail)}, in cc)` : ""}</div>
+      ${kind === "cancelled" ? "" : `<div><strong>Paid:</strong> ${esc(paid)}</div>`}
+      ${self ? "" : `<div><strong>Booked by:</strong> ${esc(d.bookerName)}${d.bookerEmail ? ` (${esc(d.bookerEmail)}, in cc)` : ""}</div>`}
       ${d.eventUrl ? `<div><strong>Event page:</strong> <a href="${esc(d.eventUrl)}" style="color:#b83500">${esc(d.eventUrl)}</a></div>` : ""}
       ${previousLine ? `<div style="margin-top:6px;color:#5d625e">${esc(previousLine)}</div>` : ""}
     </td></tr>
@@ -350,9 +374,9 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   <p style="margin:12px 0 0">${esc(contact)}</p>
 ${kind === "cancelled" ? "" : doorHtml}
 ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
-  <h2 style="font-size:17px;margin:28px 0 6px">Paid with time, not money</h2>
-  <p style="margin:0 0 8px">${esc(paragraphs.cht)}</p>
-  ${d.txUrl ? `<p style="margin:0;font-size:14px"><a href="${esc(d.txUrl)}" style="color:#b83500">See the transaction</a></p>` : ""}
+  ${paidWithTime ? `<h2 style="font-size:17px;margin:28px 0 6px">Paid with time, not money</h2>
+  <p style="margin:0 0 8px">${esc(paragraphs.cht)}</p>` : ""}
+  ${d.txUrl ? `<p style="margin:${paidWithTime ? "0" : "16px 0 0"};font-size:14px"><a href="${esc(d.txUrl)}" style="color:#b83500">See the transaction</a></p>` : ""}
 
   <h2 style="font-size:17px;margin:28px 0 6px">A community space</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.house)}</p>
@@ -366,7 +390,7 @@ ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
 </td></tr>
 <tr><td style="padding:24px 28px 28px;font-size:13px;color:#5d625e;border-top:1px solid #eaded9">
   ${HUB.name} · ${esc(HUB.address)} · <a href="${HUB.website}" style="color:#5d625e">commonshub.brussels</a><br>
-  Questions about this booking? Contact ${esc(d.bookerName)}${d.bookerEmail ? ` (${esc(d.bookerEmail)}), in cc: reply to this email` : ""}.
+  Questions about this booking? ${self ? "Reply to this email" : `Contact ${esc(d.bookerName)}${d.bookerEmail ? ` (${esc(d.bookerEmail)}), in cc: reply to this email` : ""}`}.
 </td></tr>
 </table></td></tr></table>
 </body></html>`;
@@ -380,7 +404,8 @@ ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
     `Room: ${d.rates && kind !== "cancelled" ? roomLine(d.roomName, d.rates) : d.roomName}`,
     `When: ${dates.join("; ")}`,
     `Where: ${HUB.address} (right in front of Brussels Central Station)`,
-    `Booked by: ${d.bookerName}${d.bookerEmail ? ` (${d.bookerEmail}, in cc)` : ""}`,
+    ...(kind === "cancelled" ? [] : [`Paid: ${paid}`]),
+    ...(self ? [] : [`Booked by: ${d.bookerName}${d.bookerEmail ? ` (${d.bookerEmail}, in cc)` : ""}`]),
     ...(d.eventUrl ? [`Event page: ${d.eventUrl}`] : []),
     ...(previousLine ? [previousLine] : []),
     kind === "cancelled" ? "The attached calendar file removes the booking from your calendar." : "The calendar file is attached.",
@@ -388,8 +413,7 @@ ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
     contact,
     ...(kind === "cancelled" ? [] : [...doorText,
     "",
-    "PAID WITH TIME, NOT MONEY",
-    paragraphs.cht,
+    ...(paidWithTime ? ["PAID WITH TIME, NOT MONEY", paragraphs.cht] : []),
     ...(d.txUrl ? [`Transaction: ${d.txUrl}`] : []),
     "",
     "A COMMUNITY SPACE",

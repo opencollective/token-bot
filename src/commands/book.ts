@@ -21,7 +21,7 @@ import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
-import { fetchRoomImage, ratesFromPrices, sendBookingConfirmation } from "../lib/booking-email.ts";
+import { fetchRoomImage, hourlyRates, ratesFromPrices, sendBookingConfirmation } from "../lib/booking-email.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -60,8 +60,12 @@ function inviteNote(state: BookState, invite: { invited: boolean; inviteError?: 
   return `⚠️ The booking is made, but the calendar invitation could not be sent (${invite.inviteError || "unknown error"}). Please forward the details to ${forLabel(state, false)}.\n\n`;
 }
 
-/** Email the guest a confirmation (cc the booker) and return one line for the booker's reply. */
-async function emailGuest(
+/**
+ * Email a confirmation and return one line for the booker's reply:
+ * - booking for a guest: to the guest, cc the booker;
+ * - booking for yourself: to you, for your records (when we know your email).
+ */
+async function emailConfirmation(
   state: BookState,
   interaction: Interaction,
   guildId: string,
@@ -74,7 +78,9 @@ async function emailGuest(
   bookingId: string,
 ): Promise<string> {
   const f = state.bookedFor;
-  if (f?.kind !== "guest" || occurrences.length === 0) return "";
+  if (occurrences.length === 0) return "";
+  if (!f) return emailSelf(state, interaction, guildId, userId, product, occurrences, total, tokenSymbol, txUrl, bookingId);
+  if (f.kind !== "guest") return "";
   const bookerEmail = getUserEmail(guildId, userId);
   const bookerName = interaction.user.displayName || interaction.user.username;
   try {
@@ -119,6 +125,55 @@ async function emailGuest(
   } catch (error: any) {
     console.error("[book] guest confirmation email failed:", error?.message || error);
     return `⚠️ The confirmation email to ${f.name} could not be sent (${String(error?.message || error).slice(0, 120)}).\n\n`;
+  }
+}
+
+/** Confirmation email to a member who booked for themselves, for their records. */
+async function emailSelf(
+  state: BookState,
+  interaction: Interaction,
+  guildId: string,
+  userId: string,
+  product: Product,
+  occurrences: (Occurrence & { eventId?: string })[],
+  total: number,
+  tokenSymbol: string,
+  txUrl: string,
+  bookingId: string,
+): Promise<string> {
+  const email = getUserEmail(guildId, userId);
+  if (!email) {
+    return `ℹ️ No confirmation email: we don't have your email address. Next time, click "📧 Add my email…" while booking to get one.\n\n`;
+  }
+  const name = interaction.user.displayName || interaction.user.username;
+  try {
+    const doorLinks = await Promise.all(occurrences.map((o) =>
+      buildDoorLink({ name, host: name, reason: bookingReason(product.name, o.start, o.end), start: o.start, end: o.end })
+        .catch((error) => { console.error("[book] door link failed:", error?.message || error); return null; })
+    ));
+    await sendBookingConfirmation({
+      forSelf: true,
+      doorLinks,
+      uids: occurrences.map((o, i) => o.eventId ? `${o.eventId}@commonshub.brussels` : `${bookingId}-${i}@commonshub.brussels`),
+      roomImageUrl: await fetchRoomImage(product.slug),
+      rates: ratesFromPrices(product.price, product.capacity),
+      guestName: name,
+      guestEmail: email,
+      bookerName: name,
+      eventName: state.name || "Room booking",
+      roomName: product.name,
+      occurrences,
+      priceTotal: total,
+      tokenSymbol,
+      eventUrl: state.eventUrl,
+      txUrl,
+      bookingId,
+    });
+    const withDoor = doorLinks.some(Boolean) ? ", with a link to open the door" : "";
+    return `📨 Confirmation email sent to ${email}${withDoor}.\n\n`;
+  } catch (error: any) {
+    console.error("[book] self confirmation email failed:", error?.message || error);
+    return `⚠️ The confirmation email to ${email} could not be sent (${String(error?.message || error).slice(0, 120)}).\n\n`;
   }
 }
 
@@ -169,7 +224,7 @@ async function createBookingEvent(
 }
 
 // Clicks that open a modal must answer with the modal itself, so they are not deferred.
-const MODAL_BUTTONS = new Set(["book_date_custom", "book_custom_name", "book_for_guest"]);
+const MODAL_BUTTONS = new Set(["book_date_custom", "book_custom_name", "book_for_guest", "book_add_email"]);
 
 /** Acknowledge a /book click immediately (Discord allows 3 s); the message is updated afterwards. */
 async function ackClick(interaction: Interaction): Promise<void> {
@@ -497,7 +552,7 @@ export async function handleBookCommand(
   let roomList = "";
   for (const room of bookableRooms) {
     const capacityStr = room.capacity ? `👥 ${room.capacity}` : "";
-    const priceStr = room.price[0] ? `${room.price[0].amount} ${room.price[0].token}/h` : "";
+    const priceStr = hourlyRates(ratesFromPrices(room.price));
     roomList += `• **${room.name}** — ${capacityStr} · ${priceStr}\n`;
   }
 
@@ -892,7 +947,7 @@ export async function handleBookButton(
     let roomList = "";
     for (const room of bookableRooms) {
       const capacityStr = room.capacity ? `👥 ${room.capacity}` : "";
-      const priceStr = room.price[0] ? `${room.price[0].amount} ${room.price[0].token}/h` : "";
+      const priceStr = hourlyRates(ratesFromPrices(room.price));
       roomList += `• **${room.name}** — ${capacityStr} · ${priceStr}\n`;
     }
 
@@ -1048,6 +1103,22 @@ export async function handleBookButton(
         ),
       );
     }
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (customId === "book_add_email") {
+    if (!state || !state.selectedDate || !state.duration) {
+      await interaction.reply({ content: "⚠️ Session expired. Please run /book again.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const modal = new ModalBuilder().setCustomId("book_my_email_modal").setTitle("Your email");
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId("my_email").setLabel("Your email (for booking confirmations)").setStyle(TextInputStyle.Short)
+          .setRequired(true).setMaxLength(120).setPlaceholder("you@example.com"),
+      ),
+    );
     await interaction.showModal(modal);
     return;
   }
@@ -1352,6 +1423,12 @@ async function showNameInput(
       .setLabel(state.bookedFor?.kind === "guest" ? `For ${forLabel(state, false)}`.slice(0, 80) : "For a guest...")
       .setStyle(state.bookedFor?.kind === "guest" ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
+  const myEmail = getUserEmail(guildId, userId);
+  if (!state.bookedFor && !myEmail) {
+    forRow.addComponents(
+      new ButtonBuilder().setCustomId("book_add_email").setLabel("📧 Add my email…").setStyle(ButtonStyle.Secondary),
+    );
+  }
 
   const navRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -1366,8 +1443,10 @@ async function showNameInput(
 
   const header = buildSelectionHeader(state, product);
   const forNote = state.bookedFor
-    ? `\n_You pay; ${forLabel(state)} gets the calendar invitation${getUserEmail(guildId, userId) ? " (you too)" : ""}._`
-    : "";
+    ? `\n_You pay; ${forLabel(state)} gets the calendar invitation${myEmail ? " (you too)" : ""}._`
+    : myEmail
+    ? `\n_We'll email the confirmation to ${myEmail}._`
+    : `\n_We don't have your email, so no confirmation email can be sent. Click "📧 Add my email…" to get one._`;
 
   await updateMessage(interaction, {
     content: `${header}${forNote}\n👤 **Who is it for?**\n📝 **Event name:**`,
@@ -1869,7 +1948,7 @@ Booking Chain: ${tokenConfig.chain}`;
         }
       }
 
-      const mailNote = await emailGuest(state, interaction, guildId, userId, product, [{ start: state.startTime, end: state.endTime, eventId: invite.eventId }], priceAmount, tokenSymbol, txUrl, txHash);
+      const mailNote = await emailConfirmation(state, interaction, guildId, userId, product, [{ start: state.startTime, end: state.endTime, eventId: invite.eventId }], priceAmount, tokenSymbol, txUrl, txHash);
 
       bookStates.delete(userId);
 
@@ -2176,7 +2255,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     console.error("Error sending Nostr annotation:", error);
   }
 
-  const mailNote = await emailGuest(state, interaction, guildId, userId, product, booked, perBooking * booked.length, tokenSymbol, txUrl, txHash);
+  const mailNote = await emailConfirmation(state, interaction, guildId, userId, product, booked, perBooking * booked.length, tokenSymbol, txUrl, txHash);
   bookStates.delete(userId);
   const skipped = checked.filter((o) => o.conflict);
   let content = booked.length > 0 ? `✅ **Booked ${booked.length} date${booked.length > 1 ? "s" : ""}!**` : "❌ **Payment went through but no date could be booked.**";
@@ -2303,6 +2382,28 @@ export async function handleBookModal(
 
     await interaction.deferUpdate();
     await showTimeSelection(interaction, userId, guildId);
+    return;
+  }
+
+  if (interaction.customId === "book_my_email_modal") {
+    const state = bookStates.get(userId);
+    if (!state) {
+      await interaction.reply({ content: "⚠️ Session expired. Please run /book again.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const email = interaction.fields.getTextInputValue("my_email").trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) {
+      await interaction.reply({ content: `❌ "${email}" is not a valid email. Click "📧 Add my email…" again.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await saveUser(guildId, {
+      discordUserId: userId,
+      username: interaction.user.username,
+      displayName: interaction.user.displayName || interaction.user.username,
+      email,
+    });
+    await interaction.deferUpdate();
+    await showNameInput(interaction, userId, guildId);
     return;
   }
 
