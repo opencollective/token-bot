@@ -13,7 +13,7 @@
       },
       {
         "token": "EURb",
-        "amount": 50
+        "amount": 60
       }
     ]
   },
@@ -50,7 +50,7 @@
       },
       {
         "token": "EURb",
-        "amount": 35
+        "amount": 40
       }
     ]
   },
@@ -68,7 +68,7 @@
       },
       {
         "token": "EURb",
-        "amount": 35
+        "amount": 50
       }
     ]
   },
@@ -86,7 +86,7 @@
       },
       {
         "token": "EURb",
-        "amount": 100
+        "amount": 130
       }
     ]
   }

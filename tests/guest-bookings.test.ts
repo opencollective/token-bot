@@ -109,24 +109,87 @@ Deno.test("a guest booking is remembered, then the guest is emailed when it chan
   }
 });
 
-import { ratesFromPrices, roomLine } from "../src/lib/booking-email.ts";
+import { hourlyRates, paidLine, ratesFromPrices, roomLine, sendBookingConfirmation } from "../src/lib/booking-email.ts";
 
-Deno.test("under the photo: room name, capacity and hourly prices in euros and tokens", () => {
-  const rates = ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 35 }], 10);
-  expect(rates).toEqual({ eurPerHour: 35, tokensPerHour: 1, tokenSymbol: "CHT", capacity: 10 });
-  expect(roomLine("Mush Room", rates)).toBe("Mush Room · up to 10 people · €35/h or 1 token/h");
-  expect(roomLine("Phone booth", ratesFromPrices([{ token: "CHT", amount: 0.5 }, { token: "EURb", amount: 10 }], 1))).toBe("Phone booth · up to 1 person · €10/h or 0.5 token/h");
+Deno.test("under the photo: room name, capacity and hourly prices in euros (+ VAT) and tokens", () => {
+  const rates = ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 40 }], 10);
+  expect(rates).toEqual({ eurPerHour: 40, tokensPerHour: 1, tokenSymbol: "CHT", capacity: 10 });
+  expect(roomLine("Mush Room", rates)).toBe("Mush Room · up to 10 people · €40/h + VAT or 1 token/h");
+  expect(roomLine("Phone booth", ratesFromPrices([{ token: "CHT", amount: 0.5 }, { token: "EURb", amount: 10 }], 1))).toBe("Phone booth · up to 1 person · €10/h + VAT or 0.5 token/h");
   expect(roomLine("Room", undefined)).toBe("Room");
-  expect(roomLine("Satoshi Room", ratesFromPrices([{ token: "CHT", amount: 2 }, { token: "EURb", amount: 50 }], 15))).toBe("Satoshi Room · up to 15 people · €50/h or 2 tokens/h");
+  expect(roomLine("Satoshi Room", ratesFromPrices([{ token: "CHT", amount: 2 }, { token: "EURb", amount: 60 }], 15))).toBe("Satoshi Room · up to 15 people · €60/h + VAT or 2 tokens/h");
+  expect(hourlyRates(ratesFromPrices([{ token: "CHT", amount: 3 }, { token: "EURb", amount: 130 }]))).toBe("€130/h + VAT or 3 tokens/h");
+  expect(hourlyRates(ratesFromPrices([{ token: "CHT", amount: 2 }]))).toBe("2 tokens/h");
 
   const withRates = { ...base, roomImageUrl: "https://x/img.jpg", rates };
   const confirmed = buildBookingEmail(withRates, FALLBACK_COSTS);
-  expect(confirmed.html).toContain(">Mush Room · up to 10 people · €35/h or 1 token/h</p>");
+  expect(confirmed.html).toContain(">Mush Room · up to 10 people · €40/h + VAT or 1 token/h</p>");
   expect(confirmed.html.indexOf("https://x/img.jpg")).toBeLessThan(confirmed.html.indexOf("up to 10 people"));
-  expect(confirmed.text).toContain("Room: Mush Room · up to 10 people · €35/h or 1 token/h");
+  expect(confirmed.text).toContain("Room: Mush Room · up to 10 people · €40/h + VAT or 1 token/h");
   for (const t of [confirmed.html, confirmed.text]) expect(t.toLowerCase()).not.toContain("usual rate");
   expect(buildBookingEmail({ ...withRates, kind: "updated" }, FALLBACK_COSTS).html).toContain("up to 10 people");
   const cancelled = buildBookingEmail({ ...withRates, kind: "cancelled" }, FALLBACK_COSTS);
   expect(cancelled.html).not.toContain("up to 10 people");
   expect(cancelled.text).toContain("Room: Mush Room\n");
+});
+
+Deno.test("what was paid: tokens as is, euros excl. VAT", () => {
+  expect(paidLine(2, "CHT")).toBe("2 CHT");
+  expect(paidLine(260, "EURb")).toBe("€260 (paid in EURb, excl. VAT)");
+  const cht = buildBookingEmail(base, FALLBACK_COSTS);
+  expect(cht.text).toContain("Paid: 2 CHT");
+  expect(cht.text).toContain("PAID WITH TIME, NOT MONEY");
+  const eur = buildBookingEmail({ ...base, priceTotal: 80, tokenSymbol: "EURb", txUrl: "https://tx" }, FALLBACK_COSTS);
+  expect(eur.text).toContain("Paid: €80 (paid in EURb, excl. VAT)");
+  expect(eur.html).toContain("<strong>Paid:</strong> €80 (paid in EURb, excl. VAT)");
+  for (const t of [eur.html, eur.text]) expect(t.toLowerCase()).not.toContain("paid with time");
+  expect(eur.text).toContain("Transaction: https://tx");
+  expect(buildBookingEmail({ ...base, kind: "cancelled" }, FALLBACK_COSTS).text).not.toContain("Paid:");
+});
+
+Deno.test("booking for yourself: your own record, no 'booked for you', no cc", async () => {
+  const self = {
+    ...base, guestName: "Xavier", guestEmail: "x@example.com", bookerName: "Xavier", bookerEmail: undefined,
+    forSelf: true, doorLinks: ["https://door.commonshub.brussels/open?x"],
+    rates: ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 40 }], 10),
+  };
+  const { subject, html, text } = buildBookingEmail(self, FALLBACK_COSTS);
+  expect(subject).toBe("Your booking at the Commons Hub: Mush Room, 15 Oct");
+  expect(text).toContain("Hi Xavier, your room is booked");
+  expect(text).toContain("You booked the Mush Room at the Commons Hub Brussels. Here are the details, for your records.");
+  expect(text).toContain("When: Thursday, 15 October 2026, 17:00–19:00");
+  expect(text).toContain("Paid: 2 CHT");
+  expect(text).toContain("Open the door: https://door.commonshub.brussels/open?x");
+  expect(text).toContain("ring the bell or reply to this email");
+  expect(text).toContain("because you gave time to the community");
+  expect(html).toContain("Questions about this booking? Reply to this email.");
+  for (const t of [html, text]) {
+    expect(t).not.toContain("booked it for you");
+    expect(t).not.toContain("at the Commons Hub Brussels for you");
+    expect(t).not.toContain("Booked by:");
+    expect(t).not.toContain("in cc");
+  }
+
+  // Sent to the booker only, with the .ics attached
+  const sent: any[] = [];
+  const real = globalThis.fetch;
+  Deno.env.set("RESEND_API_KEY", "test");
+  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("api.resend.com")) {
+      sent.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(new Response(JSON.stringify({ id: "m1" }), { status: 200 }));
+    }
+    return Promise.resolve(new Response("", { status: 404 }));
+  }) as typeof fetch;
+  try {
+    await sendBookingConfirmation(self);
+    expect(sent.length).toBe(1);
+    expect(sent[0].to).toEqual(["x@example.com"]);
+    expect(sent[0].cc).toBeUndefined();
+    expect(sent[0].attachments[0].filename).toBe("commonshub-booking.ics");
+    expect(sent[0].attachments[0].content_type).toContain("method=PUBLISH");
+  } finally {
+    globalThis.fetch = real;
+    Deno.env.delete("RESEND_API_KEY");
+  }
 });
