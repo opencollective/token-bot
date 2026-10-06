@@ -79,7 +79,7 @@ import { initRoomEventsCache } from "./lib/room-events-cache.ts";
 import { initUserEmails } from "./lib/user-emails.ts";
 import { startShiftsDeclinePoller } from "./lib/shifts-decline-poller.ts";
 import { startShiftsNostrSync } from "./lib/shifts-nostr-sync.ts";
-import { setDiscordClient, startApiServer } from "./api.ts";
+import { API_SERVER_PORT, setDiscordClient, startApiServer } from "./api.ts";
 
 // Display server startup time and timezone
 const now = new Date();
@@ -1889,22 +1889,25 @@ client.on(Events.Error, (error) => {
 // Start bot
 client.login(BOT_TOKEN);
 
-// Health check HTTP server
+// Health check HTTP server.
+// Coolify sets PORT to the exposed port (3000), which is also the API's default port. A separate
+// health server there used to take the port first, so the API (/mcp, /api/*) never started in
+// production. When the ports match, one server does both and starts right away, before Discord
+// connects, so the health check passes during startup.
 const PORT = parseInt(Deno.env.get("PORT") || "8080");
-Deno.serve({ port: PORT }, (req) => {
-  const url = new URL(req.url);
-
-  if (url.pathname === "/health") {
-    return new Response("OK", {
-      status: 200,
-      headers: { "Content-Type": "text/plain" },
-    });
-  }
-
-  return new Response("Not Found", { status: 404 });
-});
-
-console.log(`🏥 Health check server running on http://localhost:${PORT}/health`);
+if (PORT === API_SERVER_PORT) {
+  startApiServer();
+  console.log(`🏥 Health check served by the API server on http://localhost:${PORT}/health`);
+} else {
+  Deno.serve({ port: PORT }, (req) => {
+    const url = new URL(req.url);
+    if (url.pathname === "/health") {
+      return new Response("OK", { status: 200, headers: { "Content-Type": "text/plain" } });
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+  console.log(`🏥 Health check server running on http://localhost:${PORT}/health`);
+}
 
 // Graceful shutdown
 Deno.addSignalListener("SIGINT", async () => {

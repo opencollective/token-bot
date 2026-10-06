@@ -530,7 +530,10 @@ async function handleRequest(req: Request): Promise<Response> {
   let response: Response;
 
   // Route requests
-  if (path === "/status.json" && req.method === "GET") {
+  if (path === "/health") {
+    // Coolify's health check; answers before Discord is connected.
+    return new Response("OK", { status: 200, headers: { "Content-Type": "text/plain" } });
+  } else if (path === "/status.json" && req.method === "GET") {
     await loadGitInfo();
     response = json({
       status: "ok",
@@ -585,7 +588,13 @@ async function handleRequest(req: Request): Promise<Response> {
   });
 }
 
+export const API_SERVER_PORT = API_PORT;
+let apiServerStarted = false;
+
+/** Start the HTTP API (idempotent). It also answers /health. */
 export function startApiServer() {
+  if (apiServerStarted) return;
+  apiServerStarted = true;
   if (!API_KEY) {
     console.warn("⚠️  API_KEY not set - API endpoints will reject all requests");
   }
@@ -597,6 +606,7 @@ export function startApiServer() {
   console.log(`   GET  /api/rooms?guildId=...`);
   console.log(`   GET  /api/permissions?guildId=...&userId=...`);
   console.log(`   POST /mcp  (MCP, Streamable HTTP; Bearer ELINOR_MCP_TOKEN or API_KEY)`);
+  console.log(`   GET  /health`);
 
   Deno.serve({ port: API_PORT }, handleRequest);
 }
