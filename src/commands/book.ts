@@ -22,6 +22,7 @@ import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
 import { fetchRoomImage, hourlyRates, ratesFromPrices, sendBookingConfirmation } from "../lib/booking-email.ts";
+import { bookableFromMessage, startTimeAllowed } from "../lib/room-rules.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -1312,11 +1313,13 @@ async function showTimeSelection(
 
   const today = getLocalToday();
   const isToday = state.selectedDate.getTime() === today.getTime();
-  const timeSlots = getTimeSlots(state.selectedDate, isToday, bookedEvents);
+  const timeSlots = getTimeSlots(state.selectedDate, isToday, bookedEvents)
+    .filter((slot) => !product || startTimeAllowed(product, slot.value));
+  const fromNote = product?.bookableFrom ? `\n🕖 ${bookableFromMessage(product)}` : "";
 
   if (timeSlots.length === 0) {
     await updateMessage(interaction, {
-      content: `${buildSelectionHeader(state, product)}\n${availability}\n\n⚠️ No available time slots left for today. Please select a different date.`,
+      content: `${buildSelectionHeader(state, product)}\n${availability}${fromNote}\n\n⚠️ No available time slots left for today. Please select a different date.`,
       components: [
         new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
@@ -1755,6 +1758,18 @@ async function processBooking(
   if (!interaction.isButton()) return;
 
   const state = bookStates.get(userId);
+
+  // Last check before paying: some rooms can't start before a given time (e.g. coworking from 7pm).
+  if (state?.productSlug && state.selectedHour !== undefined && state.selectedMinute !== undefined) {
+    const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+    const product = products?.find((p) => p.slug === state.productSlug);
+    const hhmm = `${String(state.selectedHour).padStart(2, "0")}:${String(state.selectedMinute).padStart(2, "0")}`;
+    if (product && !startTimeAllowed(product, hhmm)) {
+      await updateMessage(interaction, { content: `❌ ${bookableFromMessage(product)}`, components: [] });
+      return;
+    }
+  }
+
   if (state?.selectedDates && state.selectedDates.length > 1) {
     await processMultiDateBooking(interaction, userId, guildId);
     return;
@@ -2373,7 +2388,14 @@ export async function handleBookSelect(
   if (customId === "book_time_select") {
     const timeValue = interaction.values[0];
     const [hour, minute] = timeValue.split(":").map(Number);
-    
+
+    const products = (await loadGuildFile(guildId, "products.json")) as unknown as Product[];
+    const product = products?.find((p) => p.slug === state.productSlug);
+    if (product && !startTimeAllowed(product, timeValue)) {
+      await updateMessage(interaction, { content: `❌ ${bookableFromMessage(product)} Please pick a later time.`, components: [] });
+      return;
+    }
+
     state.selectedHour = hour;
     state.selectedMinute = minute;
     state.step = "duration";

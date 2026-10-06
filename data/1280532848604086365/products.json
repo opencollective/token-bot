@@ -106,6 +106,7 @@
     "slug": "coworking",
     "capacity": 30,
     "availabilities": "anytime",
+    "bookableFrom": "19:00",
     "calendarId": "c_46409c48af2476b038fed585c06edd93133b5393d8a2b72b3ca98445a3372860@group.calendar.google.com",
     "channelId": "1443323751134531695",
     "price": [

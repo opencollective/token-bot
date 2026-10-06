@@ -312,8 +312,8 @@ if (data.success) {
 | Tool | Arguments | Returns |
 |---|---|---|
 | `check_user_permissions` | `guildId`, `userId` | What the user may do: issue tokens, book rooms, shifts |
-| `list_rooms` | `guildId` | Rooms with slug, capacity and hourly prices; euro prices are excl. VAT |
-| `check_room_availability` | `guildId`, `room`, `start`, `end` | `available` and overlapping bookings |
+| `list_rooms` | `guildId` | Rooms with slug, capacity, hourly prices (euro prices excl. VAT) and `bookableFrom` |
+| `check_room_availability` | `guildId`, `room`, `start`, `end` | `available`, overlapping bookings, and `reason` when the start is before `bookableFrom` |
 | `list_upcoming_shifts` | `guildId`, `days?` (1–31, default 7) | Shifts with sign-ups and spots left, standard slots, capacity, reward, timezone |
 | `get_request_status` | `requestId` | The status of a proposal, below |
 
@@ -332,3 +332,7 @@ All take `guildId`, `requestedBy` (free text for the audit log) and optional `ch
 **Statuses:** `pending`, `confirmed`, `cancelled`, `expired` (no answer within 24 hours), `failed` (confirmed but execution failed; see `error`), `handed_off` (a room booking continued in `/book`).
 
 Every proposal and outcome is logged in the server's logs channel. A confirmer can have at most 10 pending requests. Requests are stored in `DATA_DIR/<guildId>/pending-requests.json` and survive restarts.
+
+## Room rules
+
+`products.json` can set `bookableFrom: "HH:MM"`, in the hub's timezone, on a room: bookings can't start earlier. The coworking space has `"bookableFrom": "19:00"`, the same as the website's `rooms.json`. The rule is enforced in `/book`, where earlier start times aren't offered and are rejected if they come in anyway, in `POST /api/book/execute`, and in the MCP tools. The message is "The coworking space can only be booked from 7pm."
