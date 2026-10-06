@@ -72,7 +72,7 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "list_rooms",
       description:
-        "List the bookable rooms with their slug, capacity and hourly prices (tokens and euros; euro prices are excl. 21% VAT).",
+        "List the bookable rooms with their slug, capacity, hourly prices (tokens and euros; euro prices are excl. 21% VAT) and bookableFrom, the earliest start time (e.g. coworking only from 19:00).",
       inputSchema: {
         type: "object",
         properties: { guildId: GUILD_ID },
@@ -85,7 +85,7 @@ const TOOLS: ToolSpec[] = [
     executor: "checkRoomAvailability",
     definition: {
       name: "check_room_availability",
-      description: "Check whether a room is free between start and end, and list the bookings that overlap.",
+      description: "Check whether a room can be booked between start and end: not available when it overlaps a booking or starts before the room's bookableFrom time (then `reason` says why).",
       inputSchema: {
         type: "object",
         properties: { guildId: GUILD_ID, room: str("Room slug from list_rooms."), start: ISO("Start"), end: ISO("End") },

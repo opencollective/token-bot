@@ -14,6 +14,7 @@ import { Client, GuildMember, PermissionsBitField, TextChannel } from "discord.j
 import { disabledCalendars } from "./lib/calendar-state.ts";
 import { buildUserPermissionReport } from "./lib/permissions.ts";
 import { handleMcpRequest, UserPermissionsToolInput } from "./mcp/server.ts";
+import { checkBookableFrom } from "./lib/room-rules.ts";
 import {
   checkRoomAvailability,
   getRequestStatus,
@@ -182,6 +183,10 @@ async function handleBookExecute(req: Request): Promise<Response> {
 
     if (!product || !product.calendarId) {
       return error(`Room not found or not bookable: ${room}`, 404);
+    }
+    const tooEarly = checkBookableFrom(product, new Date(start));
+    if (tooEarly) {
+      return json({ success: false, error: tooEarly } as BookResponse, 400);
     }
 
     // Load guild settings

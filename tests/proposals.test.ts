@@ -15,7 +15,7 @@ import {
   REQUEST_TTL_MS,
   transition,
 } from "../src/lib/pending-requests.ts";
-import { promptText, proposeMint, setProposalsClient, whenText } from "../src/lib/proposals.ts";
+import { promptText, proposeMint, proposeRoomBooking, setProposalsClient, whenText } from "../src/lib/proposals.ts";
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -276,4 +276,17 @@ Deno.test("propose_mint: at most 10 pending requests per confirmer", async () =>
   fakeClient();
   for (let i = 0; i < 10; i++) await proposeMint({ ...mintBase, recipientUserIds: ["2000000002"], amount: i + 1 });
   await expect(proposeMint(mintBase)).rejects.toThrow("already has 10 pending requests");
+});
+
+Deno.test("propose_room_booking: coworking before 7pm is refused with the room's rule", async () => {
+  fakeClient();
+  await Deno.writeTextFile(`${DATA}/${GUILD}/products.json`, JSON.stringify([
+    { type: "room", unit: "hour", slug: "coworking", name: "Coworking", availabilities: "anytime", bookableFrom: "19:00", calendarId: "cal-cw", price: [{ token: "CHT", amount: 2 }, { token: "EURb", amount: 50 }] },
+  ]));
+  const day = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  await expect(proposeRoomBooking({
+    guildId: GUILD, userId: "2000000002", room: "coworking",
+    start: `${day}T18:00:00+02:00`, end: `${day}T20:00:00+02:00`,
+    title: "Hack night", requestedBy: "elinor",
+  })).rejects.toThrow("The coworking space can only be booked from 7pm.");
 });

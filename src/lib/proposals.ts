@@ -28,6 +28,7 @@ import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { getUser, getUserEmail, saveUser } from "./user-emails.ts";
 import { hourlyRates, ratesFromPrices } from "./booking-email.ts";
 import { hhmm, longDay } from "./shift-email.ts";
+import { bookableFromMessage, checkBookableFrom } from "./room-rules.ts";
 import {
   type CalendarEvent,
   isCancelledShiftEvent,
@@ -141,6 +142,8 @@ export async function listRooms(input: { guildId: string }) {
       capacity: p.capacity ?? null,
       prices: p.price.map((x) => ({ token: x.token, amountPerHour: x.amount })),
       summary: hourlyRates(ratesFromPrices(p.price)),
+      bookableFrom: p.bookableFrom ?? null,
+      ...(p.bookableFrom ? { rule: bookableFromMessage(p) } : {}),
     })),
   };
 }
@@ -150,11 +153,14 @@ export async function checkRoomAvailability(input: { guildId: string; room: stri
   if (end <= start) throw new Error("end must be after start");
   const product = (await loadProducts(input.guildId)).find((p) => p.slug === input.room);
   if (!product?.calendarId) throw new Error(`Unknown room "${input.room}". Use list_rooms for the slugs.`);
+  const tz = (await loadGuildSettings(input.guildId))?.guild?.timezone || TZ;
+  const tooEarly = checkBookableFrom(product, start, tz);
   const events = await new GoogleCalendarClient().listEvents(product.calendarId, start, end) as CalendarEvent[];
   const conflicts = events.filter((e) => e.start?.dateTime && new Date(e.start.dateTime) < end && new Date(e.end.dateTime) > start);
   return {
     room: product.slug,
-    available: conflicts.length === 0,
+    available: conflicts.length === 0 && !tooEarly,
+    ...(tooEarly ? { reason: tooEarly } : {}),
     conflicts: conflicts.map((e) => ({ title: e.summary || "Busy", start: e.start.dateTime, end: e.end.dateTime })),
   };
 }
@@ -289,6 +295,8 @@ export async function proposeRoomBooking(input: Common & {
   if (!product?.calendarId) throw new Error(`Unknown room "${input.room}". Use list_rooms for the slugs.`);
   const start = parseIso(input.start, "start"), end = parseIso(input.end, "end");
   checkSpan(start, end);
+  const tooEarly = checkBookableFrom(product, start, (await loadGuildSettings(input.guildId))?.guild?.timezone || TZ);
+  if (tooEarly) throw new Error(tooEarly);
   const minutes = Math.round((end.getTime() - start.getTime()) / 60000);
   if (minutes % 15 !== 0) throw new Error("Bookings go by 15 minutes: adjust start or end");
 
@@ -300,6 +308,7 @@ export async function proposeRoomBooking(input: Common & {
 
   const availability = await checkRoomAvailability({ guildId: input.guildId, room: input.room, start: input.start, end: input.end });
   if (!availability.available) {
+    if (availability.reason) throw new Error(availability.reason);
     throw new Error(`${product.name} is not free then: ${availability.conflicts.map((c) => `${c.title} ${c.start}–${c.end}`).join("; ")}`);
   }
   await guardPending(input.guildId, member.id);

@@ -99,6 +99,8 @@ export type Product = {
   name: string;
   capacity?: number;
   availabilities: string;
+  /** "HH:MM", hub timezone: bookings can't start earlier (e.g. coworking from "19:00"). Same as the website's rooms.json. */
+  bookableFrom?: string;
   calendarId?: string;
   channelId?: string;
   price: {
