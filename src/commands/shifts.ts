@@ -24,6 +24,9 @@ import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
 import { Discord } from "../lib/discord.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { type DiscordMember, ShiftsNostr, type ShiftsNostrSettings, dayString } from "../lib/shifts-nostr.ts";
+import { buildDoorLink, timeRange } from "../lib/door-link.ts";
+import { buildCancelUrl } from "../lib/shift-cancel-token.ts";
+import { buildShiftDm, hhmm, longDay, sendShiftConfirmation } from "../lib/shift-email.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
 
@@ -36,7 +39,7 @@ async function logShiftAction(message: string) {
   }
 }
 
-interface ShiftsSettings {
+export interface ShiftsSettings {
   calendarId: string;
   description: string;
   reward: string;
@@ -1602,9 +1605,9 @@ function buildSignupConfirmation(state: ShiftsState, settings: ShiftsSettings): 
   content += `**Time:** ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}\n`;
   content += `**Reward:** ${durationHours * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}\n`;
   if (state.email) {
-    content += `**Email:** ${state.email} _(calendar invite will be sent)_\n`;
+    content += `**Email:** ${state.email} _(confirmation email and calendar invite will be sent)_\n`;
   } else {
-    content += `\n📧 _Provide your email address to receive a calendar invitation._\n`;
+    content += `\n📧 _Add your email to receive a confirmation email with the door link and a calendar invitation._\n`;
   }
 
   const buttons = [
@@ -1773,112 +1776,51 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
   });
 
   try {
-    const calendar = new GoogleCalendarClient();
-    // Use impersonation when adding attendees (requires Domain-Wide Delegation)
-    const calendarWithInvites = state.email
-      ? new GoogleCalendarClient({ impersonateUser: Deno.env.get("GOOGLE_CALENDAR_IMPERSONATE_USER") || undefined })
-      : calendar;
     const selectedDate = state.selectedDate!;
     const selectedSlot = state.selectedSlot!;
-    
-    const startDateTime = createDateTime(selectedDate, selectedSlot.start, settings.timezone);
-    const endDateTime = createDateTime(selectedDate, selectedSlot.end, settings.timezone);
-    
-    // Check if event already exists
-    const existingEvents = await getShiftEvents(settings.calendarId, selectedDate);
-    const existingEvent = existingEvents.find(event => {
-      const eventStart = new Date(event.start.dateTime);
-      const eventEnd = new Date(event.end.dateTime);
-      return Math.abs(eventStart.getTime() - startDateTime.getTime()) < 60000 && 
-             Math.abs(eventEnd.getTime() - endDateTime.getTime()) < 60000;
-    });
-
+    const start = createDateTime(selectedDate, selectedSlot.start, settings.timezone);
+    const end = createDateTime(selectedDate, selectedSlot.end, settings.timezone);
     const displayName = interaction.user.displayName || interaction.user.globalName || interaction.user.username;
-    const auditName = `${displayName} <@${interaction.user.username}>`;
-    
-    // Save/update user info on every signup
-    saveUser(interaction.guildId!, {
-      discordUserId: userId,
+    const member: ShiftMember = {
+      id: userId,
       username: interaction.user.username,
       displayName,
-      email: state.email,
-    }).catch(err => console.error("[shifts] Failed to save user:", err));
-    
-    const newSignup: ShiftSignup = {
-      discordUserId: userId,
-      username: interaction.user.username,
-      email: state.email
+      avatar: interaction.user.displayAvatarURL({ size: 256, extension: "png" }),
     };
 
-    if (existingEvent) {
-      // Update existing event
-      const existingSignups = parseShiftSignups(existingEvent.description || "");
-      
-      // Check if user already signed up
-      if (existingSignups.some(s => s.discordUserId === userId)) {
-        await interaction.editReply({
-          content: "⚠️ You're already signed up for this shift.",
-        });
-        return;
-      }
-      
-      // Check capacity
-      if (existingSignups.length >= settings.maxSignupsPerSlot) {
-        await interaction.editReply({
-          content: "⚠️ This shift is full.",
-        });
-        return;
-      }
-      
-      // Append signup (single audit line, never overwrite existing description)
-      let desc = existingEvent.description || "";
-      desc = appendToDescription(desc, `${formatAuditTimestamp()}: ${auditName} signed up (discord:${userId})`);
-      
-      const updateData: any = { description: desc };
-      if (state.email) {
-        updateData.attendees = [...(existingEvent.attendees || []), { email: state.email }];
-      }
-      await calendarWithInvites.updateEvent(settings.calendarId, existingEvent.id!, updateData);
-      
-    } else {
-      // Create new event
-      const eventTitle = `Shift: ${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
-      const description = `${formatAuditTimestamp()}: ${auditName} signed up (discord:${userId})`;
-      
-      const calendarEvent: any = {
-        summary: eventTitle,
-        description,
-        location: "Commons Hub Brussels, Rue de la Madeleine 51, 1000 Brussels",
-        start: {
-          dateTime: startDateTime.toISOString(),
-          timeZone: settings.timezone,
-        },
-        end: {
-          dateTime: endDateTime.toISOString(), 
-          timeZone: settings.timezone,
-        },
-      };
-      
-      if (state.email) {
-        calendarEvent.attendees = [{ email: state.email }];
-      }
-      
-      await calendarWithInvites.createEventNoConflictCheck(settings.calendarId, calendarEvent);
+    const result = await signUpForShift({
+      guildId,
+      guildName: interaction.guild?.name,
+      settings,
+      member,
+      email: state.email,
+      start,
+      end,
+      via: "discord",
+    });
+
+    if (!result.ok) {
+      await interaction.editReply({
+        content: result.reason === "already_signed_up" ? "⚠️ You're already signed up for this shift." : "⚠️ This shift is full.",
+      });
+      return;
     }
 
-    // Invalidate caches after signup
-    invalidateShiftCaches();
-
-    // The relays are the record shared with the website: publish the member's RSVP.
-    const nostrEventId = await publishShiftToNostr(
-      "signup",
+    const notified = await notifyShiftSignup({
       guildId,
-      interaction.guild?.name || "Commons Hub Brussels",
-      { id: userId, username: interaction.user.username, displayName, avatar: interaction.user.displayAvatarURL({ size: 256, extension: "png" }) },
-      selectedDate,
-      selectedSlot,
       settings,
-    );
+      member,
+      email: state.email,
+      start,
+      end,
+      calendarEventId: result.event.id,
+      via: "discord",
+    });
+    const emailNote = notified.emailed
+      ? `\n📨 Confirmation email sent to ${state.email}, with the calendar file${notified.doorLink ? " and a link to open the door" : ""}.`
+      : state.email
+      ? `\n⚠️ The confirmation email to ${state.email} could not be sent (${notified.emailError}).`
+      : `\n_No confirmation email: we don't have your email. Use "📧 Add email" next time to get one._`;
 
     const slotTimeStr = `${formatTime(selectedSlot.start)}-${formatTime(selectedSlot.end)}`;
     await interaction.editReply({
@@ -1888,7 +1830,7 @@ async function processSignup(interaction: ButtonInteraction, userId: string, gui
 **Time:** ${formatTime(selectedSlot.start)} - ${formatTime(selectedSlot.end)}
 **Reward:** ${getSlotDurationHours(selectedSlot) * settings.rewardAmountPerHour} ${settings.rewardTokenSymbol}
 
-Your shift has been added to the calendar${nostrEventId ? " and published on the community relay" : ""}. Thank you for helping take care of our space! 🙏`,
+Your shift has been added to the calendar${result.nostrEventId ? " and published on the community relay" : ""}. Thank you for helping take care of our space! 🙏${emailNote}`,
     });
 
     // Log to #shifts channel
@@ -1906,7 +1848,7 @@ Your shift has been added to the calendar${nostrEventId ? " and published on the
 }
 
 // Cancel shift
-async function cancelShift(shiftEvent: CalendarEvent, userId: string, guildId: string, settings: ShiftsSettings, member?: DiscordMember, guildName?: string) {
+export async function cancelShift(shiftEvent: CalendarEvent, userId: string, guildId: string, settings: ShiftsSettings, member?: DiscordMember, guildName?: string) {
   const calendar = new GoogleCalendarClient();
   
   const signups = parseShiftSignups(shiftEvent.description || "");
@@ -1947,6 +1889,207 @@ async function cancelShift(shiftEvent: CalendarEvent, userId: string, guildId: s
   };
   const who: DiscordMember = member ?? { id: userId, username: userSignup.username, displayName: user?.displayName || userSignup.username };
   await publishShiftToNostr("cancel", guildId, guildName || "Commons Hub Brussels", who, start, slot, settings);
+}
+
+// ── Sign-up core, shared by /shifts and the community tablet API ────────────
+
+export async function loadShiftsSettings(guildId: string): Promise<ShiftsSettings | null> {
+  return (await loadGuildFile(guildId, "shifts-settings.json")) as ShiftsSettings | null;
+}
+
+export interface ShiftMember {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar?: string;
+}
+
+export type ShiftSignupResult =
+  | { ok: true; event: CalendarEvent; created: boolean; nostrEventId: string | null }
+  | { ok: false; reason: "already_signed_up" | "full"; event: CalendarEvent };
+
+/** "17:30" style slot for a start/end pair, in the shifts timezone. */
+export function slotFor(start: Date, end: Date, timezone: string): { start: string; end: string } {
+  return { start: hhmm(start, timezone), end: hhmm(end, timezone) };
+}
+
+/** The audit line appended to the calendar event. "(discord:<id>)" must follow "signed up" for parseShiftSignups. */
+export function signupAuditLine(
+  member: { id: string; username: string; displayName: string },
+  opts: { via?: "discord" | "tablet"; eventTitle?: string; timestamp?: string } = {},
+): string {
+  const via = opts.via === "tablet" ? " via the community tablet" : "";
+  const steward = opts.eventTitle ? ` to steward ${opts.eventTitle.replace(/[\r\n]+/g, " ").slice(0, 120)}` : "";
+  return `${opts.timestamp ?? formatAuditTimestamp()}: ${member.displayName} <@${member.username}> signed up (discord:${member.id})${via}${steward}`;
+}
+
+export function isCancelledShiftEvent(event: { summary?: string }): boolean {
+  return (event.summary || "").startsWith("[Cancelled]");
+}
+
+/**
+ * Sign a member up for a shift at an exact start/end: reuse the calendar event with the same
+ * times (capacity and duplicate checks), or create one; add their email as attendee; publish the
+ * RSVP to nostr when it maps to a standard slot. Logging, DMs and emails are up to the caller.
+ */
+export async function signUpForShift(p: {
+  guildId: string;
+  guildName?: string;
+  settings: ShiftsSettings;
+  member: ShiftMember;
+  email?: string;
+  start: Date;
+  end: Date;
+  via?: "discord" | "tablet";
+  eventTitle?: string;
+}): Promise<ShiftSignupResult> {
+  const { guildId, settings, member, email, start, end } = p;
+  const calendar = new GoogleCalendarClient();
+  const calendarWithInvites = email
+    ? new GoogleCalendarClient({ impersonateUser: Deno.env.get("GOOGLE_CALENDAR_IMPERSONATE_USER") || undefined })
+    : calendar;
+  const slot = slotFor(start, end, settings.timezone);
+
+  const candidates = await calendar.listEvents(settings.calendarId, new Date(start.getTime() - 60000), new Date(end.getTime() + 60000));
+  const existing = (candidates as CalendarEvent[]).find((event) =>
+    Math.abs(new Date(event.start.dateTime).getTime() - start.getTime()) < 60000 &&
+    Math.abs(new Date(event.end.dateTime).getTime() - end.getTime()) < 60000
+  );
+
+  saveUser(guildId, {
+    discordUserId: member.id,
+    username: member.username,
+    displayName: member.displayName,
+    email: email ?? getUserEmail(guildId, member.id),
+  }).catch((err) => console.error("[shifts] Failed to save user:", err));
+
+  const line = signupAuditLine(member, { via: p.via, eventTitle: p.eventTitle });
+  let event: CalendarEvent;
+  let created = false;
+
+  if (existing) {
+    const signups = parseShiftSignups(existing.description || "");
+    if (signups.some((s) => s.discordUserId === member.id)) return { ok: false, reason: "already_signed_up", event: existing };
+    if (signups.length >= settings.maxSignupsPerSlot) return { ok: false, reason: "full", event: existing };
+    const description = appendToDescription(existing.description || "", line);
+    const update: any = { description };
+    if (email) update.attendees = dedupeAttendees([...(existing.attendees || []), { email }]);
+    if (isCancelledShiftEvent(existing)) update.summary = existing.summary!.replace(/^\[Cancelled\]\s*/, "");
+    await calendarWithInvites.updateEvent(settings.calendarId, existing.id!, update);
+    event = { ...existing, ...update };
+  } else {
+    const payload: any = {
+      summary: `Shift: ${formatTime(slot.start)}-${formatTime(slot.end)}`,
+      description: line,
+      location: "Commons Hub Brussels, Rue de la Madeleine 51, 1000 Brussels",
+      start: { dateTime: start.toISOString(), timeZone: settings.timezone },
+      end: { dateTime: end.toISOString(), timeZone: settings.timezone },
+    };
+    if (email) payload.attendees = [{ email }];
+    const createdEvent = await calendarWithInvites.createEventNoConflictCheck(settings.calendarId, payload);
+    event = { ...payload, id: createdEvent?.id };
+    created = true;
+  }
+
+  invalidateShiftCaches();
+
+  const nostrEventId = await publishShiftToNostr(
+    "signup",
+    guildId,
+    p.guildName || "Commons Hub Brussels",
+    { id: member.id, username: member.username, displayName: member.displayName, avatar: member.avatar },
+    start,
+    slot,
+    settings,
+  );
+  return { ok: true, event, created, nostrEventId };
+}
+
+/**
+ * After a sign-up: email the member a confirmation (when we know their email) and, if `dm` is
+ * given, DM them. Both carry the door link and a signed cancel link. Never throws.
+ */
+export async function notifyShiftSignup(p: {
+  guildId: string;
+  settings: ShiftsSettings;
+  member: ShiftMember;
+  email?: string;
+  start: Date;
+  end: Date;
+  calendarEventId?: string;
+  eventTitle?: string;
+  via: "discord" | "tablet";
+  dm?: (text: string) => Promise<unknown>;
+}): Promise<{ emailed: boolean; emailError?: string; dmSent: boolean; cancelUrl?: string; doorLink?: string | null }> {
+  const { settings, member, start, end } = p;
+  const hours = (end.getTime() - start.getTime()) / 3600000;
+  const reward = { amount: Number((hours * settings.rewardAmountPerHour).toFixed(2)), symbol: settings.rewardTokenSymbol };
+
+  const doorLink = await buildDoorLink({
+    name: member.displayName,
+    host: member.displayName,
+    reason: `Caretaking shift today from ${timeRange(start, end, settings.timezone)}`,
+    start,
+    end,
+  }).catch((error) => {
+    console.error("[shifts] door link failed:", error?.message || error);
+    return null;
+  });
+
+  let cancelUrl: string | undefined;
+  if (p.calendarEventId) {
+    cancelUrl = await buildCancelUrl({
+      calendarEventId: p.calendarEventId,
+      discordUserId: member.id,
+      exp: Math.floor(end.getTime() / 1000),
+    }).catch((error) => {
+      console.error("[shifts] cancel link failed:", error?.message || error);
+      return undefined;
+    });
+  }
+
+  const details = {
+    memberName: member.displayName,
+    email: p.email,
+    start,
+    end,
+    timezone: settings.timezone,
+    eventTitle: p.eventTitle,
+    reward,
+    doorLink,
+    cancelUrl,
+    calendarEventId: p.calendarEventId,
+    via: p.via,
+  };
+
+  let emailed = false;
+  let emailError: string | undefined;
+  if (p.email) {
+    try {
+      await sendShiftConfirmation(details);
+      emailed = true;
+    } catch (error: any) {
+      emailError = String(error?.message || error).slice(0, 160);
+      console.error("[shifts] confirmation email failed:", emailError);
+    }
+  }
+
+  let dmSent = false;
+  if (p.dm) {
+    try {
+      await p.dm(buildShiftDm(details));
+      dmSent = true;
+    } catch (error: any) {
+      console.error("[shifts] DM failed:", error?.message || error);
+    }
+  }
+
+  return { emailed, emailError, dmSent, cancelUrl, doorLink };
+}
+
+/** "Tuesday 7 October 2026 17:30-20:30" for #shifts logs, in the shifts timezone. */
+export function shiftLogWhen(start: Date, end: Date, timezone: string): string {
+  return `**${longDay(start, timezone)}** ${hhmm(start, timezone)}-${hhmm(end, timezone)}`;
 }
 
 async function buildRewardResultContent(

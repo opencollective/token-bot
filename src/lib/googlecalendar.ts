@@ -357,6 +357,19 @@ export class GoogleCalendarClient {
     }
   }
 
+  /** One event by id, or null when it doesn't exist (or was deleted). */
+  async getEvent(calendarId: string, eventId: string): Promise<CalendarEvent | null> {
+    try {
+      const response = await this.calendar.events.get({ calendarId, eventId });
+      const event = response.data as CalendarEvent & { status?: string };
+      return event.status === "cancelled" ? null : event;
+    } catch (error: any) {
+      const status = error?.code ?? error?.response?.status;
+      if (status === 404 || status === 410) return null;
+      throw new Error(`Failed to get event: ${error}`);
+    }
+  }
+
   async deleteEvent(calendarId: string, eventId: string): Promise<void> {
     try {
       await this.calendar.events.delete({
