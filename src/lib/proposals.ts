@@ -1,0 +1,557 @@
+/**
+ * Proposals from Elinor (via MCP): mint, shift sign-up, room booking.
+ *
+ * A propose_* call only creates a pending request and posts a Confirm/Cancel message, in the
+ * channel where Elinor was asked or by DM. Only the right person's click runs it, through the same
+ * code as /mint, /shifts and /book:
+ *   mint          → the confirmer must be allowed to mint (checked again on click) → executeMint
+ *   shift_signup  → the member themselves → signUpForShift + confirmation email, like /shifts
+ *   room_booking  → the member themselves → the /book flow, prefilled, at its payment step
+ * Requests expire after 24 hours. Every proposal and outcome is logged in the guild's log channel.
+ */
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
+  Client,
+  Guild,
+  GuildMember,
+  Message,
+  MessageFlags,
+  TextChannel,
+} from "discord.js";
+import { findTokenByInput, loadGuildFile, loadGuildSettings } from "./utils.ts";
+import { executeMint, formatAmount, formatMintResults, getMintableTokens, type Recipient } from "./mint.ts";
+import { hasTokenPermission } from "../commands/mint.ts";
+import { GoogleCalendarClient } from "./googlecalendar.ts";
+import { getUser, getUserEmail, saveUser } from "./user-emails.ts";
+import { hourlyRates, ratesFromPrices } from "./booking-email.ts";
+import { hhmm, longDay } from "./shift-email.ts";
+import {
+  type CalendarEvent,
+  isCancelledShiftEvent,
+  logShiftAction,
+  notifyShiftSignup,
+  parseShiftSignups,
+  type ShiftsSettings,
+  signUpForShift,
+} from "../commands/shifts.ts";
+import { startPrefilledBooking } from "../commands/book.ts";
+import {
+  countPendingFor,
+  createRequest,
+  findExpired,
+  getRequest,
+  type MintParams,
+  type PendingRequest,
+  publicStatus,
+  type RoomBookingParams,
+  type ShiftSignupParams,
+  transition,
+  updateRequest,
+} from "./pending-requests.ts";
+import type { Product } from "../types.ts";
+
+const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
+const MAX_PENDING_PER_CONFIRMER = 10;
+const MAX_HOURS = 12;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const BUTTON_PREFIX = "preq_";
+
+let client: Client | null = null;
+export function setProposalsClient(c: Client) {
+  client = c;
+}
+function requireClient(): Client {
+  if (!client) throw new Error("Discord client not ready");
+  return client;
+}
+
+// ── Small helpers ───────────────────────────────────────────────────────────
+
+const TZ = "Europe/Brussels";
+
+export function whenText(start: Date, end: Date, tz = TZ): string {
+  return `${longDay(start, tz)}, ${hhmm(start, tz)}–${hhmm(end, tz)}`;
+}
+
+function parseIso(value: unknown, name: string): Date {
+  if (typeof value !== "string" || !value) throw new Error(`${name} is required (ISO 8601)`);
+  const d = new Date(value);
+  if (isNaN(d.getTime())) throw new Error(`${name} is not a valid ISO 8601 date: ${value}`);
+  return d;
+}
+
+function checkSpan(start: Date, end: Date, now = new Date()) {
+  if (end <= start) throw new Error("end must be after start");
+  if (end.getTime() - start.getTime() > MAX_HOURS * 3600000) throw new Error(`Can't be longer than ${MAX_HOURS} hours`);
+  if (start.getTime() < now.getTime() - 5 * 60000) throw new Error("start is in the past");
+}
+
+async function getGuild(guildId: string): Promise<Guild> {
+  const guild = await requireClient().guilds.fetch(guildId).catch(() => null);
+  if (!guild) throw new Error(`Unknown guild ${guildId}`);
+  return guild;
+}
+
+async function getMember(guild: Guild, userId: string, role = "user"): Promise<GuildMember> {
+  const m = /^\d{5,25}$/.test(userId) ? await guild.members.fetch(userId).catch(() => null) : null;
+  if (!m) throw new Error(`Unknown ${role}: no member ${userId} in this server`);
+  if (m.user.bot) throw new Error(`${role} ${userId} is a bot`);
+  return m;
+}
+
+const nameOf = (m: GuildMember) => m.displayName || m.user.globalName || m.user.username;
+
+async function loadShiftsSettings(guildId: string): Promise<ShiftsSettings> {
+  const s = await loadGuildFile(guildId, "shifts-settings.json") as ShiftsSettings | null;
+  if (!s?.calendarId) throw new Error("Shifts are not configured for this server");
+  return s;
+}
+
+async function loadProducts(guildId: string): Promise<Product[]> {
+  return ((await loadGuildFile(guildId, "products.json")) as unknown as Product[] | null) ?? [];
+}
+
+/** Log channel: the guild's logs channel, else #shifts. */
+async function log(guildId: string, text: string) {
+  try {
+    const settings = await loadGuildSettings(guildId);
+    const channelId = settings?.channels?.logs || SHIFTS_LOG_CHANNEL_ID;
+    const channel = await requireClient().channels.fetch(channelId).catch(() => null);
+    if (channel?.isTextBased() && "send" in channel) {
+      await (channel as TextChannel).send({ content: text, allowedMentions: { parse: [] } });
+    }
+  } catch (error) {
+    console.error("[proposals] could not log:", error);
+  }
+}
+
+// ── Read tools ──────────────────────────────────────────────────────────────
+
+export async function listRooms(input: { guildId: string }) {
+  const products = await loadProducts(input.guildId);
+  return {
+    timezone: (await loadGuildSettings(input.guildId))?.guild?.timezone || TZ,
+    note: "Euro prices are per hour, excl. 21% VAT. Members pay with their own balance in the token they choose.",
+    rooms: products.filter((p) => p.type === "room" && p.calendarId).map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      capacity: p.capacity ?? null,
+      prices: p.price.map((x) => ({ token: x.token, amountPerHour: x.amount })),
+      summary: hourlyRates(ratesFromPrices(p.price)),
+    })),
+  };
+}
+
+export async function checkRoomAvailability(input: { guildId: string; room: string; start: string; end: string }) {
+  const start = parseIso(input.start, "start"), end = parseIso(input.end, "end");
+  if (end <= start) throw new Error("end must be after start");
+  const product = (await loadProducts(input.guildId)).find((p) => p.slug === input.room);
+  if (!product?.calendarId) throw new Error(`Unknown room "${input.room}". Use list_rooms for the slugs.`);
+  const events = await new GoogleCalendarClient().listEvents(product.calendarId, start, end) as CalendarEvent[];
+  const conflicts = events.filter((e) => e.start?.dateTime && new Date(e.start.dateTime) < end && new Date(e.end.dateTime) > start);
+  return {
+    room: product.slug,
+    available: conflicts.length === 0,
+    conflicts: conflicts.map((e) => ({ title: e.summary || "Busy", start: e.start.dateTime, end: e.end.dateTime })),
+  };
+}
+
+export async function listUpcomingShifts(input: { guildId: string; days?: number }) {
+  const settings = await loadShiftsSettings(input.guildId);
+  const days = Math.min(31, Math.max(1, input.days ?? 7));
+  const from = new Date(), to = new Date(Date.now() + days * 86400000);
+  const events = await new GoogleCalendarClient().listEvents(settings.calendarId, from, to) as CalendarEvent[];
+  return {
+    timezone: settings.timezone,
+    standardSlots: settings.slots,
+    maxSignupsPerSlot: settings.maxSignupsPerSlot,
+    reward: `${settings.rewardAmountPerHour} ${settings.rewardTokenSymbol} per hour`,
+    note: "Any start/end works for propose_shift_signup; only the standard slots are published on the community relays.",
+    shifts: events.filter((e) => e.id && e.start?.dateTime && !isCancelledShiftEvent(e)).map((e) => {
+      const signups = parseShiftSignups(e.description || "");
+      return {
+        eventId: e.id,
+        start: e.start.dateTime,
+        end: e.end.dateTime,
+        summary: e.summary || "",
+        spotsLeft: Math.max(0, settings.maxSignupsPerSlot - signups.length),
+        signups: signups.map((s) => ({
+          discordUserId: s.discordUserId,
+          displayName: (s.discordUserId && getUser(input.guildId, s.discordUserId)?.displayName) || s.username,
+        })),
+      };
+    }),
+  };
+}
+
+export async function getRequestStatus(input: { requestId: string }) {
+  const guildIds = client ? [...client.guilds.cache.keys()] : [];
+  const r = await getRequest(String(input.requestId), guildIds);
+  if (!r) throw new Error(`Unknown request ${input.requestId}`);
+  return publicStatus(r);
+}
+
+// ── Proposal tools ──────────────────────────────────────────────────────────
+
+type Common = { guildId: string; requestedBy: string; channelId?: string };
+
+async function guardPending(guildId: string, confirmerId: string) {
+  if (await countPendingFor(guildId, confirmerId) >= MAX_PENDING_PER_CONFIRMER) {
+    throw new Error(`<@${confirmerId}> already has ${MAX_PENDING_PER_CONFIRMER} pending requests; wait for them to be answered or to expire`);
+  }
+}
+
+export async function proposeMint(input: Common & {
+  confirmerUserId: string;
+  recipientUserIds: string[];
+  amount: number;
+  token?: string;
+  description?: string;
+}) {
+  const guild = await getGuild(input.guildId);
+  const settings = await loadGuildSettings(input.guildId);
+  const mintable = getMintableTokens(settings?.tokens ?? []);
+  if (mintable.length === 0) throw new Error("No mintable token is configured in this server");
+  const token = input.token ? findTokenByInput(mintable, input.token) : mintable.length === 1 ? mintable[0] : null;
+  if (!token) {
+    const available = mintable.map((t) => t.symbol).join(", ");
+    throw new Error(input.token ? `Unknown or non-mintable token "${input.token}". Mintable: ${available}` : `Several tokens are mintable; pass token (one of: ${available})`);
+  }
+  if (!(input.amount > 0) || !Number.isFinite(input.amount)) throw new Error("amount must be a positive number");
+
+  const confirmer = await getMember(guild, input.confirmerUserId, "confirmer");
+  if (!hasTokenPermission(confirmer, token.minterRoleId)) {
+    const role = token.minterRoleId ? `the <@&${token.minterRoleId}> role` : "admin permissions";
+    throw new Error(`${nameOf(confirmer)} can't mint ${token.symbol}: it needs ${role}. Ask someone who can mint to confirm.`);
+  }
+  const recipientIds = [...new Set(input.recipientUserIds.map(String))];
+  const recipients = await Promise.all(recipientIds.map((id) => getMember(guild, id, "recipient")));
+  await guardPending(input.guildId, confirmer.id);
+
+  const params: MintParams = { tokenSymbol: token.symbol, recipientIds: recipients.map((m) => m.id), amount: input.amount, description: input.description?.trim() || undefined };
+  const summary = `Mint **${formatAmount(input.amount)} ${token.symbol}**${recipients.length > 1 ? " each" : ""} for ${recipients.map((m) => `<@${m.id}>`).join(", ")}` +
+    (params.description ? `\n📝 ${params.description}` : "");
+  return await propose({ ...input, kind: "mint", confirmerId: confirmer.id, params, summary });
+}
+
+export async function proposeShiftSignup(input: Common & { userId: string; eventId?: string; start?: string; end?: string; email?: string }) {
+  const guild = await getGuild(input.guildId);
+  const member = await getMember(guild, input.userId, "member");
+  const settings = await loadShiftsSettings(input.guildId);
+
+  let start: Date, end: Date, existing: CalendarEvent | undefined;
+  if (input.eventId) {
+    const events = await new GoogleCalendarClient().listEvents(settings.calendarId, new Date(), new Date(Date.now() + 62 * 86400000)) as CalendarEvent[];
+    existing = events.find((e) => e.id === input.eventId);
+    if (!existing) throw new Error(`No upcoming shift with eventId ${input.eventId}. Use list_upcoming_shifts.`);
+    start = new Date(existing.start.dateTime);
+    end = new Date(existing.end.dateTime);
+  } else {
+    if (!input.start || !input.end) throw new Error("Pass eventId, or start and end");
+    start = parseIso(input.start, "start");
+    end = parseIso(input.end, "end");
+    const events = await new GoogleCalendarClient().listEvents(settings.calendarId, new Date(start.getTime() - 60000), new Date(end.getTime() + 60000)) as CalendarEvent[];
+    existing = events.find((e) => Math.abs(new Date(e.start.dateTime).getTime() - start.getTime()) < 60000 && Math.abs(new Date(e.end.dateTime).getTime() - end.getTime()) < 60000);
+  }
+  checkSpan(start, end);
+  if (existing && !isCancelledShiftEvent(existing)) {
+    const signups = parseShiftSignups(existing.description || "");
+    if (signups.some((s) => s.discordUserId === member.id)) throw new Error(`${nameOf(member)} is already signed up for this shift`);
+    if (signups.length >= settings.maxSignupsPerSlot) throw new Error("This shift is full");
+  }
+  const email = input.email?.trim().toLowerCase();
+  if (email && !EMAIL_RE.test(email)) throw new Error(`"${input.email}" is not a valid email`);
+  await guardPending(input.guildId, member.id);
+
+  const hours = (end.getTime() - start.getTime()) / 3600000;
+  const reward = Number((hours * settings.rewardAmountPerHour).toFixed(2));
+  const params: ShiftSignupParams = { start: start.toISOString(), end: end.toISOString(), calendarEventId: existing?.id, email };
+  const summary = `Sign <@${member.id}> up for a caretaking shift on **${whenText(start, end, settings.timezone)}**\n🪙 Reward: ${reward} ${settings.rewardTokenSymbol}` +
+    (email ? `\n📧 Confirmation email to ${email}` : getUserEmail(input.guildId, member.id) ? "" : "\n📧 No email on file: no confirmation email");
+  return await propose({ ...input, kind: "shift_signup", confirmerId: member.id, params, summary });
+}
+
+export async function proposeRoomBooking(input: Common & {
+  userId: string;
+  room: string;
+  start: string;
+  end: string;
+  title: string;
+  guestName?: string;
+  guestEmail?: string;
+}) {
+  const guild = await getGuild(input.guildId);
+  const member = await getMember(guild, input.userId, "member");
+  const product = (await loadProducts(input.guildId)).find((p) => p.slug === input.room);
+  if (!product?.calendarId) throw new Error(`Unknown room "${input.room}". Use list_rooms for the slugs.`);
+  const start = parseIso(input.start, "start"), end = parseIso(input.end, "end");
+  checkSpan(start, end);
+  const minutes = Math.round((end.getTime() - start.getTime()) / 60000);
+  if (minutes % 15 !== 0) throw new Error("Bookings go by 15 minutes: adjust start or end");
+
+  const guestEmail = input.guestEmail?.trim().toLowerCase();
+  const guestName = input.guestName?.trim();
+  if (guestEmail && !EMAIL_RE.test(guestEmail)) throw new Error(`"${input.guestEmail}" is not a valid email`);
+  if (guestEmail && !guestName) throw new Error("guestName is required with guestEmail");
+  if (guestName && !guestEmail) throw new Error("guestEmail is required to book for a guest");
+
+  const availability = await checkRoomAvailability({ guildId: input.guildId, room: input.room, start: input.start, end: input.end });
+  if (!availability.available) {
+    throw new Error(`${product.name} is not free then: ${availability.conflicts.map((c) => `${c.title} ${c.start}–${c.end}`).join("; ")}`);
+  }
+  await guardPending(input.guildId, member.id);
+
+  const tz = (await loadGuildSettings(input.guildId))?.guild?.timezone || TZ;
+  const hours = minutes / 60;
+  const prices = product.price.map((p) => `${Number((p.amount * hours).toFixed(2))} ${p.token}`).join(" or ");
+  const params: RoomBookingParams = {
+    room: product.slug,
+    roomName: product.name,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    title: input.title.trim().slice(0, 100),
+    ...(guestEmail ? { guestName, guestEmail } : {}),
+  };
+  const summary = `Book **${product.name}** on **${whenText(start, end, tz)}** for “${params.title}”` +
+    (guestEmail ? `\n👤 For ${guestName} (${guestEmail})` : "") +
+    `\n💰 ${prices}${product.price.some((p) => /^eur/i.test(p.token)) ? " (euro prices + VAT)" : ""}: you choose and pay in the next step`;
+  return await propose({ ...input, kind: "room_booking", confirmerId: member.id, params, summary });
+}
+
+// ── Creating and delivering a request ───────────────────────────────────────
+
+const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking" } as const;
+
+function buttons(id: string, kind: PendingRequest["kind"]) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}confirm:${id}`).setLabel(kind === "room_booking" ? "Confirm, then pay" : "Confirm").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}cancel:${id}`).setLabel("Cancel").setStyle(ButtonStyle.Secondary),
+  );
+}
+
+export function promptText(r: Pick<PendingRequest, "kind" | "confirmerId" | "summary" | "expiresAt" | "requestedBy">): string {
+  const expires = Math.floor(new Date(r.expiresAt).getTime() / 1000);
+  return `🤖 **Elinor proposes a ${KIND_LABEL[r.kind]}** for <@${r.confirmerId}> to confirm\n\n${r.summary}\n\n` +
+    `-# Asked by ${r.requestedBy.slice(0, 200)} · only <@${r.confirmerId}> can confirm · expires <t:${expires}:R>`;
+}
+
+async function propose(input: Common & { kind: PendingRequest["kind"]; confirmerId: string; params: PendingRequest["params"]; summary: string }) {
+  const request = await createRequest({
+    kind: input.kind,
+    guildId: input.guildId,
+    requestedBy: String(input.requestedBy || "elinor").slice(0, 300),
+    confirmerId: input.confirmerId,
+    params: input.params,
+    summary: input.summary,
+  });
+  const content = promptText(request);
+  const row = buttons(request.id, request.kind);
+  const c = requireClient();
+
+  let message: Message | null = null;
+  let dm = false;
+  if (input.channelId) {
+    const channel = await c.channels.fetch(input.channelId).catch(() => null);
+    if (channel && "guildId" in channel && channel.guildId === input.guildId && channel.isTextBased() && "send" in channel) {
+      message = await (channel as TextChannel).send({ content, components: [row], allowedMentions: { users: [request.confirmerId] } }).catch((e) => {
+        console.error("[proposals] could not post in channel:", e?.message || e);
+        return null;
+      });
+    }
+  }
+  if (!message) {
+    const user = await c.users.fetch(request.confirmerId).catch(() => null);
+    message = user ? await user.send({ content, components: [row] }).catch(() => null) : null;
+    dm = !!message;
+  }
+
+  if (!message) {
+    await updateRequest(request.guildId, request.id, (r) => {
+      r.status = "failed";
+      r.decidedAt = new Date().toISOString();
+      r.error = "Could not deliver the confirmation: no usable channel and DMs are closed";
+    });
+    await log(request.guildId, `🤖 Elinor proposed a ${KIND_LABEL[request.kind]} for <@${request.confirmerId}> but it couldn't be delivered (${request.id})`);
+    throw new Error(`Couldn't reach <@${request.confirmerId}>: pass a channelId the bot can post in, or ask them to open their DMs`);
+  }
+
+  const url = dm
+    ? `https://discord.com/channels/@me/${message.channelId}/${message.id}`
+    : `https://discord.com/channels/${request.guildId}/${message.channelId}/${message.id}`;
+  await updateRequest(request.guildId, request.id, (r) => {
+    r.message = { channelId: message!.channelId, messageId: message!.id, dm, url };
+  });
+  await log(
+    request.guildId,
+    `🤖 Elinor proposed a ${KIND_LABEL[request.kind]} (${request.id}), asked by ${request.requestedBy.slice(0, 120)}, for <@${request.confirmerId}> to confirm ${dm ? "by DM" : `in <#${message.channelId}>`}:\n${request.summary}`,
+  );
+  return { ...publicStatus({ ...request, message: { channelId: message.channelId, messageId: message.id, dm, url } }), deliveredBy: dm ? "dm" : "channel" };
+}
+
+// ── Buttons ─────────────────────────────────────────────────────────────────
+
+async function closePrompt(r: PendingRequest, footer: string) {
+  if (!r.message) return;
+  try {
+    const channel = await requireClient().channels.fetch(r.message.channelId);
+    if (channel?.isTextBased()) {
+      const msg = await channel.messages.fetch(r.message.messageId);
+      await msg.edit({ content: `${r.summary}\n\n${footer}`, components: [], allowedMentions: { parse: [] } });
+    }
+  } catch (error) {
+    console.error("[proposals] could not update the prompt:", error);
+  }
+}
+
+export async function handleProposalButton(interaction: ButtonInteraction): Promise<void> {
+  const [action, id] = interaction.customId.slice(BUTTON_PREFIX.length).split(":");
+  const guildIds = [...interaction.client.guilds.cache.keys()];
+  const r = await getRequest(id, interaction.guildId ? [interaction.guildId, ...guildIds] : guildIds);
+
+  if (!r) {
+    await interaction.reply({ content: "⚠️ This request no longer exists.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (interaction.user.id !== r.confirmerId) {
+    await interaction.reply({ content: `Only <@${r.confirmerId}> can confirm or cancel this.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+    return;
+  }
+  if (r.status !== "pending" || Date.now() > new Date(r.expiresAt).getTime()) {
+    if (r.status === "pending") await transition(r.guildId, r.id, "expired");
+    await interaction.update({ content: `${r.summary}\n\n⌛ This request is ${r.status === "pending" ? "expired" : r.status}.`, components: [] });
+    return;
+  }
+
+  if (action === "cancel") {
+    if (!await transition(r.guildId, r.id, "cancelled", interaction.user.id)) return;
+    await interaction.update({ content: `${r.summary}\n\n❌ Cancelled by <@${interaction.user.id}>.`, components: [], allowedMentions: { parse: [] } });
+    await log(r.guildId, `🤖 ❌ <@${interaction.user.id}> cancelled Elinor's ${KIND_LABEL[r.kind]} request (${r.id})`);
+    return;
+  }
+  if (action !== "confirm") return;
+
+  if (r.kind === "room_booking") return await confirmRoomBooking(interaction, r);
+
+  const claimed = await transition(r.guildId, r.id, "confirmed", interaction.user.id);
+  if (!claimed) return;
+  await interaction.update({ content: `${r.summary}\n\n⏳ Confirmed by <@${interaction.user.id}>, working on it…`, components: [], allowedMentions: { parse: [] } });
+
+  try {
+    const outcome = r.kind === "mint" ? await runMint(r, interaction) : await runShiftSignup(r, interaction);
+    await updateRequest(r.guildId, r.id, (x) => {
+      x.status = outcome.ok ? "confirmed" : "failed";
+      x.result = outcome.result;
+      if (!outcome.ok) x.error = outcome.text;
+    });
+    await interaction.editReply({ content: `${r.summary}\n\n${outcome.text}`, components: [], allowedMentions: { parse: [] } });
+    await log(r.guildId, `🤖 ${outcome.ok ? "✅" : "⚠️"} <@${interaction.user.id}> confirmed Elinor's ${KIND_LABEL[r.kind]} request (${r.id}): ${outcome.ok ? "done" : outcome.text.slice(0, 300)}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await updateRequest(r.guildId, r.id, (x) => {
+      x.status = "failed";
+      x.error = message;
+    });
+    await interaction.editReply({ content: `${r.summary}\n\n❌ Failed: ${message}`, components: [] }).catch(() => {});
+    await log(r.guildId, `🤖 ❌ Elinor's ${KIND_LABEL[r.kind]} request (${r.id}) failed after confirmation: ${message.slice(0, 300)}`);
+  }
+}
+
+type Outcome = { ok: boolean; text: string; result?: unknown };
+
+/** Same as /mint: the clicker must be allowed to mint this token right now. */
+async function runMint(r: PendingRequest, interaction: ButtonInteraction): Promise<Outcome> {
+  const p = r.params as MintParams;
+  const guild = await getGuild(r.guildId);
+  const member = await getMember(guild, interaction.user.id, "confirmer");
+  const settings = await loadGuildSettings(r.guildId);
+  const token = getMintableTokens(settings?.tokens ?? []).find((t) => t.symbol === p.tokenSymbol);
+  if (!settings || !token) return { ok: false, text: `❌ ${p.tokenSymbol} is no longer mintable here.` };
+  if (!hasTokenPermission(member, token.minterRoleId)) return { ok: false, text: `❌ You no longer have permission to mint ${token.symbol}.` };
+
+  const recipients: Recipient[] = p.recipientIds.map((id) => ({ type: "discord", id, label: `<@${id}>`, accountId: `discord:${id}` }));
+  const results = await executeMint({
+    client: interaction.client,
+    guildSettings: settings,
+    token,
+    recipients,
+    amount: p.amount,
+    description: p.description,
+    minterId: member.id,
+    source: { via: "elinor", messageUrl: r.message?.url },
+  });
+  const ok = results.some((x) => x.success);
+  return {
+    ok,
+    text: formatMintResults(results, token, p.amount, p.description),
+    result: results.map((x) => ({ userId: x.recipient.id, success: x.success, txHash: x.hash ?? null, error: x.error ?? null })),
+  };
+}
+
+/** Same as /shifts: the member signs themselves up. */
+async function runShiftSignup(r: PendingRequest, interaction: ButtonInteraction): Promise<Outcome> {
+  const p = r.params as ShiftSignupParams;
+  const guild = await getGuild(r.guildId);
+  const gm = await getMember(guild, interaction.user.id, "member");
+  const settings = await loadShiftsSettings(r.guildId);
+  const start = new Date(p.start), end = new Date(p.end);
+  if (end.getTime() < Date.now()) return { ok: false, text: "❌ This shift is already over." };
+
+  if (p.email) {
+    await saveUser(r.guildId, { discordUserId: gm.id, username: gm.user.username, displayName: nameOf(gm), email: p.email });
+  }
+  const email = p.email ?? getUserEmail(r.guildId, gm.id);
+  const member = { id: gm.id, username: gm.user.username, displayName: nameOf(gm), avatar: gm.displayAvatarURL({ size: 256, extension: "png" }) };
+  const result = await signUpForShift({ guildId: r.guildId, guildName: guild.name, settings, member, email, start, end });
+  if (!result.ok) {
+    return { ok: false, text: result.reason === "full" ? "⚠️ This shift is full now." : "⚠️ You're already signed up for this shift." };
+  }
+  const notified = await notifyShiftSignup({ settings, member, email, start, end, calendarEventId: result.event.id });
+  await logShiftAction(`📋 <@${gm.id}> signed up for a shift on **${whenText(start, end, settings.timezone)}** (proposed by Elinor)`);
+  const mail = notified.emailed ? `\n📨 Confirmation email sent to ${email}.` : email ? `\n⚠️ The confirmation email could not be sent.` : "";
+  return {
+    ok: true,
+    text: `✅ You're on shift: **${whenText(start, end, settings.timezone)}**. Thank you for taking care of the hub! 🙏${mail}`,
+    result: { calendarEventId: result.event.id, emailed: notified.emailed, nostrEventId: result.nostrEventId },
+  };
+}
+
+/** The member continues in the regular /book flow (payment choice, balance check, booking). */
+async function confirmRoomBooking(interaction: ButtonInteraction, r: PendingRequest) {
+  const p = r.params as RoomBookingParams;
+  const claimed = await transition(r.guildId, r.id, "handed_off", interaction.user.id);
+  if (!claimed) return;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await updateRequest(r.guildId, r.id, (x) => {
+    x.result = { note: "Continued in /book at the payment step; the booking is made when the member confirms the payment there." };
+  });
+  await closePrompt(r, `➡️ Confirmed by <@${interaction.user.id}>: continuing in /book to pay.`);
+  await startPrefilledBooking(interaction, interaction.user.id, r.guildId, {
+    productSlug: p.room,
+    start: new Date(p.start),
+    end: new Date(p.end),
+    name: p.title,
+    guest: p.guestEmail && p.guestName ? { name: p.guestName, email: p.guestEmail } : undefined,
+    timezone: (await loadGuildSettings(r.guildId))?.guild?.timezone || TZ,
+  });
+  await log(r.guildId, `🤖 ➡️ <@${interaction.user.id}> confirmed Elinor's room booking request (${r.id}) and continues in /book to pay`);
+}
+
+// ── Expiry ──────────────────────────────────────────────────────────────────
+
+export async function expireDueRequests(now = new Date()) {
+  if (!client) return;
+  for (const r of await findExpired([...client.guilds.cache.keys()], now)) {
+    if (!await transition(r.guildId, r.id, "expired", undefined, now)) continue;
+    await closePrompt(r, "⌛ Expired: nobody confirmed within 24 hours.");
+    await log(r.guildId, `🤖 ⌛ Elinor's ${KIND_LABEL[r.kind]} request (${r.id}) for <@${r.confirmerId}> expired`);
+  }
+}
+
+export function startProposalExpiry(c: Client, everyMs = 5 * 60 * 1000) {
+  setProposalsClient(c);
+  expireDueRequests().catch((e) => console.error("[proposals] expiry failed:", e));
+  return setInterval(() => expireDueRequests().catch((e) => console.error("[proposals] expiry failed:", e)), everyMs);
+}

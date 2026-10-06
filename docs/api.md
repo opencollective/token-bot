@@ -300,3 +300,35 @@ if (data.success) {
   // Show generic error: data.error
 }
 ```
+
+## MCP server (Elinor)
+
+`POST /mcp` is an MCP server over Streamable HTTP. It answers JSON-RPC 2.0 with `application/json`, batches allowed. Notifications get `202`, and `GET`/`DELETE /mcp` return `405` because there is no server stream. Supported protocol versions: `2025-06-18`, `2025-03-26`, `2024-11-05`.
+
+**Auth:** `Authorization: Bearer <ELINOR_MCP_TOKEN>`, the token dedicated to Elinor. `API_KEY` is also accepted. Set `ELINOR_MCP_TOKEN` in the bot's environment only.
+
+### Read tools
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `check_user_permissions` | `guildId`, `userId` | What the user may do: issue tokens, book rooms, shifts |
+| `list_rooms` | `guildId` | Rooms with slug, capacity and hourly prices; euro prices are excl. VAT |
+| `check_room_availability` | `guildId`, `room`, `start`, `end` | `available` and overlapping bookings |
+| `list_upcoming_shifts` | `guildId`, `days?` (1–31, default 7) | Shifts with sign-ups and spots left, standard slots, capacity, reward, timezone |
+| `get_request_status` | `requestId` | The status of a proposal, below |
+
+### Proposal tools
+
+These never act directly. Each one validates the request, creates a pending request, and posts a message with **Confirm** and **Cancel** buttons. The message goes to `channelId` if given and in the same server, otherwise to the confirmer by DM. Only the confirmer's click runs it, through the same code as the slash commands:
+
+| Tool | Who confirms | On Confirm |
+|---|---|---|
+| `propose_mint` (`confirmerUserId`, `recipientUserIds`, `amount`, `token?`, `description?`) | `confirmerUserId`, who must be able to mint the token; checked when proposing and again on click | Same as `/mint`, with the confirmer as minter |
+| `propose_shift_signup` (`userId`, `eventId` or `start`+`end`, `email?`) | The member | Same as `/shifts`: calendar, nostr for standard slots, #shifts log, confirmation email |
+| `propose_room_booking` (`userId`, `room`, `start`, `end`, `title`, `guestName?`, `guestEmail?`) | The member | Opens `/book` prefilled at the payment step; the member picks how to pay and confirms there |
+
+All take `guildId`, `requestedBy` (free text for the audit log) and optional `channelId`. They return the request status.
+
+**Statuses:** `pending`, `confirmed`, `cancelled`, `expired` (no answer within 24 hours), `failed` (confirmed but execution failed; see `error`), `handed_off` (a room booking continued in `/book`).
+
+Every proposal and outcome is logged in the server's logs channel. A confirmer can have at most 10 pending requests. Requests are stored in `DATA_DIR/<guildId>/pending-requests.json` and survive restarts.
