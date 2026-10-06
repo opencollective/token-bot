@@ -65,11 +65,12 @@ import {
   MINT_CONTEXT_MODAL_ID,
 } from "./commands/mint-context.ts";
 import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
+import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalExpiry } from "./lib/proposals.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
 import handleSendCommand, { handleSendAutocomplete, handleSendInteraction, sendStates } from "./commands/send.ts";
 import handleBalanceCommand from "./commands/balance.ts";
-import { handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
+import { bookStates, handleBookButton, handleBookCommand, handleBookModal, handleBookSelect } from "./commands/book.ts";
 import { handleCancelButton, handleCancelCommand, handleCancelSelect } from "./commands/cancel.ts";
 import { handleBookingsButton, handleBookingsCommand, handleBookingsModal, handleBookingsSelect } from "./commands/bookings.ts";
 import { handleShiftsButton, handleShiftsCommand, handleShiftsModal, handleShiftsSelect } from "./commands/shifts.ts";
@@ -367,6 +368,9 @@ client.on(Events.ClientReady, async (readyClient) => {
   // Warm token stats cache on startup
   warmTokenStatsCache().catch(err => console.error("Token stats cache warm failed:", err));
 
+  // Elinor's proposals: Confirm/Cancel buttons and 24 h expiry
+  startProposalExpiry(client);
+
   // Make sure the :mint: emoji exists in every guild with a mintable token
   ensureMintEmojis(client).catch(err => console.error("Mint emoji setup failed:", err));
 
@@ -389,7 +393,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
   console.log(`[interaction] ${what} by ${interaction.user?.username} age=${receivedAt - interaction.createdTimestamp}ms`);
   try {
     const userId = interaction.user.id;
-    const guildId = interaction.guildId;
+
+    // Elinor's proposals can be confirmed in a channel or by DM.
+    if (interaction.isButton() && interaction.customId.startsWith(PROPOSAL_PREFIX)) {
+      return await handleProposalButton(interaction);
+    }
+
+    // A room booking confirmed by DM continues the /book flow there, for the guild it was made in.
+    let guildId = interaction.guildId;
+    if (!guildId && "customId" in interaction && String(interaction.customId).startsWith("book_")) {
+      guildId = bookStates.get(userId)?.guildId ?? null;
+    }
 
     if (!guildId) {
       if (interaction.isRepliable()) {
@@ -1542,7 +1556,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isModalSubmit()) return;
 
   const userId = interaction.user.id;
-  const guildId = interaction.guildId!;
+  // A /book flow continued by DM (Elinor proposal) keeps its guild in the booking state.
+  const guildId = interaction.guildId ?? (interaction.customId.startsWith("book_") ? bookStates.get(userId)?.guildId : undefined)!;
 
   // Handle book modals
   if (interaction.customId === "book_name_modal" || interaction.customId === "book_date_modal" || interaction.customId === "book_guest_modal" || interaction.customId === "book_my_email_modal") {

@@ -250,6 +250,44 @@ async function getCachedAddress(discordUserId: string): Promise<string> {
 
 export const bookStates = new Map<string, BookState>();
 
+/** The guild of a /book interaction; for a booking continued in DMs (Elinor proposals), the one it was made for. */
+function guildOf(interaction: Interaction, guildId: string) {
+  return interaction.guild ?? interaction.client.guilds.cache.get(guildId) ?? null;
+}
+
+/**
+ * Start /book prefilled (room, date, time, duration, event name, optional guest) and continue at
+ * the payment step, as if the member had filled the earlier steps themselves. The click on the
+ * payment / confirm buttons that follows is the regular /book flow, with its checks.
+ * The interaction must already be acknowledged (deferUpdate).
+ */
+export async function startPrefilledBooking(
+  interaction: Interaction,
+  userId: string,
+  guildId: string,
+  prefill: { productSlug: string; start: Date; end: Date; name: string; guest?: { name: string; email: string }; timezone?: string },
+): Promise<void> {
+  const tz = prefill.timezone || "Europe/Brussels";
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(prefill.start).map((p) => [p.type, p.value]),
+  );
+  // /book builds times from selectedDate + selectedHour/Minute in the server's local time (the hub's timezone).
+  const selectedDate = new Date(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+  bookStates.set(userId, {
+    step: "payment",
+    guildId,
+    productSlug: prefill.productSlug,
+    selectedDate,
+    selectedHour: Number(parts.hour),
+    selectedMinute: Number(parts.minute),
+    duration: Math.round((prefill.end.getTime() - prefill.start.getTime()) / 60000),
+    name: prefill.name.slice(0, 100),
+    ...(prefill.guest ? { bookedFor: { kind: "guest" as const, name: prefill.guest.name, email: prefill.guest.email } } : {}),
+  });
+  await showPaymentSelection(interaction, userId, guildId);
+}
+
 // Helper function to format duration for display
 function formatDuration(minutes: number): string {
   if (minutes < 60) {
@@ -1846,9 +1884,10 @@ ${mintInstructions}`,
       const txUrl = `${explorerBaseUrl}/tx/${txHash}`;
 
       let transactionMessageLink = "";
-      if (guildSettings.channels?.transactions && interaction.guild) {
+      const guild = guildOf(interaction, guildId);
+      if (guildSettings.channels?.transactions && guild) {
         try {
-          const transactionsChannel = await interaction.guild.channels.fetch(
+          const transactionsChannel = await guild.channels.fetch(
             guildSettings.channels.transactions,
           ) as TextChannel;
 
@@ -1926,9 +1965,9 @@ Booking Chain: ${tokenConfig.chain}`;
         console.error("Error sending Nostr annotation:", error);
       }
 
-      if (product.channelId && interaction.guild) {
+      if (product.channelId && guild) {
         try {
-          const roomChannel = await interaction.guild.channels.fetch(
+          const roomChannel = await guild.channels.fetch(
             product.channelId,
           ) as TextChannel;
 
@@ -2237,9 +2276,10 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   const whenList = booked.map((o) => `${formatDiscordDate(o.start)} ${formatDiscordTime(o.start)}–${formatDiscordTime(o.end)}`).join(", ");
   const announcement = `🗓️ <@${userId}> booked ${product.name}${state.bookedFor ? ` for ${forLabel(state)}` : ""} on ${booked.length} date${booked.length > 1 ? "s" : ""} (${whenList}) for ${total.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`;
   for (const channelId of [guildSettings.channels?.transactions, product.channelId]) {
-    if (!channelId || !interaction.guild || booked.length === 0) continue;
+    const guild = guildOf(interaction, guildId);
+    if (!channelId || !guild || booked.length === 0) continue;
     try {
-      const channel = await interaction.guild.channels.fetch(channelId) as TextChannel;
+      const channel = await guild.channels.fetch(channelId) as TextChannel;
       await channel?.send(announcement);
     } catch (error) {
       console.error(`Error sending booking message to channel ${channelId}:`, error);

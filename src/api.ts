@@ -14,6 +14,15 @@ import { Client, GuildMember, PermissionsBitField, TextChannel } from "discord.j
 import { disabledCalendars } from "./lib/calendar-state.ts";
 import { buildUserPermissionReport } from "./lib/permissions.ts";
 import { handleMcpRequest, UserPermissionsToolInput } from "./mcp/server.ts";
+import {
+  checkRoomAvailability,
+  getRequestStatus,
+  listRooms,
+  listUpcomingShifts,
+  proposeMint,
+  proposeRoomBooking,
+  proposeShiftSignup,
+} from "./lib/proposals.ts";
 
 const API_KEY = Deno.env.get("API_KEY");
 const API_PORT = parseInt(Deno.env.get("API_PORT") || "3000");
@@ -99,6 +108,25 @@ function checkAuth(req: Request): Response | null {
     return error("Unauthorized", 401);
   }
   return null;
+}
+
+/**
+ * /mcp accepts ELINOR_MCP_TOKEN (the token dedicated to Elinor) or API_KEY. Constant-time compare.
+ * Returns the caller ("elinor" | "api") or an error response.
+ */
+function checkMcpAuth(req: Request): { caller: string } | Response {
+  const auth = req.headers.get("Authorization") || "";
+  const given = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const tokens: [string, string | undefined][] = [["elinor", Deno.env.get("ELINOR_MCP_TOKEN")], ["api", API_KEY]];
+  if (!tokens.some(([, t]) => t)) return error("ELINOR_MCP_TOKEN / API_KEY not configured", 500);
+  for (const [caller, token] of tokens) {
+    if (token && given.length === token.length) {
+      let diff = 0;
+      for (let i = 0; i < token.length; i++) diff |= token.charCodeAt(i) ^ given.charCodeAt(i);
+      if (diff === 0) return { caller };
+    }
+  }
+  return error("Unauthorized", 401);
 }
 
 // Store Discord client reference
@@ -524,9 +552,22 @@ async function handleRequest(req: Request): Promise<Response> {
   } else if (path === "/api/permissions" && req.method === "GET") {
     response = await handlePermissionsCheck(req);
   } else if (path === "/mcp" && req.method === "POST") {
-    const authError = checkAuth(req);
-    response = authError || await handleMcpRequest(req, {
+    const auth = checkMcpAuth(req);
+    response = auth instanceof Response ? auth : await handleMcpRequest(req, {
       checkUserPermissions: executeUserPermissionsTool,
+      listRooms: (a) => listRooms(a as { guildId: string }),
+      checkRoomAvailability: (a) => checkRoomAvailability(a as { guildId: string; room: string; start: string; end: string }),
+      listUpcomingShifts: (a) => listUpcomingShifts(a as { guildId: string; days?: number }),
+      proposeMint: (a) => proposeMint(a as Parameters<typeof proposeMint>[0]),
+      proposeShiftSignup: (a) => proposeShiftSignup(a as Parameters<typeof proposeShiftSignup>[0]),
+      proposeRoomBooking: (a) => proposeRoomBooking(a as Parameters<typeof proposeRoomBooking>[0]),
+      getRequestStatus: (a) => getRequestStatus(a as { requestId: string }),
+    });
+  } else if (path === "/mcp") {
+    // Streamable HTTP: no server-initiated stream and no sessions to delete.
+    response = new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { "Content-Type": "application/json", Allow: "POST" },
     });
   } else {
     response = error("Not found", 404);
@@ -555,7 +596,7 @@ export function startApiServer() {
   console.log(`   POST /api/book/availability`);
   console.log(`   GET  /api/rooms?guildId=...`);
   console.log(`   GET  /api/permissions?guildId=...&userId=...`);
-  console.log(`   POST /mcp`);
+  console.log(`   POST /mcp  (MCP, Streamable HTTP; Bearer ELINOR_MCP_TOKEN or API_KEY)`);
 
   Deno.serve({ port: API_PORT }, handleRequest);
 }

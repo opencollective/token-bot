@@ -29,7 +29,7 @@ import { hhmm, sendShiftConfirmation } from "../lib/shift-email.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
 
-async function logShiftAction(message: string) {
+export async function logShiftAction(message: string) {
   try {
     const discord = Discord.getInstance();
     await discord?.postToDiscordChannel(message, SHIFTS_LOG_CHANNEL_ID);

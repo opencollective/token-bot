@@ -93,7 +93,7 @@ export function buildMessageUrl(guildId: string, channelId: string, messageId: s
 }
 
 export type MintSource = {
-  via: "command" | "context-menu" | "reaction";
+  via: "command" | "context-menu" | "reaction" | "elinor";
   messageUrl?: string;
 };
 
