@@ -14,7 +14,6 @@ import { Client, GuildMember, PermissionsBitField, TextChannel } from "discord.j
 import { disabledCalendars } from "./lib/calendar-state.ts";
 import { buildUserPermissionReport } from "./lib/permissions.ts";
 import { handleMcpRequest, UserPermissionsToolInput } from "./mcp/server.ts";
-import { handleShiftsApi } from "./lib/shifts-api.ts";
 
 const API_KEY = Deno.env.get("API_KEY");
 const API_PORT = parseInt(Deno.env.get("API_PORT") || "3000");
@@ -524,14 +523,6 @@ async function handleRequest(req: Request): Promise<Response> {
     response = await handleListRooms(req);
   } else if (path === "/api/permissions" && req.method === "GET") {
     response = await handlePermissionsCheck(req);
-  } else if (path === "/api/shifts" || path.startsWith("/api/shifts/") || path === "/api/members") {
-    const authError = checkAuth(req);
-    try {
-      response = authError || (await handleShiftsApi(req, url, discordClient)) || error("Not found", 404);
-    } catch (err) {
-      console.error(`[api] ${req.method} ${path} failed:`, err);
-      response = error(`Internal error: ${(err as Error)?.message || err}`.slice(0, 300), 500);
-    }
   } else if (path === "/mcp" && req.method === "POST") {
     const authError = checkAuth(req);
     response = authError || await handleMcpRequest(req, {
@@ -564,11 +555,6 @@ export function startApiServer() {
   console.log(`   POST /api/book/availability`);
   console.log(`   GET  /api/rooms?guildId=...`);
   console.log(`   GET  /api/permissions?guildId=...&userId=...`);
-  console.log(`   GET  /api/shifts?guildId=...&from=...&to=...`);
-  console.log(`   GET  /api/members?guildId=...&q=...`);
-  console.log(`   POST /api/shifts/signup`);
-  console.log(`   POST /api/shifts/cancel`);
-  console.log(`   POST /api/shifts/email-preview`);
   console.log(`   POST /mcp`);
 
   Deno.serve({ port: API_PORT }, handleRequest);
