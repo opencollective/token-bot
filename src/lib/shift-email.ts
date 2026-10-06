@@ -1,6 +1,5 @@
 /**
- * Confirmation for a caretaking shift sign-up: an email (with an .ics) and a Discord DM.
- * Sent after every sign-up, from /shifts or from the community tablet.
+ * Confirmation email (with an .ics) for a caretaking shift sign-up made with /shifts.
  */
 import { buildIcs, HUB } from "./booking-email.ts";
 import { getEnv } from "./utils.ts";
@@ -14,15 +13,10 @@ export interface ShiftConfirmation {
   start: Date;
   end: Date;
   timezone?: string;
-  /** The event they steward, if any. */
-  eventTitle?: string;
   reward: { amount: number; symbol: string };
   doorLink?: string | null;
-  cancelUrl?: string;
   /** Google Calendar event id, so the .ics matches the calendar entry. */
   calendarEventId?: string;
-  /** Who signed them up: themselves on Discord, or someone at the community tablet. */
-  via?: "discord" | "tablet";
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -57,9 +51,7 @@ export function buildShiftEmail(d: ShiftConfirmation): { subject: string; html: 
   const where = `${HUB.address} (right in front of Brussels Central Station)`;
   const reward = `${rewardText(d.reward)}, to claim after the shift as usual`;
 
-  const intro = d.via === "tablet"
-    ? `Someone signed you up for a caretaking shift at the community tablet in the hub. Thank you for taking care of the Commons Hub!`
-    : `You signed up for a caretaking shift. Thank you for taking care of the Commons Hub!`;
+  const intro = `You signed up for a caretaking shift. Thank you for taking care of the Commons Hub!`;
   const why = [
     `The Commons Hub only exists because members take care of it. Shifts are how we keep this common space open, tidy and welcoming.`,
     `On shift, you're the host: greet people as they arrive, show them around, and make them feel at home. Many people discover the hub during an event, and "we never have the opportunity to make a good first impression twice".`,
@@ -67,9 +59,7 @@ export function buildShiftEmail(d: ShiftConfirmation): { subject: string; html: 
   ];
   const practical = `Everything practical (opening and closing, the door, the kitchen, the fridge…) is in the Commons Hub Handbook.`;
   const questions = `Questions? Ask Elinor on Discord, or post in #shifts.`;
-  const cantMake = d.cancelUrl
-    ? `Can't make it${d.via === "tablet" ? ", or it wasn't you" : ""}? Cancel with the link below, or with /shifts on Discord.`
-    : `Can't make it? Cancel with /shifts on Discord.`;
+  const cantMake = `Can't make it? Cancel with /shifts on Discord.`;
 
   const doorNotes = [
     `Tap the button when you are at the door: it opens the door for you.`,
@@ -95,7 +85,6 @@ export function buildShiftEmail(d: ShiftConfirmation): { subject: string; html: 
     <tr><td style="padding:16px 18px;font-size:15px">
       <div><strong>When:</strong> ${esc(when)}</div>
       <div><strong>Where:</strong> ${esc(where)}</div>
-      ${d.eventTitle ? `<div><strong>You steward:</strong> ${esc(d.eventTitle)}</div>` : ""}
       <div><strong>Reward:</strong> ${esc(reward)}</div>
     </td></tr>
   </table>
@@ -115,7 +104,6 @@ ${d.doorLink ? `
   <h2 style="font-size:17px;margin:28px 0 6px">Questions, or can't make it?</h2>
   <p style="margin:0 0 8px">Questions? Ask Elinor on Discord, or post in <a href="${SHIFTS_CHANNEL_URL}" style="color:#b83500">#shifts</a>.</p>
   <p style="margin:0 0 8px">${esc(cantMake)}</p>
-  ${d.cancelUrl ? `<p style="margin:12px 0 0">${button(d.cancelUrl, "Cancel this shift", "#5d625e", "#c9c2bf")}</p>` : ""}
 </td></tr>
 <tr><td style="padding:24px 28px 28px;font-size:13px;color:#5d625e;border-top:1px solid #eaded9">
   ${HUB.name} · ${esc(HUB.address)} · <a href="${HUB.website}" style="color:#5d625e">commonshub.brussels</a>
@@ -130,7 +118,6 @@ ${d.doorLink ? `
     "",
     `When: ${when}`,
     `Where: ${where}`,
-    ...(d.eventTitle ? [`You steward: ${d.eventTitle}`] : []),
     `Reward: ${reward}`,
     "The calendar file is attached.",
     ...(d.doorLink ? ["", "GETTING IN", `Open the door: ${d.doorLink}`, ...doorNotes.map((n) => `- ${n}`)] : []),
@@ -145,7 +132,6 @@ ${d.doorLink ? `
     "QUESTIONS, OR CAN'T MAKE IT?",
     questions,
     cantMake,
-    ...(d.cancelUrl ? [`Cancel: ${d.cancelUrl}`] : []),
     "",
     `${HUB.name} · ${HUB.address} · ${HUB.website}`,
   ].join("\n");
@@ -162,12 +148,10 @@ export async function sendShiftConfirmation(d: ShiftConfirmation): Promise<{ id:
     uid: d.calendarEventId ? `${d.calendarEventId}@commonshub.brussels` : `shift-${d.start.getTime()}@commonshub.brussels`,
     start: d.start,
     end: d.end,
-    summary: `Caretaking shift${d.eventTitle ? `: ${d.eventTitle}` : ""} (Commons Hub Brussels)`,
+    summary: "Caretaking shift (Commons Hub Brussels)",
     description: [
-      d.eventTitle ? `You steward: ${d.eventTitle}` : "",
       `Handbook: ${HANDBOOK_URL}`,
       d.doorLink ? `Open the door: ${d.doorLink}` : "",
-      d.cancelUrl ? `Cancel: ${d.cancelUrl}` : "",
     ].filter(Boolean).join("\n"),
     location: `${HUB.name}, ${HUB.address}`,
   }]);
@@ -191,23 +175,4 @@ export async function sendShiftConfirmation(d: ShiftConfirmation): Promise<{ id:
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Resend ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
   return { id: (body as { id?: string }).id || "" };
-}
-
-/** The Discord DM after a sign-up made at the tablet. */
-export function buildShiftDm(d: ShiftConfirmation): string {
-  const tz = d.timezone || "Europe/Brussels";
-  const lines = [
-    `📋 **You're on shift: ${longDay(d.start, tz)}, ${hhmm(d.start, tz)}–${hhmm(d.end, tz)}** at the Commons Hub${d.via === "tablet" ? " (signed up at the community tablet)" : ""}.`,
-    ...(d.eventTitle ? [`🎪 You steward: **${d.eventTitle}**`] : []),
-    `🪙 Reward: ${rewardText(d.reward)}, to claim after the shift as usual.`,
-    ...(d.doorLink ? [`🚪 Open the door: <${d.doorLink}>`] : []),
-    `📖 Handbook: <${HANDBOOK_URL}>`,
-    ...(d.cancelUrl ? [`\nNot you, or can't make it? Cancel: <${d.cancelUrl}>`] : []),
-  ];
-  return lines.join("\n");
-}
-
-/** The Discord DM after a cancellation from the cancel link. */
-export function buildShiftCancelledDm(start: Date, end: Date, tz = "Europe/Brussels"): string {
-  return `❌ Your shift on **${longDay(start, tz)}, ${hhmm(start, tz)}–${hhmm(end, tz)}** at the Commons Hub was cancelled.`;
 }
