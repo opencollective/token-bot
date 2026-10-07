@@ -26,6 +26,7 @@ import { Nostr, URI } from "../lib/nostr.ts";
 import { type DiscordMember, ShiftsNostr, type ShiftsNostrSettings, dayString } from "../lib/shifts-nostr.ts";
 import { buildDoorLink, timeRange } from "../lib/door-link.ts";
 import { hhmm, sendShiftConfirmation } from "../lib/shift-email.ts";
+import { withCategory } from "../lib/tx-categories.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
 
@@ -456,7 +457,7 @@ export function buildShiftNostrAnnotations(params: ShiftRewardNostrAnnotationPar
     .map(r => ({
       uri: `ethereum:${chainId}:tx:${r.hash}` as URI,
       content: `Issued ${r.amount} ${token.symbol} to ${r.username} for a ${formatDurationHours(durationHours)} shift on ${shiftDate} at ${shiftTime}`,
-      tags: [["t", "shift"]],
+      tags: [["t", "shift"], ["category", "shift"]],
     }));
 }
 
@@ -2129,7 +2130,7 @@ async function buildRewardResultContent(
         try {
           const transactionsChannel = (await interaction.client.channels.fetch(message.channelId)) as TextChannel;
           if (transactionsChannel) {
-            await transactionsChannel.send(message.content);
+            await transactionsChannel.send(withCategory(message.content, { chain: token.chain, tokenSymbol: token.symbol, category: "shift" }));
           }
         } catch (error) {
           console.error("Error sending shift reward message to transactions channel:", error);

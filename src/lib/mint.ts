@@ -1,6 +1,7 @@
 // Shared mint execution used by /mint, the "Mint tokens" message context menu
 // and the :mint: emoji reaction handler.
 import { Client, Message, TextChannel } from "discord.js";
+import { withCategory } from "./tx-categories.ts";
 import { parseUnits } from "@wevm/viem";
 import { ChainConfig, mintTokens, parseInsufficientGasError, SupportedChain } from "./blockchain.ts";
 import { Nostr, URI } from "./nostr.ts";
@@ -202,7 +203,7 @@ export async function executeMint(opts: ExecuteMintOptions): Promise<MintResult[
         let message = lines.join("\n");
         if (description) message += `\n📝 ${description}`;
         if (source?.messageUrl) message += `\n🔗 [context](<${source.messageUrl}>)`;
-        await channel.send(message);
+        await channel.send(withCategory(message, { chain: token.chain, tokenSymbol: token.symbol }));
       }
     } catch (error) {
       console.error("Error sending message to transactions channel:", error);

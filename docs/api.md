@@ -326,6 +326,7 @@ These never act directly. Each one validates the request, creates a pending requ
 | `propose_mint` (`requesterUserId`, `recipientUserIds`, `amount`, `token?`, `description?`, `confirmerUserId?`) | Only members can request. If the requester can mint the token, only they can confirm. Otherwise any minter can approve: the minter role is pinged, or up to 5 admins if there is no role, and this needs a channel. A named `confirmerUserId` must be a minter. The requester can always cancel. | Same as `/mint`, with the clicking minter as minter and the requester as "requested by" |
 | `propose_shift_signup` (`userId`, `eventId` or `start`+`end`, `email?`) | The member | Same as `/shifts`: calendar, nostr for standard slots, #shifts log, confirmation email |
 | `propose_room_booking` (`userId`, `room`, `start`, `end`, `title`, `guestName?`, `guestEmail?`) | The member | Opens `/book` prefilled at the payment step; the member picks how to pay and confirms there |
+| `propose_transaction_category` (`requesterUserId`, `tx`, `chain?`, `category`) | The requesting steward | Publishes the category change signed by their key, the same as the dropdown on transaction reports |
 
 All take `guildId`, `requestedBy` (free text for the audit log), and optional `channelId` and `replyToMessageId`. They return the request status.
 
@@ -336,3 +337,31 @@ Every proposal and outcome is logged in the server's logs channel. A requester c
 ## Room rules
 
 `products.json` can set `bookableFrom: "HH:MM"`, in the hub's timezone, on a room: bookings can't start earlier. The coworking space has `"bookableFrom": "19:00"`, the same as the website's `rooms.json`. The rule is enforced in `/book`, where earlier start times aren't offered and are rejected if they come in anyway, in `POST /api/book/execute`, and in the MCP tools. The message is "The coworking space can only be booked from 7pm."
+
+## Transaction categories
+
+Every transaction report the bot posts in a transactions channel ends with `🏷️ Category: <label>` and a dropdown. This covers mints, sends, burns, bookings and shift rewards. Bookings start as `rental`, shift rewards as `shift`, and everything else as `none`.
+
+**Who:** admins, the token's minters, and anyone with a role named "… steward". Others get an ephemeral "Only stewards can change the category."
+
+**Categories:** CHT uses governance, cleaning, shift, note-taking, admin, care, rental and none. Euro tokens (EURb, EURchb) use chb's `settings/categories.json`. The dropdown shows 24 common ones plus none; the MCP tool accepts all of them.
+
+**On change:** the bot publishes a kind 1111 annotation per transaction in the message, signed by the steward's own key, to the community relays. It copies the newest existing annotation (description and tags) and replaces only the category:
+
+```json
+{
+  "kind": 1111,
+  "pubkey": "<the steward's key>",
+  "content": "Booking Mush Room room for 1h",
+  "tags": [
+    ["i", "ethereum:42220:tx:0x…"],
+    ["k", "ethereum:tx"],
+    ["t", "booking"], ["t", "mushroom"],
+    ["category", "governance"]
+  ]
+}
+```
+
+`none` removes the category tag. The report is then edited to `🏷️ Category: Governance · set by @steward`, and the change is logged in the logs channel.
+
+**Stewards' keys:** members don't hold Nostr keys. The bot derives one per member, `sha256("token-bot:shift-member:<guildId>:<discordUserId>:<bot secret hex>")`; it is deterministic and never stored, and the shifts RSVPs already use it. The bot attests the key with kind 31926: `d` = `discord:<id>`, `p` = the key, and `role` = `member` and `steward`, plus the guild tags. A profile (kind 0) names it.

@@ -69,6 +69,8 @@ export interface DiscordMember {
   username: string;
   displayName: string;
   avatar?: string;
+  /** Community roles to attest with the key ("member", "steward"), read by chb to trust it. */
+  roles?: string[];
 }
 
 // ── pure helpers ───────────────────────────────────────────────────────────
@@ -191,7 +193,12 @@ export function buildAttestation(member: DiscordMember, keys: string[], communit
   return {
     kind: KIND_ATTESTATION,
     created_at: nowSeconds(now),
-    tags: [["d", `discord:${member.id}`], ...unique.map((k) => ["p", k]), ...baseTags(community, botPubkey)],
+    tags: [
+      ["d", `discord:${member.id}`],
+      ...unique.map((k) => ["p", k]),
+      ...[...new Set(member.roles ?? [])].map((r) => ["role", r]),
+      ...baseTags(community, botPubkey),
+    ],
     content: JSON.stringify({ name: member.displayName }),
   };
 }
@@ -465,20 +472,30 @@ export class ShiftsNostr {
    */
   async ensureMemberIdentity(member: DiscordMember): Promise<{ secretKey: Uint8Array; pubkey: string }> {
     const key = await this.memberKey(member);
-    const marker = `member:${member.id}:${member.displayName}`;
+    const roles = [...new Set(member.roles ?? [])].sort();
+    const marker = `member:${member.id}:${member.displayName}:${roles.join(",")}`;
     if (this.ensured.has(marker)) return key;
     const [attestations, profiles] = await Promise.all([
       this.query({ kinds: [KIND_ATTESTATION], authors: [this.botPubkey], "#d": [`discord:${member.id}`] }),
       this.query({ kinds: [KIND_PROFILE], authors: [key.pubkey] }),
     ]);
     const known = parseAttestations(attestations, [this.botPubkey])[0];
-    if (!known || !known.keys.includes(key.pubkey) || known.name !== member.displayName) {
+    const rolesMissing = roles.some((r) => !known?.roles.includes(r));
+    if (!known || !known.keys.includes(key.pubkey) || known.name !== member.displayName || rolesMissing) {
       const keys = [...new Set([...(known?.keys ?? []), key.pubkey])];
-      await this.publish(buildAttestation(member, keys, this.community, this.botPubkey));
+      // Keep roles attested before (attestations are a complete list each time).
+      const allRoles = [...new Set([...(known?.roles ?? []), ...roles])];
+      await this.publish(buildAttestation({ ...member, roles: allRoles }, keys, this.community, this.botPubkey));
     }
     if (profiles.length === 0) await this.publish(buildProfile(member), key.secretKey);
     this.ensured.add(marker);
     return key;
+  }
+
+  /** Sign an event with the member's derived key (attesting it first) and publish it to the community relays. */
+  async publishAsMember(member: DiscordMember, template: EventTemplate): Promise<{ event: Event; pubkey: string }> {
+    const key = await this.ensureMemberIdentity(member);
+    return { event: await this.publish(template, key.secretKey), pubkey: key.pubkey };
   }
 
   /** Sign up or cancel: publish the member's RSVP (and whatever it depends on). */

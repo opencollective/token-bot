@@ -18,6 +18,8 @@ export interface McpToolDefinition {
   name: string;
   description: string;
   inputSchema: JsonObject;
+  /** MCP tool annotations (hints for clients). */
+  annotations?: JsonObject;
 }
 
 export interface UserPermissionsToolInput {
@@ -35,6 +37,7 @@ export interface McpToolExecutors {
   proposeShiftSignup?(input: JsonObject): Promise<unknown>;
   proposeRoomBooking?(input: JsonObject): Promise<unknown>;
   getRequestStatus?(input: JsonObject): Promise<unknown>;
+  proposeTransactionCategory?(input: JsonObject): Promise<unknown>;
 }
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -185,6 +188,29 @@ const TOOLS: ToolSpec[] = [
     },
   },
   {
+    executor: "proposeTransactionCategory",
+    definition: {
+      name: "propose_transaction_category",
+      description:
+        "Propose changing a transaction's category. Stewards only. Creates a pending request only, posted as a reply in the channel/thread: the requesting steward clicks Confirm, and the change is published as a Nostr annotation signed with their own key (keeping the transaction's description). Token categories: governance, cleaning, shift, note-taking, admin, care, rental, none. Euro categories: chb's (rental, membership, donation, rent, utilities…).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          guildId: GUILD_ID,
+          requesterUserId: str("Discord user ID of the steward asking (OpenClaw sender.id). They confirm, and the change is signed with their key."),
+          tx: str("Transaction hash (0x…, on `chain`) or full URI, e.g. ethereum:42220:tx:0x…"),
+          chain: str("Chain of a bare hash: celo (CHT, default) or gnosis (EURb, EURchb)."),
+          category: str("Category slug."),
+          requestedBy: REQUESTED_BY,
+          channelId: CHANNEL_ID,
+          replyToMessageId: REPLY_TO,
+        },
+        required: ["guildId", "requesterUserId", "tx", "category", "requestedBy"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
     executor: "getRequestStatus",
     definition: {
       name: "get_request_status",
@@ -201,8 +227,18 @@ const TOOLS: ToolSpec[] = [
 ];
 
 /** Tools to list: all of them, or only those with an executor when executors are given. */
+const READ_ONLY = { readOnlyHint: true, openWorldHint: false };
+/** Proposals change nothing by themselves (a person's Confirm click does), but they post in Discord. */
+const PROPOSAL = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+
 export function getMcpTools(executors?: McpToolExecutors): McpToolDefinition[] {
-  return TOOLS.filter((t) => !executors || typeof executors[t.executor] === "function").map((t) => t.definition);
+  return TOOLS.filter((t) => !executors || typeof executors[t.executor] === "function").map((t) => ({
+    ...t.definition,
+    annotations: {
+      title: t.definition.name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()),
+      ...(t.definition.name.startsWith("propose_") ? PROPOSAL : READ_ONLY),
+    },
+  }));
 }
 
 function asObject(value: unknown): JsonObject | null {

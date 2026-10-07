@@ -23,6 +23,7 @@ import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
 import { fetchRoomImage, hourlyRates, ratesFromPrices, sendBookingConfirmation } from "../lib/booking-email.ts";
 import { bookableFromMessage, startTimeAllowed } from "../lib/room-rules.ts";
 import { calendarPaidLine, publishBookingAnnotation } from "../lib/booking-annotations.ts";
+import { withCategory } from "../lib/tx-categories.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -1909,11 +1910,12 @@ ${mintInstructions}`,
             const startTimeStr = formatDiscordTime(state.startTime);
             const endTimeStr = formatDiscordTime(state.endTime);
 
-            const message = await transactionsChannel.send(
+            const message = await transactionsChannel.send(withCategory(
               `🗓️ <@${userId}> booked ${product.name}${state.bookedFor ? ` for ${forLabel(state)}` : ""} on ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
                 priceAmount.toFixed(2)
               } ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
-            );
+              { chain: tokenConfig.chain, tokenSymbol, category: "rental" },
+            ));
 
             transactionMessageLink =
               `https://discord.com/channels/${guildId}/${guildSettings.channels.transactions}/${message.id}`;
@@ -2284,7 +2286,12 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     if (!channelId || !guild || booked.length === 0) continue;
     try {
       const channel = await guild.channels.fetch(channelId) as TextChannel;
-      await channel?.send(announcement);
+      // The category dropdown goes on the transactions channel's report only.
+      await channel?.send(
+        channelId === guildSettings.channels?.transactions
+          ? withCategory(announcement, { chain: tokenConfig.chain, tokenSymbol, category: "rental" })
+          : announcement,
+      );
     } catch (error) {
       console.error(`Error sending booking message to channel ${channelId}:`, error);
     }

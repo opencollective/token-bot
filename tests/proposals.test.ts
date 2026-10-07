@@ -15,7 +15,7 @@ import {
   REQUEST_TTL_MS,
   transition,
 } from "../src/lib/pending-requests.ts";
-import { handleProposalButton, MEMBER_ROLE_BY_GUILD, promptText, proposeMint, proposeRoomBooking, setProposalsClient, whenText } from "../src/lib/proposals.ts";
+import { handleProposalButton, MEMBER_ROLE_BY_GUILD, promptText, proposeMint, proposeRoomBooking, proposeTransactionCategory, setProposalsClient, whenText } from "../src/lib/proposals.ts";
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -36,6 +36,7 @@ const ALL_EXECUTORS = {
   proposeShiftSignup: noop,
   proposeRoomBooking: noop,
   getRequestStatus: noop,
+  proposeTransactionCategory: noop,
 };
 
 // ── MCP server ──────────────────────────────────────────────────────────────
@@ -43,7 +44,7 @@ const ALL_EXECUTORS = {
 Deno.test("MCP lists every tool when executors exist, only those with an executor otherwise", () => {
   expect(getMcpTools(ALL_EXECUTORS).map((t) => t.name)).toEqual([
     "check_user_permissions", "list_rooms", "check_room_availability", "list_upcoming_shifts",
-    "propose_mint", "propose_shift_signup", "propose_room_booking", "get_request_status",
+    "propose_mint", "propose_shift_signup", "propose_room_booking", "propose_transaction_category", "get_request_status",
   ]);
   expect(getMcpTools({ checkUserPermissions: noop }).map((t) => t.name)).toEqual(["check_user_permissions"]);
 });
@@ -171,7 +172,12 @@ function fakeMember(id: string, opts: { roles?: string[]; admin?: boolean; bot?:
     id,
     displayName: `user${id}`,
     user: { id, username: `user${id}`, globalName: null, bot: !!opts.bot },
-    roles: { cache: new Set(opts.roles ?? []) },
+    roles: {
+      cache: {
+        has: (r: string) => (opts.roles ?? []).includes(r),
+        some: (fn: (r: { id: string; name: string }) => boolean) => (opts.roles ?? []).map((r) => ({ id: r, name: r })).some(fn),
+      },
+    },
     permissions: { has: () => !!opts.admin },
   };
 }
@@ -402,4 +408,17 @@ Deno.test("propose_mint by a minter in a thread the bot can't use: DM fallback, 
   const res = await proposeMint({ ...memberAsk, requesterUserId: "2000000001", channelId: "thread-locked" });
   expect(res.deliveredBy).toBe("dm");
   expect(res.deliveryNote).toContain("Sent by DM instead of the channel");
+});
+
+Deno.test("propose_transaction_category: stewards only; known categories only", async () => {
+  fakeClient();
+  const base = { guildId: GUILD, tx: "0xfab8c02fe66ddc201402ced431bbb9d1b871fbd7892eca8730654ac9b5262e98", category: "governance", requestedBy: "elinor", channelId: "chan-1" };
+  await expect(proposeTransactionCategory({ ...base, requesterUserId: "2000000002" })).rejects.toThrow("Only stewards can change the category.");
+  await expect(proposeTransactionCategory({ ...base, requesterUserId: "2000000001", category: "parties" })).rejects.toThrow('Unknown category "parties"');
+});
+
+Deno.test("MCP: read tools are read-only, proposals are flagged as acting in Discord", () => {
+  const tools = getMcpTools(ALL_EXECUTORS);
+  expect(tools.find((t) => t.name === "list_rooms")!.annotations).toMatchObject({ readOnlyHint: true });
+  expect(tools.find((t) => t.name === "propose_transaction_category")!.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true, title: "Propose transaction category" });
 });
