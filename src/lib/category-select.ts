@@ -5,22 +5,14 @@
 import { GuildMember, MessageFlags, StringSelectMenuInteraction, TextChannel } from "discord.js";
 import { loadGuildSettings } from "./utils.ts";
 import { setTransactionCategory } from "./category-annotations.ts";
-import {
-  categoryLine,
-  categoryMenu,
-  findCategory,
-  isSteward,
-  parseCategorySelectId,
-  replaceCategoryLine,
-  txHashesIn,
-  txUriFor,
-} from "./tx-categories.ts";
+import { communityRoles, isSteward } from "./community-roles.ts";
+import { categoryLine, categoryMenu, findCategory, parseCategorySelectId, replaceCategoryLine, txHashesIn, txUriFor } from "./tx-categories.ts";
 
 export const ONLY_STEWARDS = "Only stewards can change the category.";
 
-export async function stewardCheck(member: GuildMember, guildId: string): Promise<boolean> {
-  const settings = await loadGuildSettings(guildId);
-  return isSteward(member, (settings?.tokens ?? []).map((t) => t.minterRoleId));
+/** Stewards: a Discord role whose name contains "steward" (see community-roles.ts). */
+export function stewardCheck(member: GuildMember, _guildId?: string): Promise<boolean> {
+  return Promise.resolve(isSteward(member));
 }
 
 export async function logCategoryChange(client: StringSelectMenuInteraction["client"], guildId: string, text: string) {
@@ -69,6 +61,7 @@ export async function handleCategorySelect(interaction: StringSelectMenuInteract
         username: member.user.username,
         displayName: member.displayName || member.user.username,
         avatar: member.displayAvatarURL({ size: 256, extension: "png" }),
+        roles: communityRoles(member, guildId),
       },
       uris: hashes.map((h) => txUriFor(parsed.chain, h)),
       category: category.slug,

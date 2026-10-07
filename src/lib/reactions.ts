@@ -118,7 +118,7 @@ type PendingAction = {
   sourceMessageUrl: string;
   reaction: MessageReaction;
   promptMessage?: Message;
-  timer: number;
+  timer: ReturnType<typeof setTimeout>;
 };
 
 export const pendingActions = new Map<string, PendingAction>();

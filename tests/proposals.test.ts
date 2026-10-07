@@ -191,7 +191,7 @@ function fakeClient() {
   }
   const sent: { where: string; content: string; components?: unknown[] }[] = [];
   const members = new Map([
-    ["2000000001", fakeMember("2000000001", { roles: [MINTER_ROLE, MEMBER_ROLE] })], // steward
+    ["2000000001", fakeMember("2000000001", { roles: [MINTER_ROLE, MEMBER_ROLE, "Token steward"] })], // minter + steward
     ["2000000002", fakeMember("2000000002", { roles: [MEMBER_ROLE] })], // member
     ["2000000003", fakeMember("2000000003", { roles: [MEMBER_ROLE] })],
     ["2000000004", fakeMember("2000000004")], // not a member

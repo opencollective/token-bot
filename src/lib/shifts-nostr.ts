@@ -69,7 +69,10 @@ export interface DiscordMember {
   username: string;
   displayName: string;
   avatar?: string;
-  /** Community roles to attest with the key ("member", "steward"), read by chb to trust it. */
+  /**
+   * Community roles to attest with the key ("member", "steward"), read by chb to trust it.
+   * Given: the complete list (a role missing is revoked). Undefined: keep what was attested.
+   */
   roles?: string[];
 }
 
@@ -472,20 +475,20 @@ export class ShiftsNostr {
    */
   async ensureMemberIdentity(member: DiscordMember): Promise<{ secretKey: Uint8Array; pubkey: string }> {
     const key = await this.memberKey(member);
-    const roles = [...new Set(member.roles ?? [])].sort();
-    const marker = `member:${member.id}:${member.displayName}:${roles.join(",")}`;
+    const roles = member.roles ? [...new Set(member.roles)].sort() : undefined;
+    const marker = `member:${member.id}:${member.displayName}:${roles?.join(",") ?? "*"}`;
     if (this.ensured.has(marker)) return key;
     const [attestations, profiles] = await Promise.all([
       this.query({ kinds: [KIND_ATTESTATION], authors: [this.botPubkey], "#d": [`discord:${member.id}`] }),
       this.query({ kinds: [KIND_PROFILE], authors: [key.pubkey] }),
     ]);
     const known = parseAttestations(attestations, [this.botPubkey])[0];
-    const rolesMissing = roles.some((r) => !known?.roles.includes(r));
-    if (!known || !known.keys.includes(key.pubkey) || known.name !== member.displayName || rolesMissing) {
+    const knownRoles = [...(known?.roles ?? [])].sort();
+    const rolesChanged = roles !== undefined && roles.join(",") !== knownRoles.join(",");
+    if (!known || !known.keys.includes(key.pubkey) || known.name !== member.displayName || rolesChanged) {
       const keys = [...new Set([...(known?.keys ?? []), key.pubkey])];
-      // Keep roles attested before (attestations are a complete list each time).
-      const allRoles = [...new Set([...(known?.roles ?? []), ...roles])];
-      await this.publish(buildAttestation({ ...member, roles: allRoles }, keys, this.community, this.botPubkey));
+      // Attestations are a complete list each time: given roles replace, otherwise keep the attested ones.
+      await this.publish(buildAttestation({ ...member, roles: roles ?? knownRoles }, keys, this.community, this.botPubkey));
     }
     if (profiles.length === 0) await this.publish(buildProfile(member), key.secretKey);
     this.ensured.add(marker);

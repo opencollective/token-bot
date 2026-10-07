@@ -4,18 +4,14 @@
  * The lists come from chb's public categories file (CHB_CATEGORIES_URL, default
  * https://commonshub.brussels/opendata/latest/categories.json), refreshed hourly, with the copies
  * below as fallback:
- * - token (CHT) categories: chb's "contributions" group, plus "rental" for room bookings paid in tokens;
- * - euro-token (EURb, EURchb…) categories: every other chb category, plus "none".
+ * - token (CHT) categories: chb's "contributions" group, plus "rental" (room bookings paid in tokens),
+ *   "other" (a steward's deliberate choice) and "uncategorized" (the default);
+ * - euro-token (EURb, EURchb…) categories: every other chb category, including other and uncategorized.
+ * "none" (used before Oct 2026) is read as "uncategorized".
  * The Discord dropdown shows at most 25 options, so for euros it offers the common ones; the MCP
  * tool accepts all of them.
  */
-import {
-  ActionRowBuilder,
-  GuildMember,
-  PermissionsBitField,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
-} from "discord.js";
+import { ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from "discord.js";
 import { ChainConfig, type SupportedChain } from "./blockchain.ts";
 
 export type Category = { slug: string; label: string };
@@ -29,8 +25,13 @@ export const TOKEN_CATEGORIES: Category[] = [
   { slug: "admin", label: "Admin" },
   { slug: "care", label: "Care" },
   { slug: "rental", label: "Room rental" },
-  { slug: "none", label: "None" },
+  { slug: "other", label: "Other" },
+  { slug: "uncategorized", label: "Uncategorized" },
 ];
+
+/** The starting category of a report, and what "none" (older reports and annotations) means. */
+export const DEFAULT_CATEGORY = "uncategorized";
+const normalize = (slug: string) => (slug.trim().toLowerCase() === "none" ? DEFAULT_CATEGORY : slug.trim());
 
 /** Fallback copy of chb's euro categories (Oct 2026). */
 export const EURO_CATEGORIES: Category[] = [
@@ -46,14 +47,14 @@ export const EURO_CATEGORIES: Category[] = [
   ["exceptional", "Exceptional items"], ["other-expense", "Other expense"], ["expense", "Expense reimbursement"],
   ["debt", "Vouchers and debts"], ["loan", "Loans"], ["internal_transfer", "Internal transfer"],
   ["opening_balance", "Opening balance"], ["accrual", "Previous-year invoices"], ["refund", "Refund"],
-  ["none", "None"],
+  ["other", "Other"], ["uncategorized", "Uncategorized"],
 ].map(([slug, label]) => ({ slug, label }));
 
 /** The euro categories offered in the Discord dropdown (max 25). */
 const EURO_MENU = [
   "rental", "coworking", "membership", "donation", "ticket", "catering", "fridge", "drinks", "coffee",
   "other-income", "rent", "utilities", "maintenance", "supplies", "equipment", "events", "services",
-  "expense", "refund", "internal_transfer", "debt", "exceptional", "other-expense", "none",
+  "expense", "refund", "internal_transfer", "debt", "exceptional", "other-expense", "other", "uncategorized",
 ];
 
 export const isEuroToken = (symbol: string) => /^eur/i.test(symbol);
@@ -73,13 +74,14 @@ export function listsFromChb(json: unknown): { token: Category[]; euro: Category
   const all = raw
     .filter((c) => typeof c.slug === "string" && c.slug)
     .map((c) => ({ slug: c.slug as string, label: typeof c.label === "string" && c.label ? c.label : c.slug as string, group: c.group }));
-  const token = all.filter((c) => c.group === "contributions");
-  if (all.length < 5 || token.length === 0) return null;
-  const rental = all.find((c) => c.slug === "rental");
-  const none = token.find((c) => c.slug === "none") ?? { slug: "none", label: "None" };
+  const usable = all.filter((c) => c.slug !== "none");
+  const token = usable.filter((c) => c.group === "contributions");
+  if (usable.length < 5 || token.length === 0) return null;
+  const find = (slug: string, label: string) => usable.find((c) => c.slug === slug) ?? { slug, label };
+  const tail = [find("other", "Other"), find("uncategorized", "Uncategorized")];
   const strip = ({ slug, label }: Category) => ({ slug, label });
-  const tokenList = [...token.filter((c) => c.slug !== "none"), ...(rental ? [rental] : []), none].map(strip);
-  const euroList = [...all.filter((c) => c.group !== "contributions"), none].map(strip);
+  const tokenList = [...token, find("rental", "Room rental"), ...tail].map(strip);
+  const euroList = [...usable.filter((c) => c.group !== "contributions" && !["other", "uncategorized"].includes(c.slug)), ...tail].map(strip);
   return { token: tokenList, euro: euroList };
 }
 
@@ -119,22 +121,16 @@ export function categoriesFor(tokenSymbol: string): Category[] {
 
 export function findCategory(tokenSymbol: string | undefined, slug: string): Category | undefined {
   const pool = tokenSymbol ? categoriesFor(tokenSymbol) : [...lists.token, ...lists.euro];
-  return pool.find((c) => c.slug.toLowerCase() === slug.trim().toLowerCase());
+  const wanted = normalize(slug).toLowerCase();
+  return pool.find((c) => c.slug.toLowerCase() === wanted);
 }
 
 export function categoryLabel(slug: string | undefined, tokenSymbol?: string): string {
-  if (!slug) return "None";
-  return findCategory(tokenSymbol, slug)?.label ?? slug;
+  const s = normalize(slug || DEFAULT_CATEGORY);
+  return findCategory(tokenSymbol, s)?.label ?? s;
 }
 
-// ── Stewards ────────────────────────────────────────────────────────────────
-
-/** Who may change categories: admins, the token's minters, and anyone with a "… steward" role. */
-export function isSteward(member: GuildMember, minterRoleIds: (string | undefined)[] = []): boolean {
-  if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
-  if (minterRoleIds.some((id) => id && member.roles.cache.has(id))) return true;
-  return member.roles.cache.some((r) => /\bsteward\b/i.test(r.name));
-}
+export { isSteward } from "./community-roles.ts";
 
 // ── The dropdown on transaction reports ─────────────────────────────────────
 
@@ -156,7 +152,8 @@ export function categoryLine(slug: string | undefined, tokenSymbol: string, setB
   return `🏷️ Category: ${categoryLabel(slug, tokenSymbol)}${setBy ? ` · set by <@${setBy}>` : ""}`;
 }
 
-export function categoryMenu(chain: string, tokenSymbol: string, current?: string) {
+export function categoryMenu(chain: string, tokenSymbol: string, currentSlug?: string) {
+  const current = normalize(currentSlug || DEFAULT_CATEGORY);
   const slugs = isEuroToken(tokenSymbol) ? EURO_MENU : lists.token.map((c) => c.slug);
   const options = slugs.map((s) => findCategory(tokenSymbol, s)!).filter(Boolean);
   if (current && !options.some((c) => c.slug === current)) options.unshift({ slug: current, label: categoryLabel(current, tokenSymbol) });
@@ -165,7 +162,7 @@ export function categoryMenu(chain: string, tokenSymbol: string, current?: strin
       .setCustomId(categorySelectId(chain, tokenSymbol))
       .setPlaceholder("Change the category (stewards)")
       .addOptions(options.slice(0, 25).map((c) =>
-        new StringSelectMenuOptionBuilder().setLabel(c.label).setValue(c.slug).setDefault(c.slug === (current ?? "none"))
+        new StringSelectMenuOptionBuilder().setLabel(c.label).setValue(c.slug).setDefault(c.slug === current)
       )),
   );
 }
