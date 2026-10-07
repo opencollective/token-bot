@@ -505,10 +505,16 @@
       "group": "contributions"
     },
     {
-      "slug": "none",
-      "label": "None",
+      "slug": "other",
+      "label": "Other",
       "direction": "both",
-      "group": "contributions"
+      "group": "other"
+    },
+    {
+      "slug": "uncategorized",
+      "label": "Uncategorized",
+      "direction": "both",
+      "group": "other"
     }
   ]
 }

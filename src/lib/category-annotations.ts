@@ -38,9 +38,8 @@ export function newest(events: Event[]): Event | undefined {
 }
 
 /**
- * The new annotation: the current one's content and tags, with the category replaced. "none" is
- * published as such (chb has it), so a steward's "none" isn't overridden by chb's own rules.
- * Pure, for tests.
+ * The new annotation: the current one's content and tags, with the category replaced (chb reads
+ * "uncategorized" as no category, and "other" as a deliberate choice). Pure, for tests.
  */
 export function buildCategoryAnnotation(
   uri: string,
@@ -81,7 +80,7 @@ export async function setTransactionCategory(p: {
 }): Promise<{ changes: CategoryChange[]; npub: string }> {
   const sn = await shiftsNostr(p.guildId, p.guildName);
   const nostr = Nostr.getInstance();
-  const member: DiscordMember = { ...p.member, roles: [...new Set([...(p.member.roles ?? []), "member", "steward"])] };
+  const member: DiscordMember = p.member; // roles: the member's actual community roles (exact list)
   const changes: CategoryChange[] = [];
   let pubkey = "";
   for (const uri of p.uris) {

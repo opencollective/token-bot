@@ -69,6 +69,7 @@ import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalEx
 import { backfillBookingAnnotations } from "./lib/booking-annotations.ts";
 import { CATEGORY_SELECT_PREFIX, startCategoryRefresh } from "./lib/tx-categories.ts";
 import { handleCategorySelect } from "./lib/category-select.ts";
+import { onMemberRolesChanged, syncAllStewardAttestations } from "./lib/steward-attestations.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
 import handleSendCommand, { handleSendAutocomplete, handleSendInteraction, sendStates } from "./commands/send.ts";
@@ -376,6 +377,10 @@ client.on(Events.ClientReady, async (readyClient) => {
 
   // Transaction categories: chb's public list, refreshed hourly.
   startCategoryRefresh();
+
+  // Steward attestations (who chb trusts to change categories): at startup and daily.
+  setTimeout(() => syncAllStewardAttestations(client).catch((e) => console.error("[stewards] sync failed:", e)), 90_000);
+  setInterval(() => syncAllStewardAttestations(client).catch((e) => console.error("[stewards] sync failed:", e)), 24 * 60 * 60 * 1000);
 
   // Booking payments must be annotated on the community relay (chb, two-jars screen): fill any gap
   // now and every 6 hours.
@@ -1909,6 +1914,11 @@ client.on(Events.ShardResume, (shardId, replayed) => console.warn(`[gateway] sha
 client.on(Events.ShardReady, (shardId) => console.log(`[gateway] shard ${shardId} ready`));
 client.on(Events.ShardError, (error, shardId) => console.error(`[gateway] shard ${shardId} error:`, error));
 client.on(Events.Invalidated, () => console.error("[gateway] session invalidated"));
+
+// Someone gains or loses a "… steward" role: update their attestation right away.
+client.on(Events.GuildMemberUpdate, (before, after) => {
+  onMemberRolesChanged(before, after).catch((err) => console.error("[stewards] role change handler failed:", err));
+});
 
 client.on(Events.Error, (error) => {
   console.error("Discord client error:", error);

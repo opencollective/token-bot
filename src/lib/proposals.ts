@@ -30,7 +30,7 @@ import { getUser, getUserEmail, saveUser } from "./user-emails.ts";
 import { hourlyRates, ratesFromPrices } from "./booking-email.ts";
 import { hhmm, longDay } from "./shift-email.ts";
 import { bookableFromMessage, checkBookableFrom } from "./room-rules.ts";
-import { categoryLabel, euroCategories, tokenCategories, txUriFor } from "./tx-categories.ts";
+import { categoryLabel, euroCategories, findCategory, tokenCategories, txUriFor } from "./tx-categories.ts";
 import { currentCategory, setTransactionCategory } from "./category-annotations.ts";
 import { ONLY_STEWARDS, stewardCheck } from "./category-select.ts";
 import {
@@ -60,10 +60,8 @@ import {
 import type { Product } from "../types.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
-/** Members-only requests (propose_mint): the member role per guild. Guilds not listed aren't restricted. */
-export const MEMBER_ROLE_BY_GUILD: Record<string, string> = {
-  "1280532848604086365": "1280559675292778617", // Commons Hub Brussels
-};
+import { communityRoles, MEMBER_ROLE_BY_GUILD } from "./community-roles.ts";
+export { MEMBER_ROLE_BY_GUILD };
 const MAX_APPROVER_MENTIONS = 5;
 const MAX_PENDING_PER_CONFIRMER = 10;
 const MAX_HOURS = 12;
@@ -407,7 +405,7 @@ export async function proposeTransactionCategory(input: Common & {
   if (!(await stewardCheck(requester, input.guildId))) throw new Error(ONLY_STEWARDS);
   const uri = resolveTxUri(input.tx, input.chain);
   const slug = input.category.trim();
-  const known = [...tokenCategories(), ...euroCategories()].find((c) => c.slug.toLowerCase() === slug.toLowerCase());
+  const known = findCategory(undefined, slug);
   if (!known) {
     throw new Error(`Unknown category "${input.category}". Tokens: ${tokenCategories().map((c) => c.slug).join(", ")}. Euros: ${euroCategories().map((c) => c.slug).join(", ")}.`);
   }
@@ -677,7 +675,13 @@ async function runCategory(r: PendingRequest, interaction: ButtonInteraction): P
   const { changes, npub } = await setTransactionCategory({
     guildId: r.guildId,
     guildName: guild.name,
-    member: { id: member.id, username: member.user.username, displayName: nameOf(member), avatar: member.displayAvatarURL({ size: 256, extension: "png" }) },
+    member: {
+      id: member.id,
+      username: member.user.username,
+      displayName: nameOf(member),
+      avatar: member.displayAvatarURL({ size: 256, extension: "png" }),
+      roles: communityRoles(member, r.guildId),
+    },
     uris: p.uris,
     category: p.category,
   });

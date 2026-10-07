@@ -340,11 +340,11 @@ Every proposal and outcome is logged in the server's logs channel. A requester c
 
 ## Transaction categories
 
-Every transaction report the bot posts in a transactions channel ends with `🏷️ Category: <label>` and a dropdown. This covers mints, sends, burns, bookings and shift rewards. Bookings start as `rental`, shift rewards as `shift`, and everything else as `none`.
+Every transaction report the bot posts in a transactions channel ends with `🏷️ Category: <label>` and a dropdown. This covers mints, sends, burns, bookings and shift rewards. Bookings start as `rental`, shift rewards as `shift`, and everything else as `uncategorized`. Older reports showing "None" are read as Uncategorized.
 
-**Who:** admins, the token's minters, and anyone with a role named "… steward". Others get an ephemeral "Only stewards can change the category."
+**Who:** stewards, meaning anyone with a Discord role whose name contains "steward", in any case, such as "Plant steward" or "Kitchen steward". Nothing else counts. Others get an ephemeral "Only stewards can change the category."
 
-**Categories** come from chb's public file, `CHB_CATEGORIES_URL`, by default `https://commonshub.brussels/opendata/latest/categories.json`, refreshed hourly with a built-in copy as fallback. CHT uses chb's `contributions` group plus `rental`: governance, cleaning, shift, note-taking, admin, care, rental, none. Euro tokens (EURb, EURchb) use every other chb category plus none. The euro dropdown shows 24 common ones; the MCP tool accepts all of them.
+**Categories** come from chb's public file, `CHB_CATEGORIES_URL`, by default `https://commonshub.brussels/opendata/latest/categories.json`, refreshed hourly with a built-in copy as fallback. CHT uses chb's `contributions` group plus `rental`, `other` and `uncategorized`: governance, cleaning, shift, note-taking, admin, care, rental, other, uncategorized. Euro tokens (EURb, EURchb) use every other chb category, `other` and `uncategorized` included. `uncategorized` is the default and means no category, so chb's rules decide. `other` is a steward's deliberate choice. The euro dropdown shows 24 common ones; the MCP tool accepts all of them.
 
 **On change:** the bot publishes a kind 1111 annotation per transaction in the message, signed by the steward's own key, to the community relays. It copies the newest existing annotation (description and tags) and replaces only the category:
 
@@ -362,6 +362,6 @@ Every transaction report the bot posts in a transactions channel ends with `🏷
 }
 ```
 
-`none` is published as `["category","none"]`, which chb knows, so its own rules don't override the steward. For euro transactions the MCP tool takes chb's URIs: `stripe:txn_…` (`k` = `stripe:txn`), `iban:<iban>:tx:<line id>` (`k` = `iban:tx`), and `odoo:<host>:<db>:account.move:<id>` (`k` = `odoo:account.move`). The report is then edited to `🏷️ Category: Governance · set by @steward`, and the change is logged in the logs channel.
+For euro transactions the MCP tool takes chb's URIs: `stripe:txn_…` (`k` = `stripe:txn`), `iban:<iban>:tx:<line id>` (`k` = `iban:tx`), and `odoo:<host>:<db>:account.move:<id>` (`k` = `odoo:account.move`). The report is then edited to `🏷️ Category: Governance · set by @steward`, and the change is logged in the logs channel.
 
-**Stewards' keys:** members don't hold Nostr keys. The bot derives one per member, `sha256("token-bot:shift-member:<guildId>:<discordUserId>:<bot secret hex>")`; it is deterministic and never stored, and the shifts RSVPs already use it. The bot attests the key with kind 31926: `d` = `discord:<id>`, `p` = the key, and `role` = `member` and `steward`, plus the guild tags. A profile (kind 0) names it.
+**Stewards' keys:** members don't hold Nostr keys. The bot derives one per member, `sha256("token-bot:shift-member:<guildId>:<discordUserId>:<bot secret hex>")`; it is deterministic and never stored, and the shifts RSVPs already use it. The bot attests the key with kind 31926: `d` = `discord:<id>`, `p` = the key, `role` tags for the member's current roles (`member` with the member role, `steward` with a "…steward" role), plus `i` = `discord:<guildId>` and `k` = `discord`. A profile (kind 0) names it. Attestations are republished at startup, daily and on role changes for every steward and everyone attested before, so a lost steward role is revoked. chb (v3.39.0+) trusts the bot as a seed, so keys it attests with `steward` can change categories.
