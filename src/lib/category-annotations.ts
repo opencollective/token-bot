@@ -14,10 +14,22 @@ import { COMMUNITY_RELAY, Nostr } from "./nostr.ts";
 
 export const KIND_ANNOTATION = 1111;
 
-/** "ethereum:42220:tx:0x…" → "ethereum:tx"; any other scheme → that scheme (e.g. "stripe"). */
+/**
+ * The NIP-73 `k` for a transaction URI, as chb indexes them (docs/annotations.md):
+ *   ethereum:<chainId>:tx:0x…          → ethereum:tx
+ *   stripe:txn_…                       → stripe:txn
+ *   iban:<iban>:tx:<line id>           → iban:tx
+ *   odoo:<host>:<db>:account.move:<id> → odoo:account.move
+ * Anything else: its scheme.
+ */
 export function kindOfUri(uri: string): string {
   const m = uri.match(/^(ethereum|bitcoin)(?::\d+)?:(tx|address):/);
-  return m ? `${m[1]}:${m[2]}` : uri.split(":")[0];
+  if (m) return `${m[1]}:${m[2]}`;
+  if (/^stripe:txn_/i.test(uri)) return "stripe:txn";
+  if (/^iban:[^:]+:tx:/i.test(uri)) return "iban:tx";
+  const odoo = uri.match(/^odoo:.*:(account\.move):\d+$/i);
+  if (odoo) return "odoo:account.move";
+  return uri.split(":")[0];
 }
 
 /** The newest annotation of a URI (by anyone), or undefined. */
@@ -26,8 +38,9 @@ export function newest(events: Event[]): Event | undefined {
 }
 
 /**
- * The new annotation: the current one's content and tags, with the category replaced ("none" removes
- * it), plus who changed it. Pure, for tests.
+ * The new annotation: the current one's content and tags, with the category replaced. "none" is
+ * published as such (chb has it), so a steward's "none" isn't overridden by chb's own rules.
+ * Pure, for tests.
  */
 export function buildCategoryAnnotation(
   uri: string,
@@ -44,7 +57,7 @@ export function buildCategoryAnnotation(
       ["i", uri.toLowerCase()],
       ["k", kindOfUri(uri)],
       ...kept,
-      ...(category === "none" ? [] : [["category", category]]),
+      ["category", category],
     ],
   };
 }

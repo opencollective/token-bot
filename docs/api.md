@@ -362,6 +362,6 @@ Every transaction report the bot posts in a transactions channel ends with `🏷
 }
 ```
 
-`none` removes the category tag. The report is then edited to `🏷️ Category: Governance · set by @steward`, and the change is logged in the logs channel.
+`none` is published as `["category","none"]`, which chb knows, so its own rules don't override the steward. For euro transactions the MCP tool takes chb's URIs: `stripe:txn_…` (`k` = `stripe:txn`), `iban:<iban>:tx:<line id>` (`k` = `iban:tx`), and `odoo:<host>:<db>:account.move:<id>` (`k` = `odoo:account.move`). The report is then edited to `🏷️ Category: Governance · set by @steward`, and the change is logged in the logs channel.
 
 **Stewards' keys:** members don't hold Nostr keys. The bot derives one per member, `sha256("token-bot:shift-member:<guildId>:<discordUserId>:<bot secret hex>")`; it is deterministic and never stored, and the shifts RSVPs already use it. The bot attests the key with kind 31926: `d` = `discord:<id>`, `p` = the key, and `role` = `member` and `steward`, plus the guild tags. A profile (kind 0) names it.

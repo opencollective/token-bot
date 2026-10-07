@@ -86,9 +86,12 @@ Deno.test("category annotation: keeps the description and tags, swaps the catego
     content: "Booking Mush Room room for 1h",
     tags: [["i", `ethereum:42220:tx:${H1}`], ["k", "ethereum:tx"], ["t", "booking"], ["t", "mushroom"], ["category", "governance"]],
   });
-  expect(buildCategoryAnnotation(`ethereum:42220:tx:${H1}`, "none", current, now).tags.some((t) => t[0] === "category")).toBe(false);
-  expect(buildCategoryAnnotation("stripe:txn_123", "rental", undefined, now).tags).toEqual([["i", "stripe:txn_123"], ["k", "stripe"], ["category", "rental"]]);
+  expect(buildCategoryAnnotation(`ethereum:42220:tx:${H1}`, "none", current, now).tags.filter((t) => t[0] === "category")).toEqual([["category", "none"]]);
+  expect(buildCategoryAnnotation("stripe:txn_123", "rental", undefined, now).tags).toEqual([["i", "stripe:txn_123"], ["k", "stripe:txn"], ["category", "rental"]]);
   expect(kindOfUri("ethereum:100:tx:0xabc")).toBe("ethereum:tx");
+  expect(kindOfUri("iban:be46734072238636:tx:39976")).toBe("iban:tx");
+  expect(kindOfUri("odoo:odoo.example.com:chb:account.move:1234")).toBe("odoo:account.move");
+  expect(kindOfUri("bitcoin:tx:abc")).toBe("bitcoin:tx");
   // deno-lint-ignore no-explicit-any
   expect(newest([{ created_at: 1, id: "a" }, { created_at: 3, id: "b" }, { created_at: 2, id: "c" }] as any)?.id).toBe("b");
 });
