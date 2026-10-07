@@ -319,19 +319,19 @@ if (data.success) {
 
 ### Proposal tools
 
-These never act directly. Each one validates the request, creates a pending request, and posts a message with **Confirm** and **Cancel** buttons. The message goes to `channelId` if given and in the same server, otherwise to the confirmer by DM. Only the confirmer's click runs it, through the same code as the slash commands:
+These never act directly. Each one validates the request, creates a pending request, and posts a message with **Confirm** and **Cancel** buttons. It goes to `channelId`, which can be a channel or a thread in the same server, as a reply to `replyToMessageId` when given. If the bot isn't in a thread it joins it. Without a usable channel it sends a DM, and `deliveryNote` says why. Only the right people's clicks count; anyone else gets an ephemeral notice.
 
 | Tool | Who confirms | On Confirm |
 |---|---|---|
-| `propose_mint` (`confirmerUserId`, `recipientUserIds`, `amount`, `token?`, `description?`) | `confirmerUserId`, who must be able to mint the token; checked when proposing and again on click | Same as `/mint`, with the confirmer as minter |
+| `propose_mint` (`requesterUserId`, `recipientUserIds`, `amount`, `token?`, `description?`, `confirmerUserId?`) | Only members can request. If the requester can mint the token, only they can confirm. Otherwise any minter can approve: the minter role is pinged, or up to 5 admins if there is no role, and this needs a channel. A named `confirmerUserId` must be a minter. The requester can always cancel. | Same as `/mint`, with the clicking minter as minter and the requester as "requested by" |
 | `propose_shift_signup` (`userId`, `eventId` or `start`+`end`, `email?`) | The member | Same as `/shifts`: calendar, nostr for standard slots, #shifts log, confirmation email |
 | `propose_room_booking` (`userId`, `room`, `start`, `end`, `title`, `guestName?`, `guestEmail?`) | The member | Opens `/book` prefilled at the payment step; the member picks how to pay and confirms there |
 
-All take `guildId`, `requestedBy` (free text for the audit log) and optional `channelId`. They return the request status.
+All take `guildId`, `requestedBy` (free text for the audit log), and optional `channelId` and `replyToMessageId`. They return the request status.
 
-**Statuses:** `pending`, `confirmed`, `cancelled`, `expired` (no answer within 24 hours), `failed` (confirmed but execution failed; see `error`), `handed_off` (a room booking continued in `/book`).
+**Statuses:** `pending`, `confirmed`, `cancelled`, `expired` (no answer within 24 hours), `failed` (confirmed but execution failed; see `error`), `handed_off` (a room booking continued in `/book`). The status also has `approval` (`confirmer` or `any_minter`), `requesterId`, `confirmedBy` and `cancelledBy`.
 
-Every proposal and outcome is logged in the server's logs channel. A confirmer can have at most 10 pending requests. Requests are stored in `DATA_DIR/<guildId>/pending-requests.json` and survive restarts.
+Every proposal and outcome is logged in the server's logs channel. A requester can have at most 10 pending requests. Requests are stored in `DATA_DIR/<guildId>/pending-requests.json` and survive restarts.
 
 ## Room rules
 

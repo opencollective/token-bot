@@ -46,8 +46,9 @@ const REQUESTED_BY = str(
   "Who is asking, for the audit log, e.g. \"elinor for <@123> in #general\". The Discord user who confirms is the one who acts.",
 );
 const CHANNEL_ID = str(
-  "Optional. Discord channel where the request was made: the Confirm/Cancel message is posted there. Without it, the bot DMs the person who must confirm.",
+  "Optional. Discord channel or thread id where the request was made (OpenClaw chat_id without \"channel:\"). The Confirm/Cancel message is posted there; without it, the bot DMs the person who must confirm.",
 );
+const REPLY_TO = str("Optional. Discord message id of the request (OpenClaw message_id): the proposal is posted as a reply to it.");
 const ISO = (what: string) => str(`${what}, ISO 8601 with timezone (e.g. 2026-10-07T17:30:00+02:00).`);
 
 type ToolSpec = { definition: McpToolDefinition; executor: keyof McpToolExecutors };
@@ -113,20 +114,22 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "propose_mint",
       description:
-        "Propose minting tokens. Creates a pending request only: the bot asks confirmerUserId (who must have the right to mint the token) to Confirm or Cancel. Nothing is minted until they click Confirm. Returns a requestId; follow up with get_request_status.",
+        "Propose minting tokens. Only members can request. Creates a pending request only, posted as a reply in the channel/thread: if the requester can mint the token they confirm it themselves; otherwise any minter can approve (the minter role is pinged). Nothing is minted until Confirm is clicked. Returns a requestId; follow up with get_request_status.",
       inputSchema: {
         type: "object",
         properties: {
           guildId: GUILD_ID,
-          confirmerUserId: str("Discord user ID of the person who asked for the mint and has the right to mint. They confirm, and they are recorded as the minter."),
+          requesterUserId: str("Discord user ID of the person asking for the tokens (OpenClaw sender.id). Must be a member. Required (older callers passing only confirmerUserId still work)."),
+          confirmerUserId: str("Optional. A specific minter who must confirm. Default: the requester if they can mint, otherwise any minter."),
           recipientUserIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 25, description: "Discord user IDs receiving the tokens." },
           amount: { type: "number", exclusiveMinimum: 0, description: "Amount per recipient." },
           token: str("Token symbol (e.g. CHT). Required when the guild has several mintable tokens."),
           description: str("Reason for the mint, shown to the confirmer and recorded with the transaction."),
           requestedBy: REQUESTED_BY,
           channelId: CHANNEL_ID,
+          replyToMessageId: REPLY_TO,
         },
-        required: ["guildId", "confirmerUserId", "recipientUserIds", "amount", "requestedBy"],
+        required: ["guildId", "recipientUserIds", "amount", "requestedBy"],
         additionalProperties: false,
       },
     },
@@ -148,6 +151,7 @@ const TOOLS: ToolSpec[] = [
           email: str("Optional email for the confirmation email and calendar invite; saved only if the member confirms."),
           requestedBy: REQUESTED_BY,
           channelId: CHANNEL_ID,
+          replyToMessageId: REPLY_TO,
         },
         required: ["guildId", "userId", "requestedBy"],
         additionalProperties: false,
@@ -173,6 +177,7 @@ const TOOLS: ToolSpec[] = [
           guestEmail: str("Optional: the guest's email (gets the confirmation and calendar invite)."),
           requestedBy: REQUESTED_BY,
           channelId: CHANNEL_ID,
+          replyToMessageId: REPLY_TO,
         },
         required: ["guildId", "userId", "room", "start", "end", "title", "requestedBy"],
         additionalProperties: false,

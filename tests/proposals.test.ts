@@ -15,7 +15,7 @@ import {
   REQUEST_TTL_MS,
   transition,
 } from "../src/lib/pending-requests.ts";
-import { promptText, proposeMint, proposeRoomBooking, setProposalsClient, whenText } from "../src/lib/proposals.ts";
+import { handleProposalButton, MEMBER_ROLE_BY_GUILD, promptText, proposeMint, proposeRoomBooking, setProposalsClient, whenText } from "../src/lib/proposals.ts";
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -149,6 +149,7 @@ Deno.test("pending requests: confirming after expiry fails and marks it expired"
 Deno.test("prompt text: summary, who confirms, relative expiry", () => {
   const text = promptText({
     kind: "mint", confirmerId: "42", summary: "Mint **3 CHT** for <@7>",
+    params: { tokenSymbol: "CHT", recipientIds: ["7"], amount: 3 },
     expiresAt: "2026-10-08T10:00:00.000Z", requestedBy: "elinor for <@42> in #general",
   });
   expect(text).toContain("Elinor proposes a mint** for <@42> to confirm");
@@ -161,6 +162,8 @@ Deno.test("prompt text: summary, who confirms, relative expiry", () => {
 
 const GUILD = "1111111111";
 const MINTER_ROLE = "role-minter";
+const MEMBER_ROLE = "role-member";
+MEMBER_ROLE_BY_GUILD[GUILD] = MEMBER_ROLE;
 
 // deno-lint-ignore no-explicit-any
 function fakeMember(id: string, opts: { roles?: string[]; admin?: boolean; bot?: boolean } = {}): any {
@@ -182,14 +185,25 @@ function fakeClient() {
   }
   const sent: { where: string; content: string; components?: unknown[] }[] = [];
   const members = new Map([
-    ["2000000001", fakeMember("2000000001", { roles: [MINTER_ROLE] })], // steward
-    ["2000000002", fakeMember("2000000002")], // member
-    ["2000000003", fakeMember("2000000003")],
+    ["2000000001", fakeMember("2000000001", { roles: [MINTER_ROLE, MEMBER_ROLE] })], // steward
+    ["2000000002", fakeMember("2000000002", { roles: [MEMBER_ROLE] })], // member
+    ["2000000003", fakeMember("2000000003", { roles: [MEMBER_ROLE] })],
+    ["2000000004", fakeMember("2000000004")], // not a member
+    ["2000000005", fakeMember("2000000005", { roles: [MINTER_ROLE, MEMBER_ROLE] })], // another minter
     ["2000000009", fakeMember("2000000009", { bot: true })],
   ]);
-  const channel = (id: string, guildId = GUILD) => ({
+  const joined: string[] = [];
+  // deno-lint-ignore no-explicit-any
+  const channel = (id: string, guildId = GUILD): any => ({
     id, guildId, isTextBased: () => true,
-    send: (m: { content: string; components?: unknown[] }) => {
+    isThread: () => id.startsWith("thread"),
+    joined: false,
+    join: () => {
+      joined.push(id);
+      return id === "thread-locked" ? Promise.reject(new Error("Missing Access")) : Promise.resolve();
+    },
+    send: (m: { content: string; components?: unknown[]; reply?: { messageReference: string } }) => {
+      if (id === "thread-locked") return Promise.reject(new Error("Missing Access"));
       sent.push({ where: `channel:${id}`, ...m });
       return Promise.resolve({ id: `msg${sent.length}`, channelId: id });
     },
@@ -198,7 +212,10 @@ function fakeClient() {
     guilds: {
       cache: new Map([[GUILD, {}]]),
       fetch: (id: string) => id === GUILD
-        ? Promise.resolve({ id: GUILD, name: "Test", members: { fetch: (uid: string) => members.has(uid) ? Promise.resolve(members.get(uid)) : Promise.reject(new Error("no")) } })
+        ? Promise.resolve({
+          id: GUILD, name: "Test",
+          members: { fetch: (uid?: string) => uid === undefined ? Promise.resolve(members) : members.has(uid) ? Promise.resolve(members.get(uid)) : Promise.reject(new Error("no")) },
+        })
         : Promise.reject(new Error("no guild")),
     },
     channels: {
@@ -215,7 +232,7 @@ function fakeClient() {
   };
   // deno-lint-ignore no-explicit-any
   setProposalsClient(client as any);
-  return { sent };
+  return { sent, joined, client };
 }
 
 await Deno.mkdir(`${DATA}/${GUILD}`, { recursive: true });
@@ -235,8 +252,10 @@ Deno.test("propose_mint: needs a token when several are mintable, and a confirme
   _resetCache();
   fakeClient();
   await expect(proposeMint({ ...mintBase, token: undefined })).rejects.toThrow("Several tokens are mintable; pass token (one of: CHT, EURchb)");
-  await expect(proposeMint({ ...mintBase, token: "EURchb" })).rejects.toThrow("can't mint EURchb: it needs the <@&role-eur> role");
-  await expect(proposeMint({ ...mintBase, confirmerUserId: "2000000002" })).rejects.toThrow("can't mint CHT");
+  await expect(proposeMint({ ...mintBase, token: "EURchb" })).rejects.toThrow("can't mint EURchb, so a minter must approve");
+  // A named confirmer must be able to mint.
+  await expect(proposeMint({ ...mintBase, requesterUserId: "2000000001", confirmerUserId: "2000000002" })).rejects.toThrow("can't mint CHT: it needs the <@&role-minter> role");
+  await expect(proposeMint({ ...mintBase, confirmerUserId: "2000000002" })).rejects.toThrow("can't mint CHT, so a minter must approve: pass the channelId");
   await expect(proposeMint({ ...mintBase, recipientUserIds: ["2000000009"] })).rejects.toThrow("recipient 2000000009 is a bot");
   await expect(proposeMint({ ...mintBase, recipientUserIds: ["nope"] })).rejects.toThrow("Unknown recipient");
 });
@@ -289,4 +308,98 @@ Deno.test("propose_room_booking: coworking before 7pm is refused with the room's
     start: `${day}T18:00:00+02:00`, end: `${day}T20:00:00+02:00`,
     title: "Hack night", requestedBy: "elinor",
   })).rejects.toThrow("The coworking space can only be booked from 7pm.");
+});
+
+// ── In-channel approval by any minter ───────────────────────────────────────
+
+// deno-lint-ignore no-explicit-any
+function click(customId: string, userId: string, client: any) {
+  const replies: { content: string; ephemeral: boolean }[] = [];
+  const updates: string[] = [];
+  const interaction = {
+    customId, guildId: GUILD, user: { id: userId }, client,
+    reply: (m: { content: string; flags?: number }) => {
+      replies.push({ content: m.content, ephemeral: !!m.flags });
+      return Promise.resolve();
+    },
+    update: (m: { content: string }) => {
+      updates.push(m.content);
+      return Promise.resolve();
+    },
+  };
+  return { interaction, replies, updates };
+}
+
+const memberAsk = { guildId: GUILD, requesterUserId: "2000000002", recipientUserIds: ["2000000003"], amount: 2, token: "CHT", requestedBy: "elinor", channelId: "thread-heartbeat", replyToMessageId: "9000000001" };
+
+Deno.test("propose_mint: only members can request tokens", async () => {
+  fakeClient();
+  await expect(proposeMint({ ...memberAsk, requesterUserId: "2000000004" })).rejects.toThrow("Only members can request tokens.");
+  await expect(proposeMint({ ...memberAsk, requesterUserId: undefined })).rejects.toThrow("requesterUserId is required");
+});
+
+Deno.test("propose_mint by a non-minter: reply in the thread, ping the minter role, any minter approves", async () => {
+  const { sent, joined, client } = fakeClient();
+  const res = await proposeMint(memberAsk);
+  expect(res).toMatchObject({ status: "pending", approval: "any_minter", requesterId: "2000000002", deliveredBy: "channel" });
+  expect(joined).toEqual(["thread-heartbeat"]); // joined the thread before posting
+
+  // deno-lint-ignore no-explicit-any
+  const prompt = sent.find((x) => x.where === "channel:thread-heartbeat") as any;
+  expect(prompt.reply).toEqual({ messageReference: "9000000001", failIfNotExists: false });
+  expect(prompt.allowedMentions.roles).toEqual([MINTER_ROLE]);
+  expect(prompt.allowedMentions.repliedUser).toBe(false);
+  expect(prompt.content).toContain("requested by <@2000000002>");
+  expect(prompt.content).toContain(`Only someone with the right to mint CHT can approve this: <@&${MINTER_ROLE}>`);
+  expect(prompt.content).toContain("Any CHT minter can confirm · <@2000000002> or a minter can cancel");
+
+  // The requester can't confirm their own request, and a bystander can't either.
+  for (const who of ["2000000002", "2000000003"]) {
+    const c = click(`preq_confirm:${res.requestId}`, who, client);
+    await handleProposalButton(c.interaction as never);
+    expect(c.replies).toEqual([{ content: `Only a minter (<@&${MINTER_ROLE}>) can confirm this.`, ephemeral: true }]);
+  }
+  // A bystander can't cancel.
+  const by = click(`preq_cancel:${res.requestId}`, "2000000003", client);
+  await handleProposalButton(by.interaction as never);
+  expect(by.replies[0].content).toBe(`Only <@2000000002> or a minter (<@&${MINTER_ROLE}>) can cancel this.`);
+  expect((await getRequest(res.requestId, [GUILD]))?.status).toBe("pending");
+
+  // The requester can cancel; the message shows who.
+  const own = click(`preq_cancel:${res.requestId}`, "2000000002", client);
+  await handleProposalButton(own.interaction as never);
+  expect(own.updates[0]).toContain("❌ Cancelled by <@2000000002>.");
+  const status = publicStatus((await getRequest(res.requestId, [GUILD]))!);
+  expect(status).toMatchObject({ status: "cancelled", cancelledBy: "2000000002", confirmedBy: null, decidedBy: "2000000002" });
+});
+
+Deno.test("propose_mint by a non-minter: another minter can cancel too", async () => {
+  const { client } = fakeClient();
+  const res = await proposeMint(memberAsk);
+  const c = click(`preq_cancel:${res.requestId}`, "2000000005", client);
+  await handleProposalButton(c.interaction as never);
+  expect(c.updates[0]).toContain("❌ Cancelled by <@2000000005>.");
+});
+
+Deno.test("propose_mint by a minter: they alone confirm; without a channel it's a DM", async () => {
+  const { sent, client } = fakeClient();
+  const res = await proposeMint({ ...memberAsk, requesterUserId: "2000000001", channelId: undefined, replyToMessageId: undefined });
+  expect(res).toMatchObject({ approval: "confirmer", confirmerId: "2000000001", deliveredBy: "dm" });
+  expect(sent.some((x) => x.where === "dm:2000000001")).toBe(true);
+  const other = click(`preq_confirm:${res.requestId}`, "2000000005", client);
+  await handleProposalButton(other.interaction as never);
+  expect(other.replies[0]).toEqual({ content: "Only <@2000000001> can confirm or cancel this.", ephemeral: true });
+});
+
+Deno.test("propose_mint by a non-minter needs a usable channel: no DM fallback", async () => {
+  fakeClient();
+  await expect(proposeMint({ ...memberAsk, channelId: undefined })).rejects.toThrow("pass the channelId");
+  await expect(proposeMint({ ...memberAsk, channelId: "thread-locked" })).rejects.toThrow("couldn't post in the thread");
+});
+
+Deno.test("propose_mint by a minter in a thread the bot can't use: DM fallback, and the result says why", async () => {
+  fakeClient();
+  const res = await proposeMint({ ...memberAsk, requesterUserId: "2000000001", channelId: "thread-locked" });
+  expect(res.deliveredBy).toBe("dm");
+  expect(res.deliveryNote).toContain("Sent by DM instead of the channel");
 });
