@@ -66,6 +66,20 @@ export function extractHashtags(text: string): {
 
   return { tags, cleanDescription };
 }
+/**
+ * Where annotations go. relay.commonshub.brussels is the one chb (accounting, the two-jars screen)
+ * reads, so it comes first; the public relays are kept for other readers (txinfo…).
+ * Override with NOSTR_RELAYS (comma-separated).
+ */
+export const COMMUNITY_RELAY = "wss://relay.commonshub.brussels";
+export const DEFAULT_RELAYS = [COMMUNITY_RELAY, "wss://relay.damus.io", "wss://nostr-pub.wellorder.net"];
+
+export function configuredRelays(): string[] {
+  const env = getEnv("NOSTR_RELAYS");
+  const list = env ? env.split(",").map((r) => r.trim()).filter(Boolean) : DEFAULT_RELAYS;
+  return list.length ? list : DEFAULT_RELAYS;
+}
+
 export class Nostr {
   private static instance: Nostr | null = null;
   private pool: SimplePool;
@@ -75,10 +89,7 @@ export class Nostr {
     readonly relays?: string[],
   ) {
     this.nsec = nsec || Deno.env.get("NOSTR_NSEC");
-    this.relays = relays || [
-      "wss://nostr-pub.wellorder.net",
-      "wss://relay.damus.io",
-    ];
+    this.relays = relays || configuredRelays();
     this.pool = new SimplePool();
 
     this.relays.forEach(async (url) => {
@@ -143,11 +154,11 @@ export class Nostr {
   }
 
   // Query relays for events (e.g. to check whether a Discord message was already rewarded).
-  async query(filter: Filter, maxWait = 4000): Promise<Event[]> {
-    return await this.pool.querySync(this.relays!, filter, { maxWait });
+  async query(filter: Filter, maxWait = 4000, relays?: string[]): Promise<Event[]> {
+    return await this.pool.querySync(relays ?? this.relays!, filter, { maxWait });
   }
 
-  async publish(event: EventTemplate) {
+  async publish(event: EventTemplate): Promise<string[] | undefined> {
     if (!this.nsec) {
       throw new Error("Nostr: No nsec provided");
     }
@@ -160,8 +171,23 @@ export class Nostr {
 
     const { data: secretKey } = nip19.decode(this.nsec);
     const signedEvent = finalizeEvent(event, secretKey as Uint8Array);
-    // console.log(">>> NostrProvider publishing event", signedEvent);
-    await Promise.any(this.pool.publish(this.relays!, signedEvent));
+    return await this.broadcast(signedEvent);
+  }
+
+  /**
+   * Send an already signed event to every relay. Logs the relays that refused it; throws only when
+   * none accepted it. Returns the relays that accepted it.
+   */
+  async broadcast(signedEvent: Event): Promise<string[]> {
+    const relays = this.relays!;
+    const results = await Promise.allSettled(this.pool.publish(relays, signedEvent));
+    const accepted = relays.filter((_, i) => results[i]?.status === "fulfilled");
+    const refused = relays.map((r, i) => [r, results[i]] as const).filter(([, res]) => res?.status === "rejected");
+    for (const [relay, res] of refused) {
+      console.warn(`[nostr] ${relay} refused event ${signedEvent.id.slice(0, 8)}: ${(res as PromiseRejectedResult).reason}`);
+    }
+    if (accepted.length === 0) throw new Error(`No relay accepted event ${signedEvent.id}`);
+    return accepted;
   }
 
   async close() {
