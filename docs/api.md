@@ -344,7 +344,7 @@ Every transaction report the bot posts in a transactions channel ends with `🏷
 
 **Who:** admins, the token's minters, and anyone with a role named "… steward". Others get an ephemeral "Only stewards can change the category."
 
-**Categories:** CHT uses governance, cleaning, shift, note-taking, admin, care, rental and none. Euro tokens (EURb, EURchb) use chb's `settings/categories.json`. The dropdown shows 24 common ones plus none; the MCP tool accepts all of them.
+**Categories** come from chb's public file, `CHB_CATEGORIES_URL`, by default `https://commonshub.brussels/opendata/latest/categories.json`, refreshed hourly with a built-in copy as fallback. CHT uses chb's `contributions` group plus `rental`: governance, cleaning, shift, note-taking, admin, care, rental, none. Euro tokens (EURb, EURchb) use every other chb category plus none. The euro dropdown shows 24 common ones; the MCP tool accepts all of them.
 
 **On change:** the bot publishes a kind 1111 annotation per transaction in the message, signed by the steward's own key, to the community relays. It copies the newest existing annotation (description and tags) and replaces only the category:
 

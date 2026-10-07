@@ -103,3 +103,38 @@ Deno.test("resolveTxUri: hash with chain, or a URI", () => {
   expect(resolveTxUri("stripe:txn_ABC")).toBe("stripe:txn_ABC");
   expect(() => resolveTxUri("0x1234")).toThrow("Not a transaction hash");
 });
+
+// ── Live lists from chb ──────────────────────────────────────────────────────
+import { _setCategoryLists, categoriesFor as liveFor, findCategory as liveFind, listsFromChb, refreshCategories } from "../src/lib/tx-categories.ts";
+
+Deno.test("chb's public categories file: contributions → token list (+ rental), the rest → euro list (+ none)", async () => {
+  const chb = JSON.parse(await Deno.readTextFile(new URL("./fixtures-chb-categories.json", import.meta.url)));
+  const lists = listsFromChb(chb)!;
+  expect(lists.token.map((c) => c.slug)).toEqual(["governance", "cleaning", "shift", "note-taking", "admin", "care", "rental", "none"]);
+  expect(lists.euro.some((c) => c.slug === "rent")).toBe(true);
+  expect(lists.euro.some((c) => c.slug === "governance")).toBe(false);
+  expect(lists.euro.at(-1)).toEqual({ slug: "none", label: "None" });
+  expect(listsFromChb({ categories: [] })).toBeNull();
+  expect(listsFromChb({ nope: 1 })).toBeNull();
+  expect(listsFromChb(null)).toBeNull();
+});
+
+Deno.test("refreshCategories: uses chb's list, keeps the previous one on errors", async () => {
+  const chb = await Deno.readTextFile(new URL("./fixtures-chb-categories.json", import.meta.url));
+  try {
+    _setCategoryLists();
+    const ok = (body: string, status = 200) => (() => Promise.resolve(new Response(body, { status }))) as unknown as typeof fetch;
+    const custom = JSON.parse(chb);
+    custom.categories.push({ slug: "plants", label: "Plants", group: "contributions" });
+    expect(await refreshCategories({ force: true, url: "https://x/c.json", fetchFn: ok(JSON.stringify(custom)) })).toBe("https://x/c.json");
+    expect(liveFind("CHT", "plants")?.label).toBe("Plants");
+    // Errors keep what we have.
+    await refreshCategories({ force: true, url: "https://x/c.json", fetchFn: ok("oops", 500) });
+    expect(liveFind("CHT", "plants")?.label).toBe("Plants");
+    await refreshCategories({ force: true, url: "https://x/c.json", fetchFn: ok("{\"categories\":[]}") });
+    expect(liveFind("CHT", "plants")?.label).toBe("Plants");
+    expect(liveFor("EURb").some((c) => c.slug === "membership")).toBe(true);
+  } finally {
+    _setCategoryLists();
+  }
+});
