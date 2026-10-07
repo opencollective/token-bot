@@ -198,7 +198,7 @@ const TOOLS: ToolSpec[] = [
         properties: {
           guildId: GUILD_ID,
           requesterUserId: str("Discord user ID of the steward asking (OpenClaw sender.id). They confirm, and the change is signed with their key."),
-          tx: str("Transaction hash (0x…, on `chain`) or full URI, e.g. ethereum:42220:tx:0x…"),
+          tx: str("Transaction hash (0x…, on `chain`) or chb's URI: ethereum:<chainId>:tx:0x…, stripe:txn_…, iban:<iban lowercase>:tx:<line id>, odoo:<host>:<db>:account.move:<id>."),
           chain: str("Chain of a bare hash: celo (CHT, default) or gnosis (EURb, EURchb)."),
           category: str("Category slug."),
           requestedBy: REQUESTED_BY,
