@@ -19,6 +19,7 @@ import {
   GuildMember,
   Message,
   MessageFlags,
+  PermissionsBitField,
   TextChannel,
 } from "discord.js";
 import { findTokenByInput, loadGuildFile, loadGuildSettings } from "./utils.ts";
@@ -55,6 +56,11 @@ import {
 import type { Product } from "../types.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
+/** Members-only requests (propose_mint): the member role per guild. Guilds not listed aren't restricted. */
+export const MEMBER_ROLE_BY_GUILD: Record<string, string> = {
+  "1280532848604086365": "1280559675292778617", // Commons Hub Brussels
+};
+const MAX_APPROVER_MENTIONS = 5;
 const MAX_PENDING_PER_CONFIRMER = 10;
 const MAX_HOURS = 12;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -202,7 +208,28 @@ export async function getRequestStatus(input: { requestId: string }) {
 
 // ── Proposal tools ──────────────────────────────────────────────────────────
 
-type Common = { guildId: string; requestedBy: string; channelId?: string };
+type Common = { guildId: string; requestedBy: string; channelId?: string; replyToMessageId?: string };
+
+export function isMember(m: GuildMember, guildId: string): boolean {
+  const role = MEMBER_ROLE_BY_GUILD[guildId];
+  if (!role) return true;
+  return m.roles.cache.has(role) || m.permissions.has(PermissionsBitField.Flags.Administrator);
+}
+
+/** Who to ping when any minter may approve: the minter role, else up to 5 admins (who can always mint). */
+async function minterApprovers(guild: Guild, minterRoleId?: string): Promise<{ roleId?: string; userIds?: string[] }> {
+  if (minterRoleId) return { roleId: minterRoleId };
+  const all = await guild.members.fetch().catch(() => null);
+  const admins = all
+    ? [...all.values()].filter((m) => !m.user.bot && m.permissions.has(PermissionsBitField.Flags.Administrator)).slice(0, MAX_APPROVER_MENTIONS)
+    : [];
+  return { userIds: admins.map((m) => m.id) };
+}
+
+export function approverMentions(a: PendingRequest["approvers"]): string {
+  if (a?.roleId) return `<@&${a.roleId}>`;
+  return (a?.userIds ?? []).map((id) => `<@${id}>`).join(" ") || "an admin";
+}
 
 async function guardPending(guildId: string, confirmerId: string) {
   if (await countPendingFor(guildId, confirmerId) >= MAX_PENDING_PER_CONFIRMER) {
@@ -211,13 +238,19 @@ async function guardPending(guildId: string, confirmerId: string) {
 }
 
 export async function proposeMint(input: Common & {
-  confirmerUserId: string;
+  requesterUserId?: string;
+  confirmerUserId?: string;
   recipientUserIds: string[];
   amount: number;
   token?: string;
   description?: string;
 }) {
   const guild = await getGuild(input.guildId);
+  const requesterId = input.requesterUserId || input.confirmerUserId;
+  if (!requesterId) throw new Error("requesterUserId is required: the Discord user who asked for the tokens");
+  const requester = await getMember(guild, requesterId, "requester");
+  if (!isMember(requester, input.guildId)) throw new Error("Only members can request tokens.");
+
   const settings = await loadGuildSettings(input.guildId);
   const mintable = getMintableTokens(settings?.tokens ?? []);
   if (mintable.length === 0) throw new Error("No mintable token is configured in this server");
@@ -228,19 +261,33 @@ export async function proposeMint(input: Common & {
   }
   if (!(input.amount > 0) || !Number.isFinite(input.amount)) throw new Error("amount must be a positive number");
 
-  const confirmer = await getMember(guild, input.confirmerUserId, "confirmer");
-  if (!hasTokenPermission(confirmer, token.minterRoleId)) {
-    const role = token.minterRoleId ? `the <@&${token.minterRoleId}> role` : "admin permissions";
-    throw new Error(`${nameOf(confirmer)} can't mint ${token.symbol}: it needs ${role}. Ask someone who can mint to confirm.`);
+  // Who approves: a named minter, else the requester when they can mint, else any minter.
+  let approval: "confirmer" | "any_minter" = "confirmer";
+  let confirmerId = requester.id;
+  let approvers: PendingRequest["approvers"];
+  if (input.confirmerUserId && input.confirmerUserId !== requester.id) {
+    const confirmer = await getMember(guild, input.confirmerUserId, "confirmer");
+    if (!hasTokenPermission(confirmer, token.minterRoleId)) {
+      const role = token.minterRoleId ? `the <@&${token.minterRoleId}> role` : "admin permissions";
+      throw new Error(`${nameOf(confirmer)} can't mint ${token.symbol}: it needs ${role}. Leave confirmerUserId out to let any minter approve.`);
+    }
+    confirmerId = confirmer.id;
+  } else if (!hasTokenPermission(requester, token.minterRoleId)) {
+    approval = "any_minter";
+    approvers = await minterApprovers(guild, token.minterRoleId);
+    if (!input.channelId) {
+      throw new Error(`${nameOf(requester)} can't mint ${token.symbol}, so a minter must approve: pass the channelId (and replyToMessageId) where the request was made.`);
+    }
   }
+
   const recipientIds = [...new Set(input.recipientUserIds.map(String))];
   const recipients = await Promise.all(recipientIds.map((id) => getMember(guild, id, "recipient")));
-  await guardPending(input.guildId, confirmer.id);
+  await guardPending(input.guildId, requester.id);
 
   const params: MintParams = { tokenSymbol: token.symbol, recipientIds: recipients.map((m) => m.id), amount: input.amount, description: input.description?.trim() || undefined };
   const summary = `Mint **${formatAmount(input.amount)} ${token.symbol}**${recipients.length > 1 ? " each" : ""} for ${recipients.map((m) => `<@${m.id}>`).join(", ")}` +
     (params.description ? `\n📝 ${params.description}` : "");
-  return await propose({ ...input, kind: "mint", confirmerId: confirmer.id, params, summary });
+  return await propose({ ...input, kind: "mint", confirmerId, requesterId: requester.id, approval, approvers, params, summary });
 }
 
 export async function proposeShiftSignup(input: Common & { userId: string; eventId?: string; start?: string; end?: string; email?: string }) {
@@ -341,18 +388,39 @@ function buttons(id: string, kind: PendingRequest["kind"]) {
   );
 }
 
-export function promptText(r: Pick<PendingRequest, "kind" | "confirmerId" | "summary" | "expiresAt" | "requestedBy">): string {
-  const expires = Math.floor(new Date(r.expiresAt).getTime() / 1000);
-  return `🤖 **Elinor proposes a ${KIND_LABEL[r.kind]}** for <@${r.confirmerId}> to confirm\n\n${r.summary}\n\n` +
-    `-# Asked by ${r.requestedBy.slice(0, 200)} · only <@${r.confirmerId}> can confirm · expires <t:${expires}:R>`;
+export function promptText(
+  r: Pick<PendingRequest, "kind" | "confirmerId" | "summary" | "expiresAt" | "requestedBy" | "approval" | "approvers" | "requesterId" | "params">,
+): string {
+  const expires = `<t:${Math.floor(new Date(r.expiresAt).getTime() / 1000)}:R>`;
+  const requester = r.requesterId ?? r.confirmerId;
+  if (r.approval === "any_minter") {
+    const symbol = (r.params as MintParams).tokenSymbol;
+    return `🤖 **Elinor proposes a ${KIND_LABEL[r.kind]}**, requested by <@${requester}>\n\n${r.summary}\n\n` +
+      `🔐 Only someone with the right to mint ${symbol} can approve this: ${approverMentions(r.approvers)}\n` +
+      `-# Any ${symbol} minter can confirm · <@${requester}> or a minter can cancel · expires ${expires}`;
+  }
+  const by = requester !== r.confirmerId ? `, requested by <@${requester}>` : "";
+  return `🤖 **Elinor proposes a ${KIND_LABEL[r.kind]}** for <@${r.confirmerId}> to confirm${by}\n\n${r.summary}\n\n` +
+    `-# Asked by ${r.requestedBy.slice(0, 200)} · only <@${r.confirmerId}> can confirm · expires ${expires}`;
 }
 
-async function propose(input: Common & { kind: PendingRequest["kind"]; confirmerId: string; params: PendingRequest["params"]; summary: string }) {
+async function propose(input: Common & {
+  kind: PendingRequest["kind"];
+  confirmerId: string;
+  requesterId?: string;
+  approval?: PendingRequest["approval"];
+  approvers?: PendingRequest["approvers"];
+  params: PendingRequest["params"];
+  summary: string;
+}) {
   const request = await createRequest({
     kind: input.kind,
     guildId: input.guildId,
     requestedBy: String(input.requestedBy || "elinor").slice(0, 300),
     confirmerId: input.confirmerId,
+    ...(input.requesterId ? { requesterId: input.requesterId } : {}),
+    ...(input.approval ? { approval: input.approval } : {}),
+    ...(input.approvers ? { approvers: input.approvers } : {}),
     params: input.params,
     summary: input.summary,
   });
@@ -362,14 +430,46 @@ async function propose(input: Common & { kind: PendingRequest["kind"]; confirmer
 
   let message: Message | null = null;
   let dm = false;
+  let deliveryNote: string | undefined;
   if (input.channelId) {
+    // channelId may be a channel or a thread (public or private): threads carry their own guildId.
     const channel = await c.channels.fetch(input.channelId).catch(() => null);
+    if (!channel) deliveryNote = `channel ${input.channelId} not found or not visible to the bot`;
+    else if (!("guildId" in channel) || channel.guildId !== input.guildId) deliveryNote = `channel ${input.channelId} is not in this server`;
+    if (channel?.isThread() && !channel.joined && channel.guildId === input.guildId) {
+      // The bot must be in a thread to post there; joining a private thread needs Manage Threads.
+      await channel.join().catch((e) => {
+        deliveryNote = `couldn't join the thread (${e?.message || e}); give the bot Manage Threads or add it to the thread`;
+      });
+    }
     if (channel && "guildId" in channel && channel.guildId === input.guildId && channel.isTextBased() && "send" in channel) {
-      message = await (channel as TextChannel).send({ content, components: [row], allowedMentions: { users: [request.confirmerId] } }).catch((e) => {
+      const allowedMentions = {
+        users: [...new Set([request.confirmerId, ...(request.requesterId ? [request.requesterId] : []), ...(request.approvers?.userIds ?? [])])],
+        roles: request.approvers?.roleId ? [request.approvers.roleId] : [],
+        repliedUser: false,
+      };
+      const send = (withReply: boolean) =>
+        (channel as TextChannel).send({
+          content,
+          components: [row],
+          allowedMentions,
+          ...(withReply && input.replyToMessageId ? { reply: { messageReference: input.replyToMessageId, failIfNotExists: false } } : {}),
+        });
+      // Reply to the request when we know it; fall back to a plain message in the channel.
+      message = await send(true).catch(() => send(false)).catch((e) => {
         console.error("[proposals] could not post in channel:", e?.message || e);
+        deliveryNote = `couldn't post in ${channel.isThread() ? "the thread" : "the channel"} (${e?.message || e})`;
         return null;
       });
     }
+  }
+  if (!message && request.approval === "any_minter") {
+    await updateRequest(request.guildId, request.id, (r) => {
+      r.status = "failed";
+      r.decidedAt = new Date().toISOString();
+      r.error = "Could not post in the channel, and a minter's approval can't happen by DM";
+    });
+    throw new Error(`Couldn't post in that channel${deliveryNote ? `: ${deliveryNote}` : ""}. A minter must approve in the channel where the request was made.`);
   }
   if (!message) {
     const user = await c.users.fetch(request.confirmerId).catch(() => null);
@@ -397,7 +497,11 @@ async function propose(input: Common & { kind: PendingRequest["kind"]; confirmer
     request.guildId,
     `🤖 Elinor proposed a ${KIND_LABEL[request.kind]} (${request.id}), asked by ${request.requestedBy.slice(0, 120)}, for <@${request.confirmerId}> to confirm ${dm ? "by DM" : `in <#${message.channelId}>`}:\n${request.summary}`,
   );
-  return { ...publicStatus({ ...request, message: { channelId: message.channelId, messageId: message.id, dm, url } }), deliveredBy: dm ? "dm" : "channel" };
+  return {
+    ...publicStatus({ ...request, message: { channelId: message.channelId, messageId: message.id, dm, url } }),
+    deliveredBy: dm ? "dm" : "channel",
+    ...(dm && input.channelId ? { deliveryNote: `Sent by DM instead of the channel: ${deliveryNote ?? "the channel wasn't usable"}` } : {}),
+  };
 }
 
 // ── Buttons ─────────────────────────────────────────────────────────────────
@@ -415,6 +519,17 @@ async function closePrompt(r: PendingRequest, footer: string) {
   }
 }
 
+/** The named confirmer; or, for "any_minter" mint requests, anyone allowed to mint the token right now. */
+async function mayConfirm(r: PendingRequest, interaction: ButtonInteraction): Promise<boolean> {
+  if (r.approval !== "any_minter") return interaction.user.id === r.confirmerId;
+  const guild = await requireClient().guilds.fetch(r.guildId).catch(() => null);
+  const member = guild ? await guild.members.fetch(interaction.user.id).catch(() => null) : null;
+  if (!member) return false;
+  const settings = await loadGuildSettings(r.guildId);
+  const token = getMintableTokens(settings?.tokens ?? []).find((t) => t.symbol === (r.params as MintParams).tokenSymbol);
+  return !!token && hasTokenPermission(member, token.minterRoleId);
+}
+
 export async function handleProposalButton(interaction: ButtonInteraction): Promise<void> {
   const [action, id] = interaction.customId.slice(BUTTON_PREFIX.length).split(":");
   const guildIds = [...interaction.client.guilds.cache.keys()];
@@ -424,8 +539,14 @@ export async function handleProposalButton(interaction: ButtonInteraction): Prom
     await interaction.reply({ content: "⚠️ This request no longer exists.", flags: MessageFlags.Ephemeral });
     return;
   }
-  if (interaction.user.id !== r.confirmerId) {
-    await interaction.reply({ content: `Only <@${r.confirmerId}> can confirm or cancel this.`, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+  const canConfirm = await mayConfirm(r, interaction);
+  const canCancel = canConfirm || interaction.user.id === r.requesterId || interaction.user.id === r.confirmerId;
+  if ((action === "confirm" && !canConfirm) || (action === "cancel" && !canCancel)) {
+    const who = r.approval === "any_minter"
+      ? `Only <@${r.requesterId ?? r.confirmerId}> or a minter (${approverMentions(r.approvers)}) can ${action === "cancel" ? "cancel" : "confirm"} this.`
+      : `Only <@${r.confirmerId}> can confirm or cancel this.`;
+    const content = r.approval === "any_minter" && action === "confirm" ? `Only a minter (${approverMentions(r.approvers)}) can confirm this.` : who;
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
     return;
   }
   if (r.status !== "pending" || Date.now() > new Date(r.expiresAt).getTime()) {
@@ -455,7 +576,10 @@ export async function handleProposalButton(interaction: ButtonInteraction): Prom
       x.result = outcome.result;
       if (!outcome.ok) x.error = outcome.text;
     });
-    await interaction.editReply({ content: `${r.summary}\n\n${outcome.text}`, components: [], allowedMentions: { parse: [] } });
+    const header = r.kind === "mint" && outcome.ok
+      ? `✅ Minted by <@${interaction.user.id}>${r.requesterId && r.requesterId !== interaction.user.id ? `, requested by <@${r.requesterId}>` : ""}\n`
+      : "";
+    await interaction.editReply({ content: `${r.summary}\n\n${header}${outcome.text}`, components: [], allowedMentions: { parse: [] } });
     await log(r.guildId, `🤖 ${outcome.ok ? "✅" : "⚠️"} <@${interaction.user.id}> confirmed Elinor's ${KIND_LABEL[r.kind]} request (${r.id}): ${outcome.ok ? "done" : outcome.text.slice(0, 300)}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

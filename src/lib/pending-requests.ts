@@ -49,8 +49,15 @@ export type PendingRequest = {
   guildId: string;
   /** Who asked, as given by the caller (e.g. "elinor on behalf of <@123>"). Informational. */
   requestedBy: string;
-  /** The only Discord user whose click runs it. */
+  /**
+   * approval "confirmer": the only Discord user whose click runs it.
+   * approval "any_minter": the requester (for limits and display); any member allowed to mint the token can confirm.
+   */
   confirmerId: string;
+  /** Who can confirm: one person (default), or anyone allowed to mint the token (mint requests only). */
+  approval?: "confirmer" | "any_minter";
+  /** The Discord user who asked for it (requested by). They can always cancel. */
+  requesterId?: string;
   params: MintParams | ShiftSignupParams | RoomBookingParams;
   summary: string;
   status: RequestStatus;
@@ -58,6 +65,8 @@ export type PendingRequest = {
   expiresAt: string;
   decidedAt?: string;
   decidedBy?: string;
+  /** When approval is "any_minter": who is pinged as approvers (a role, or up to 5 people). */
+  approvers?: { roleId?: string; userIds?: string[] };
   /** Where the Confirm/Cancel message was posted. */
   message?: { channelId: string; messageId: string; dm: boolean; url: string };
   result?: unknown;
@@ -203,11 +212,15 @@ export function publicStatus(r: PendingRequest) {
     status: r.status,
     summary: r.summary,
     confirmerId: r.confirmerId,
+    approval: r.approval ?? "confirmer",
+    requesterId: r.requesterId ?? null,
     requestedBy: r.requestedBy,
     createdAt: r.createdAt,
     expiresAt: r.expiresAt,
     decidedAt: r.decidedAt ?? null,
     decidedBy: r.decidedBy ?? null,
+    confirmedBy: ["confirmed", "failed", "handed_off"].includes(r.status) ? r.decidedBy ?? null : null,
+    cancelledBy: r.status === "cancelled" ? r.decidedBy ?? null : null,
     messageUrl: r.message?.url ?? null,
     deliveredBy: r.message ? (r.message.dm ? "dm" : "channel") : null,
     result: r.result ?? null,
