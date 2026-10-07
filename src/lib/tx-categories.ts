@@ -100,7 +100,7 @@ export async function refreshCategories(opts: { force?: boolean; url?: string; f
   }
 }
 
-export function startCategoryRefresh(): number {
+export function startCategoryRefresh(): ReturnType<typeof setInterval> {
   refreshCategories({ force: true }).catch(() => {});
   return setInterval(() => refreshCategories({ force: true }).catch(() => {}), REFRESH_MS);
 }
