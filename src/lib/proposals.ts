@@ -30,6 +30,9 @@ import { getUser, getUserEmail, saveUser } from "./user-emails.ts";
 import { hourlyRates, ratesFromPrices } from "./booking-email.ts";
 import { hhmm, longDay } from "./shift-email.ts";
 import { bookableFromMessage, checkBookableFrom } from "./room-rules.ts";
+import { categoryLabel, EURO_CATEGORIES, TOKEN_CATEGORIES, txUriFor } from "./tx-categories.ts";
+import { currentCategory, setTransactionCategory } from "./category-annotations.ts";
+import { ONLY_STEWARDS, stewardCheck } from "./category-select.ts";
 import {
   type CalendarEvent,
   isCancelledShiftEvent,
@@ -48,6 +51,7 @@ import {
   type MintParams,
   type PendingRequest,
   publicStatus,
+  type CategoryParams,
   type RoomBookingParams,
   type ShiftSignupParams,
   transition,
@@ -377,9 +381,46 @@ export async function proposeRoomBooking(input: Common & {
   return await propose({ ...input, kind: "room_booking", confirmerId: member.id, params, summary });
 }
 
+/** "0x…" (with chain, default celo) or a full URI ("ethereum:42220:tx:0x…", or one chb uses for euro transactions). */
+export function resolveTxUri(tx: string, chain = "celo"): string {
+  const t = tx.trim();
+  if (/^0x[0-9a-fA-F]{64}$/.test(t)) return txUriFor(chain, t);
+  if (/^[a-z][a-z0-9+.-]*:\S+$/i.test(t)) return t.toLowerCase().startsWith("ethereum:") ? t.toLowerCase() : t;
+  throw new Error(`Not a transaction hash (0x + 64 hex) or URI: ${tx}`);
+}
+
+/** Link to show for a transaction URI (txinfo for on-chain ones). */
+function txLink(uri: string): string {
+  const m = uri.match(/^ethereum:(\d+):tx:(0x[0-9a-f]{64})$/);
+  const chain = m && ({ "42220": "celo", "100": "gnosis", "8453": "base", "137": "polygon" } as Record<string, string>)[m[1]];
+  return m && chain ? `[${m[2].slice(0, 10)}…](<https://txinfo.xyz/${chain}/tx/${m[2]}>)` : `\`${uri}\``;
+}
+
+export async function proposeTransactionCategory(input: Common & {
+  requesterUserId: string;
+  tx: string;
+  chain?: string;
+  category: string;
+}) {
+  const guild = await getGuild(input.guildId);
+  const requester = await getMember(guild, input.requesterUserId, "requester");
+  if (!(await stewardCheck(requester, input.guildId))) throw new Error(ONLY_STEWARDS);
+  const uri = resolveTxUri(input.tx, input.chain);
+  const slug = input.category.trim();
+  const known = [...TOKEN_CATEGORIES, ...EURO_CATEGORIES].find((c) => c.slug.toLowerCase() === slug.toLowerCase());
+  if (!known) {
+    throw new Error(`Unknown category "${input.category}". Tokens: ${TOKEN_CATEGORIES.map((c) => c.slug).join(", ")}. Euros: chb's categories (e.g. rental, membership, donation, rent, utilities).`);
+  }
+  await guardPending(input.guildId, requester.id);
+  const previous = await currentCategory(uri);
+  const params: CategoryParams = { uris: [uri], category: known.slug, previous };
+  const summary = `Set the category of ${txLink(uri)} to **${categoryLabel(known.slug)}** (now: ${previous ? categoryLabel(previous) : "none"})`;
+  return await propose({ ...input, kind: "tx_category", confirmerId: requester.id, requesterId: requester.id, params, summary });
+}
+
 // ── Creating and delivering a request ───────────────────────────────────────
 
-const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking" } as const;
+const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking", tx_category: "category change" } as const;
 
 function buttons(id: string, kind: PendingRequest["kind"]) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -570,7 +611,11 @@ export async function handleProposalButton(interaction: ButtonInteraction): Prom
   await interaction.update({ content: `${r.summary}\n\n⏳ Confirmed by <@${interaction.user.id}>, working on it…`, components: [], allowedMentions: { parse: [] } });
 
   try {
-    const outcome = r.kind === "mint" ? await runMint(r, interaction) : await runShiftSignup(r, interaction);
+    const outcome = r.kind === "mint"
+      ? await runMint(r, interaction)
+      : r.kind === "tx_category"
+      ? await runCategory(r, interaction)
+      : await runShiftSignup(r, interaction);
     await updateRequest(r.guildId, r.id, (x) => {
       x.status = outcome.ok ? "confirmed" : "failed";
       x.result = outcome.result;
@@ -620,6 +665,26 @@ async function runMint(r: PendingRequest, interaction: ButtonInteraction): Promi
     ok,
     text: formatMintResults(results, token, p.amount, p.description),
     result: results.map((x) => ({ userId: x.recipient.id, success: x.success, txHash: x.hash ?? null, error: x.error ?? null })),
+  };
+}
+
+/** Same as the dropdown: still a steward, then publish the change signed by their key. */
+async function runCategory(r: PendingRequest, interaction: ButtonInteraction): Promise<Outcome> {
+  const p = r.params as CategoryParams;
+  const guild = await getGuild(r.guildId);
+  const member = await getMember(guild, interaction.user.id, "steward");
+  if (!(await stewardCheck(member, r.guildId))) return { ok: false, text: `❌ ${ONLY_STEWARDS}` };
+  const { changes, npub } = await setTransactionCategory({
+    guildId: r.guildId,
+    guildName: guild.name,
+    member: { id: member.id, username: member.user.username, displayName: nameOf(member), avatar: member.displayAvatarURL({ size: 256, extension: "png" }) },
+    uris: p.uris,
+    category: p.category,
+  });
+  return {
+    ok: true,
+    text: `🏷️ Category set to **${categoryLabel(p.category)}** by <@${member.id}>.`,
+    result: { category: p.category, events: changes.map((c) => c.eventId), signedBy: npub },
   };
 }
 

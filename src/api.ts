@@ -15,6 +15,7 @@ import { buildUserPermissionReport } from "./lib/permissions.ts";
 import { handleMcpRequest, UserPermissionsToolInput } from "./mcp/server.ts";
 import { checkBookableFrom } from "./lib/room-rules.ts";
 import { calendarPaidLine, publishBookingAnnotation } from "./lib/booking-annotations.ts";
+import { withCategory } from "./lib/tx-categories.ts";
 import {
   checkRoomAvailability,
   getRequestStatus,
@@ -23,6 +24,7 @@ import {
   proposeMint,
   proposeRoomBooking,
   proposeShiftSignup,
+  proposeTransactionCategory,
 } from "./lib/proposals.ts";
 
 const API_KEY = Deno.env.get("API_KEY");
@@ -290,9 +292,10 @@ Booking Chain: ${tokenConfig.chain}`;
           const startTimeStr = formatDiscordTime(startTime);
           const endTimeStr = formatDiscordTime(endTime);
 
-          await transactionsChannel.send(
-            `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`
-          );
+          await transactionsChannel.send(withCategory(
+            `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
+            { chain: tokenConfig.chain, tokenSymbol, category: "rental" },
+          ));
         }
       } catch (err) {
         console.error("Error posting to transactions channel:", err);
@@ -556,6 +559,7 @@ async function handleRequest(req: Request): Promise<Response> {
       proposeShiftSignup: (a) => proposeShiftSignup(a as Parameters<typeof proposeShiftSignup>[0]),
       proposeRoomBooking: (a) => proposeRoomBooking(a as Parameters<typeof proposeRoomBooking>[0]),
       getRequestStatus: (a) => getRequestStatus(a as { requestId: string }),
+      proposeTransactionCategory: (a) => proposeTransactionCategory(a as Parameters<typeof proposeTransactionCategory>[0]),
     });
   } else if (path === "/mcp") {
     // Streamable HTTP: no server-initiated stream and no sessions to delete.

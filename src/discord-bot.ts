@@ -67,6 +67,8 @@ import {
 import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
 import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalExpiry } from "./lib/proposals.ts";
 import { backfillBookingAnnotations } from "./lib/booking-annotations.ts";
+import { CATEGORY_SELECT_PREFIX } from "./lib/tx-categories.ts";
+import { handleCategorySelect } from "./lib/category-select.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
 import handleSendCommand, { handleSendAutocomplete, handleSendInteraction, sendStates } from "./commands/send.ts";
@@ -560,6 +562,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return handleChannelSelect(interaction, userId, guildId);
     }
     if (interaction.isStringSelectMenu()) {
+      if (interaction.customId.startsWith(CATEGORY_SELECT_PREFIX)) {
+        return handleCategorySelect(interaction);
+      }
       if (interaction.customId === "cancel_select_event") {
         return handleCancelSelect(interaction, userId);
       }
