@@ -30,7 +30,7 @@ import { getUser, getUserEmail, saveUser } from "./user-emails.ts";
 import { hourlyRates, ratesFromPrices } from "./booking-email.ts";
 import { hhmm, longDay } from "./shift-email.ts";
 import { bookableFromMessage, checkBookableFrom } from "./room-rules.ts";
-import { categoryLabel, EURO_CATEGORIES, TOKEN_CATEGORIES, txUriFor } from "./tx-categories.ts";
+import { categoryLabel, euroCategories, tokenCategories, txUriFor } from "./tx-categories.ts";
 import { currentCategory, setTransactionCategory } from "./category-annotations.ts";
 import { ONLY_STEWARDS, stewardCheck } from "./category-select.ts";
 import {
@@ -407,9 +407,9 @@ export async function proposeTransactionCategory(input: Common & {
   if (!(await stewardCheck(requester, input.guildId))) throw new Error(ONLY_STEWARDS);
   const uri = resolveTxUri(input.tx, input.chain);
   const slug = input.category.trim();
-  const known = [...TOKEN_CATEGORIES, ...EURO_CATEGORIES].find((c) => c.slug.toLowerCase() === slug.toLowerCase());
+  const known = [...tokenCategories(), ...euroCategories()].find((c) => c.slug.toLowerCase() === slug.toLowerCase());
   if (!known) {
-    throw new Error(`Unknown category "${input.category}". Tokens: ${TOKEN_CATEGORIES.map((c) => c.slug).join(", ")}. Euros: chb's categories (e.g. rental, membership, donation, rent, utilities).`);
+    throw new Error(`Unknown category "${input.category}". Tokens: ${tokenCategories().map((c) => c.slug).join(", ")}. Euros: ${euroCategories().map((c) => c.slug).join(", ")}.`);
   }
   await guardPending(input.guildId, requester.id);
   const previous = await currentCategory(uri);

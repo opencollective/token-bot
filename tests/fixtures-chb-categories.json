@@ -1,0 +1,514 @@
+{
+  "categories": [
+    {
+      "slug": "membership",
+      "label": "Membership",
+      "direction": "income",
+      "group": "membership",
+      "accounts": [
+        "7042",
+        "730"
+      ],
+      "products": [
+        "*membership*"
+      ]
+    },
+    {
+      "slug": "donation",
+      "label": "Donation",
+      "direction": "income",
+      "group": "donations",
+      "accounts": [
+        "740040"
+      ]
+    },
+    {
+      "slug": "subsidy",
+      "label": "Subsidy",
+      "direction": "income",
+      "group": "grants",
+      "accounts": [
+        "740041",
+        "7408",
+        "7409"
+      ]
+    },
+    {
+      "slug": "grant",
+      "label": "Grant",
+      "direction": "income",
+      "group": "grants"
+    },
+    {
+      "slug": "sponsoring",
+      "label": "Sponsoring",
+      "direction": "income",
+      "group": "sponsoring",
+      "accounts": [
+        "700110",
+        "749001"
+      ]
+    },
+    {
+      "slug": "rental",
+      "label": "Room rental",
+      "direction": "income",
+      "group": "space",
+      "accounts": [
+        "700100",
+        "700003"
+      ],
+      "products": [
+        "*room*",
+        "*ostrom*",
+        "*event space*",
+        "*satoshi*",
+        "down payment*"
+      ]
+    },
+    {
+      "slug": "rentals",
+      "label": "Room rental (legacy)",
+      "direction": "income",
+      "group": "space"
+    },
+    {
+      "slug": "coworking",
+      "label": "Coworking",
+      "direction": "income",
+      "group": "space",
+      "products": [
+        "*cowork*",
+        "*shifter*"
+      ]
+    },
+    {
+      "slug": "ticket",
+      "label": "Ticket",
+      "direction": "income",
+      "group": "events",
+      "accounts": [
+        "700150"
+      ],
+      "products": [
+        "*ticket*"
+      ]
+    },
+    {
+      "slug": "catering",
+      "label": "Catering",
+      "direction": "both",
+      "group": "food",
+      "accounts": [
+        "700002",
+        "604200"
+      ],
+      "products": [
+        "*coffee*",
+        "*sandwich*",
+        "*snack*",
+        "*buffet*",
+        "*lunch*",
+        "*catering*",
+        "drinks*"
+      ]
+    },
+    {
+      "slug": "fridge",
+      "label": "Fridge",
+      "direction": "both",
+      "group": "food",
+      "products": [
+        "*fridge*",
+        "*frige*"
+      ]
+    },
+    {
+      "slug": "drinks",
+      "label": "Drinks",
+      "direction": "both",
+      "group": "food",
+      "accounts": [
+        "604100"
+      ]
+    },
+    {
+      "slug": "coffee",
+      "label": "Coffee",
+      "direction": "expense",
+      "group": "food",
+      "accounts": [
+        "604300"
+      ]
+    },
+    {
+      "slug": "other-income",
+      "label": "Other income",
+      "direction": "income",
+      "group": "other",
+      "accounts": [
+        "70",
+        "74",
+        "75"
+      ]
+    },
+    {
+      "slug": "rent",
+      "label": "Rent",
+      "direction": "expense",
+      "group": "space",
+      "accounts": [
+        "6101"
+      ]
+    },
+    {
+      "slug": "utilities",
+      "label": "Utilities",
+      "direction": "expense",
+      "group": "space",
+      "accounts": [
+        "612300"
+      ]
+    },
+    {
+      "slug": "maintenance",
+      "label": "Maintenance",
+      "direction": "expense",
+      "group": "space",
+      "accounts": [
+        "6102",
+        "6110"
+      ]
+    },
+    {
+      "slug": "HR",
+      "label": "Salaries and social charges",
+      "direction": "expense",
+      "group": "people",
+      "accounts": [
+        "62",
+        "453",
+        "454",
+        "455",
+        "456",
+        "613300",
+        "6171",
+        "618"
+      ]
+    },
+    {
+      "slug": "salaries",
+      "label": "Salaries (legacy)",
+      "direction": "expense",
+      "group": "people"
+    },
+    {
+      "slug": "consulting",
+      "label": "Consulting and fees",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "613105",
+        "613110",
+        "613000",
+        "613220",
+        "615101"
+      ]
+    },
+    {
+      "slug": "accounting",
+      "label": "Accounting and legal",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "6132"
+      ]
+    },
+    {
+      "slug": "services",
+      "label": "Services",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "602",
+        "610001"
+      ]
+    },
+    {
+      "slug": "insurance",
+      "label": "Insurance",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "614010",
+        "614020",
+        "614060"
+      ]
+    },
+    {
+      "slug": "supplies",
+      "label": "Supplies",
+      "direction": "expense",
+      "group": "equipment",
+      "accounts": [
+        "6112",
+        "6120",
+        "6121",
+        "612113",
+        "612220",
+        "6125",
+        "6126",
+        "600",
+        "611010"
+      ]
+    },
+    {
+      "slug": "equipment",
+      "label": "Equipment",
+      "direction": "expense",
+      "group": "equipment",
+      "accounts": [
+        "612150",
+        "612110",
+        "630"
+      ]
+    },
+    {
+      "slug": "furniture",
+      "label": "Furniture and rented equipment",
+      "direction": "expense",
+      "group": "equipment",
+      "accounts": [
+        "6117"
+      ]
+    },
+    {
+      "slug": "events",
+      "label": "Events and receptions",
+      "direction": "expense",
+      "group": "events",
+      "accounts": [
+        "6146",
+        "6147",
+        "615110",
+        "615120",
+        "615150",
+        "6165"
+      ]
+    },
+    {
+      "slug": "travel",
+      "label": "Travel",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "615000",
+        "615140",
+        "615230",
+        "617210",
+        "613310"
+      ]
+    },
+    {
+      "slug": "marketing",
+      "label": "Marketing",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "615010"
+      ]
+    },
+    {
+      "slug": "internet",
+      "label": "Telecommunications",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "616020",
+        "616030"
+      ]
+    },
+    {
+      "slug": "webservice",
+      "label": "Web services",
+      "direction": "expense",
+      "group": "services",
+      "accounts": [
+        "616040"
+      ]
+    },
+    {
+      "slug": "taxes",
+      "label": "Taxes",
+      "direction": "expense",
+      "group": "taxes",
+      "accounts": [
+        "640120",
+        "6400",
+        "6401",
+        "6402",
+        "6403",
+        "6404",
+        "6405"
+      ]
+    },
+    {
+      "slug": "vat",
+      "label": "VAT",
+      "direction": "both",
+      "group": "taxes",
+      "accounts": [
+        "411",
+        "451"
+      ]
+    },
+    {
+      "slug": "stripe_fee",
+      "label": "Payment fees",
+      "direction": "expense",
+      "group": "finance",
+      "accounts": [
+        "657010",
+        "657020"
+      ]
+    },
+    {
+      "slug": "bank_fees",
+      "label": "Bank fees",
+      "direction": "expense",
+      "group": "finance",
+      "accounts": [
+        "650",
+        "6540",
+        "657030"
+      ]
+    },
+    {
+      "slug": "donations_given",
+      "label": "Donations given",
+      "direction": "expense",
+      "group": "other",
+      "accounts": [
+        "640800"
+      ]
+    },
+    {
+      "slug": "exceptional",
+      "label": "Exceptional items",
+      "direction": "both",
+      "group": "other",
+      "accounts": [
+        "66",
+        "76"
+      ]
+    },
+    {
+      "slug": "other-expense",
+      "label": "Other expense",
+      "direction": "expense",
+      "group": "other",
+      "accounts": [
+        "6"
+      ]
+    },
+    {
+      "slug": "expense",
+      "label": "Expense reimbursement",
+      "direction": "expense",
+      "group": "people"
+    },
+    {
+      "slug": "debt",
+      "label": "Vouchers and debts",
+      "direction": "both",
+      "group": "finance",
+      "accounts": [
+        "460001",
+        "489306"
+      ]
+    },
+    {
+      "slug": "loan",
+      "label": "Loans",
+      "direction": "both",
+      "group": "finance",
+      "accounts": [
+        "489308",
+        "17"
+      ]
+    },
+    {
+      "slug": "internal_transfer",
+      "label": "Internal transfer",
+      "direction": "both",
+      "group": "internal",
+      "accounts": [
+        "58"
+      ]
+    },
+    {
+      "slug": "opening_balance",
+      "label": "Opening balance",
+      "direction": "both",
+      "group": "internal"
+    },
+    {
+      "slug": "accrual",
+      "label": "Previous-year invoices",
+      "direction": "both",
+      "group": "other",
+      "accounts": [
+        "404",
+        "444"
+      ]
+    },
+    {
+      "slug": "refund",
+      "label": "Refund",
+      "direction": "both",
+      "group": "other"
+    },
+    {
+      "slug": "governance",
+      "label": "Governance",
+      "direction": "both",
+      "group": "contributions"
+    },
+    {
+      "slug": "cleaning",
+      "label": "Cleaning",
+      "direction": "both",
+      "group": "contributions"
+    },
+    {
+      "slug": "shift",
+      "label": "Shift",
+      "direction": "both",
+      "group": "contributions"
+    },
+    {
+      "slug": "note-taking",
+      "label": "Note-taking",
+      "direction": "both",
+      "group": "contributions"
+    },
+    {
+      "slug": "admin",
+      "label": "Admin",
+      "direction": "both",
+      "group": "contributions"
+    },
+    {
+      "slug": "care",
+      "label": "Care",
+      "direction": "both",
+      "group": "contributions"
+    },
+    {
+      "slug": "none",
+      "label": "None",
+      "direction": "both",
+      "group": "contributions"
+    }
+  ]
+}

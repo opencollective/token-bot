@@ -67,7 +67,7 @@ import {
 import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
 import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalExpiry } from "./lib/proposals.ts";
 import { backfillBookingAnnotations } from "./lib/booking-annotations.ts";
-import { CATEGORY_SELECT_PREFIX } from "./lib/tx-categories.ts";
+import { CATEGORY_SELECT_PREFIX, startCategoryRefresh } from "./lib/tx-categories.ts";
 import { handleCategorySelect } from "./lib/category-select.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
@@ -373,6 +373,9 @@ client.on(Events.ClientReady, async (readyClient) => {
 
   // Elinor's proposals: Confirm/Cancel buttons and 24 h expiry
   startProposalExpiry(client);
+
+  // Transaction categories: chb's public list, refreshed hourly.
+  startCategoryRefresh();
 
   // Booking payments must be annotated on the community relay (chb, two-jars screen): fill any gap
   // now and every 6 hours.
