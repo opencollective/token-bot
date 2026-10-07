@@ -7,7 +7,6 @@ import { burnTokensFrom, getBalance, SupportedChain } from "./lib/blockchain.ts"
 import { getAccountAddressFromDiscordUserId } from "./lib/citizenwallet.ts";
 import { GoogleCalendarClient } from "./lib/googlecalendar.ts";
 import { loadGuildFile, loadGuildSettings } from "./lib/utils.ts";
-import { Nostr, URI } from "./lib/nostr.ts";
 import { Product } from "./types.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { Client, GuildMember, PermissionsBitField, TextChannel } from "discord.js";
@@ -15,6 +14,7 @@ import { disabledCalendars } from "./lib/calendar-state.ts";
 import { buildUserPermissionReport } from "./lib/permissions.ts";
 import { handleMcpRequest, UserPermissionsToolInput } from "./mcp/server.ts";
 import { checkBookableFrom } from "./lib/room-rules.ts";
+import { calendarPaidLine, publishBookingAnnotation } from "./lib/booking-annotations.ts";
 import {
   checkRoomAvailability,
   getRequestStatus,
@@ -57,12 +57,6 @@ async function loadGitInfo() {
 }
 
 // Helper functions
-function formatDuration(minutes: number): string {
-  if (minutes < 60) return `${minutes}min`;
-  const hours = Math.floor(minutes / 60);
-  const remaining = minutes % 60;
-  return remaining === 0 ? `${hours}h` : `${hours}h${remaining}`;
-}
 
 function formatDiscordDate(date: Date): string {
   const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -253,6 +247,7 @@ async function handleBookExecute(req: Request): Promise<Response> {
     const bookingTimeStr = formatDiscordTime(bookingTime);
 
     const eventDescription = `Booked by Discord user on ${bookingDateStr} at ${bookingTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol}
+${calendarPaidLine(priceAmount, tokenSymbol)}
 
 To cancel, run the /cancel command in Discord.
 
@@ -277,8 +272,6 @@ Booking Chain: ${tokenConfig.chain}`;
       encodeURIComponent(product.calendarId)
     }&ctz=${encodeURIComponent(guildSettings.guild.timezone || "Europe/Brussels")}`;
 
-    const chainId = tokenConfig.chain === "celo" ? 42220 :
-                    tokenConfig.chain === "gnosis" ? 100 : 84532;
     const explorerBaseUrl = tokenConfig.chain === "celo" ? "https://celoscan.io" :
                             tokenConfig.chain === "gnosis" ? "https://gnosisscan.io" :
                             "https://sepolia.basescan.org";
@@ -326,21 +319,14 @@ Booking Chain: ${tokenConfig.chain}`;
       }
     }
 
-    // Nostr annotation
-    try {
-      const nostr = Nostr.getInstance();
-      const txUri = `ethereum:${chainId}:tx:${txHash}` as URI;
-
-      await nostr.publishMetadata(txUri, {
-        content: `Booking ${product.name} room for ${formatDuration(duration)}`,
-        tags: [
-          ["t", "booking"],
-          ["t", product.slug],
-        ],
-      });
-    } catch (err) {
-      console.error("Error sending Nostr annotation:", err);
-    }
+    // Nostr annotation (community relay, format chb merges)
+    await publishBookingAnnotation({
+      chain: tokenConfig.chain,
+      txHash,
+      roomName: product.name,
+      roomSlug: product.slug,
+      durationMinutes: duration,
+    });
 
     return json({
       success: true,

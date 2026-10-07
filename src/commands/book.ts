@@ -18,11 +18,11 @@ import { GoogleCalendarClient } from "../lib/googlecalendar.ts";
 import { invalidateRoomEventsCache } from "../lib/room-events-cache.ts";
 import { burnTokensFrom, getBalance, SupportedChain } from "../lib/blockchain.ts";
 import { getAccountAddressFromDiscordUserId } from "../lib/citizenwallet.ts";
-import { Nostr, URI } from "../lib/nostr.ts";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
 import { fetchRoomImage, hourlyRates, ratesFromPrices, sendBookingConfirmation } from "../lib/booking-email.ts";
 import { bookableFromMessage, startTimeAllowed } from "../lib/room-rules.ts";
+import { calendarPaidLine, publishBookingAnnotation } from "../lib/booking-annotations.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -1889,8 +1889,6 @@ ${mintInstructions}`,
 
       await calendarClient.ensureCalendarInList(product.calendarId);
 
-      const chainId = tokenConfig.chain === "celo" ? 42220 : 
-                      tokenConfig.chain === "gnosis" ? 100 : 84532;
       const explorerBaseUrl = tokenConfig.chain === "celo"
         ? "https://celoscan.io"
         : tokenConfig.chain === "gnosis" 
@@ -1928,7 +1926,7 @@ ${mintInstructions}`,
       let eventDescription =
         `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${bookingDateStr} at ${bookingTimeStr} for ${
           priceAmount.toFixed(2)
-        } ${tokenSymbol}`;
+        } ${tokenSymbol}\n${calendarPaidLine(priceAmount, tokenSymbol)}`;
       if (transactionMessageLink) {
         eventDescription += `\n${transactionMessageLink}`;
       }
@@ -1964,21 +1962,13 @@ Booking Chain: ${tokenConfig.chain}`;
       // Invalidate room events cache so /shifts and /book show updated data
       invalidateRoomEventsCache();
 
-      try {
-        const nostr = Nostr.getInstance();
-        const txUri = `ethereum:${chainId}:tx:${txHash}` as URI;
-        const durationStr = formatDuration(state.duration || 60);
-
-        await nostr.publishMetadata(txUri, {
-          content: `Booking ${product.name} room for ${durationStr}`,
-          tags: [
-            ["t", "booking"],
-            ["t", product.slug],
-          ],
-        });
-      } catch (error) {
-        console.error("Error sending Nostr annotation:", error);
-      }
+      await publishBookingAnnotation({
+        chain: tokenConfig.chain,
+        txHash,
+        roomName: product.name,
+        roomSlug: product.slug,
+        durationMinutes: state.duration || 60,
+      });
 
       if (product.channelId && guild) {
         try {
@@ -2257,7 +2247,6 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   }
 
   const explorerBaseUrl = tokenConfig.chain === "celo" ? "https://celoscan.io" : tokenConfig.chain === "gnosis" ? "https://gnosisscan.io" : "https://sepolia.basescan.org";
-  const chainId = tokenConfig.chain === "celo" ? 42220 : tokenConfig.chain === "gnosis" ? 100 : 84532;
   const txUrl = `${explorerBaseUrl}/tx/${txHash}`;
   const bookingTime = new Date();
   const calendarClient = new GoogleCalendarClient();
@@ -2268,7 +2257,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   const invitees = inviteEmails(state, guildId, userId);
   let invite: { invited: boolean; inviteError?: string; eventId?: string } = { invited: false };
   for (const [i, occurrence] of free.entries()) {
-    let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)`;
+    let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)\n${calendarPaidLine(perBooking, tokenSymbol)}`;
     if (state.eventUrl) description += `\nEvent URL: ${state.eventUrl}`;
     description += `\n\nPlease reach out to @${interaction.user.username} on Discord for questions about this booking.\n\nTo cancel, ${interaction.user.displayName} needs to run the /cancel command in Discord.\n\nUser ID: ${userId}\nBooking TX: ${txHash}\nBooking Chain: ${tokenConfig.chain}`;
     const event: any = {
@@ -2301,14 +2290,14 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     }
   }
 
-  try {
-    await Nostr.getInstance().publishMetadata(`ethereum:${chainId}:tx:${txHash}` as URI, {
-      content: `Booking ${product.name} room for ${booked.length} × ${formatDuration(state.duration)}`,
-      tags: [["t", "booking"], ["t", product.slug]],
-    });
-  } catch (error) {
-    console.error("Error sending Nostr annotation:", error);
-  }
+  await publishBookingAnnotation({
+    chain: tokenConfig.chain,
+    txHash,
+    roomName: product.name,
+    roomSlug: product.slug,
+    durationMinutes: state.duration,
+    dates: booked.length,
+  });
 
   const mailNote = await emailConfirmation(state, interaction, guildId, userId, product, booked, perBooking * booked.length, tokenSymbol, txUrl, txHash);
   bookStates.delete(userId);

@@ -66,6 +66,7 @@ import {
 } from "./commands/mint-context.ts";
 import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
 import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalExpiry } from "./lib/proposals.ts";
+import { backfillBookingAnnotations } from "./lib/booking-annotations.ts";
 import handleBurnCommand, { handleBurnAutocomplete } from "./commands/burn.ts";
 import handlePermissionsCommand from "./commands/permissions.ts";
 import handleSendCommand, { handleSendAutocomplete, handleSendInteraction, sendStates } from "./commands/send.ts";
@@ -370,6 +371,25 @@ client.on(Events.ClientReady, async (readyClient) => {
 
   // Elinor's proposals: Confirm/Cancel buttons and 24 h expiry
   startProposalExpiry(client);
+
+  // Booking payments must be annotated on the community relay (chb, two-jars screen): fill any gap
+  // now and every 6 hours.
+  const runBookingBackfill = async () => {
+    for (const guildId of client.guilds.cache.keys()) {
+      const products = await loadGuildFile(guildId, "products.json").catch(() => null) as Product[] | null;
+      if (!products?.length) continue;
+      try {
+        const r = await backfillBookingAnnotations(products);
+        if (r.published.length || r.failed.length) {
+          console.log(`[booking-backfill] ${guildId}: ${r.checked} payments, annotated ${r.published.join(", ") || "none"}, failed ${r.failed.join(", ") || "none"}`);
+        }
+      } catch (error) {
+        console.error(`[booking-backfill] ${guildId} failed:`, error);
+      }
+    }
+  };
+  setTimeout(() => runBookingBackfill(), 60_000);
+  setInterval(() => runBookingBackfill(), 6 * 60 * 60 * 1000);
 
   // Make sure the :mint: emoji exists in every guild with a mintable token
   ensureMintEmojis(client).catch(err => console.error("Mint emoji setup failed:", err));
