@@ -23,7 +23,8 @@ import { getUser, getUserEmail, saveUser } from "../lib/user-emails.ts";
 import { fetchRoomImage, hourlyRates, ratesFromPrices, sendBookingConfirmation } from "../lib/booking-email.ts";
 import { bookableFromMessage, startTimeAllowed } from "../lib/room-rules.ts";
 import { calendarPaidLine, publishBookingAnnotation } from "../lib/booking-annotations.ts";
-import { withCategory } from "../lib/tx-categories.ts";
+import { txUriFor } from "../lib/tx-categories.ts";
+import { reportTransaction } from "../lib/tx-reports.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -1910,15 +1911,18 @@ ${mintInstructions}`,
             const startTimeStr = formatDiscordTime(state.startTime);
             const endTimeStr = formatDiscordTime(state.endTime);
 
-            const message = await transactionsChannel.send(withCategory(
-              `🗓️ <@${userId}> booked ${product.name}${state.bookedFor ? ` for ${forLabel(state)}` : ""} on ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
+            const report = await reportTransaction({
+              client: interaction.client,
+              channelId: transactionsChannel.id,
+              content: `🗓️ <@${userId}> booked ${product.name}${state.bookedFor ? ` for ${forLabel(state)}` : ""} on ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${
                 priceAmount.toFixed(2)
               } ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
-              { chain: tokenConfig.chain, tokenSymbol, category: "rental" },
-            ));
+              uris: [txUriFor(tokenConfig.chain, txHash)],
+              currency: tokenSymbol,
+              category: "rental",
+            });
 
-            transactionMessageLink =
-              `https://discord.com/channels/${guildId}/${guildSettings.channels.transactions}/${message.id}`;
+            transactionMessageLink = report.url;
           }
         } catch (error) {
           console.error("Error sending message to transactions channel:", error);
@@ -2285,13 +2289,20 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     const guild = guildOf(interaction, guildId);
     if (!channelId || !guild || booked.length === 0) continue;
     try {
-      const channel = await guild.channels.fetch(channelId) as TextChannel;
-      // The category dropdown goes on the transactions channel's report only.
-      await channel?.send(
-        channelId === guildSettings.channels?.transactions
-          ? withCategory(announcement, { chain: tokenConfig.chain, tokenSymbol, category: "rental" })
-          : announcement,
-      );
+      // The transactions channel gets the standard report (category dropdown); the room channel a plain post.
+      if (channelId === guildSettings.channels?.transactions) {
+        await reportTransaction({
+          client: interaction.client,
+          channelId,
+          content: announcement,
+          uris: [txUriFor(tokenConfig.chain, txHash)],
+          currency: tokenSymbol,
+          category: "rental",
+        });
+      } else {
+        const channel = await guild.channels.fetch(channelId) as TextChannel;
+        await channel?.send(announcement);
+      }
     } catch (error) {
       console.error(`Error sending booking message to channel ${channelId}:`, error);
     }

@@ -15,7 +15,15 @@ import { buildUserPermissionReport } from "./lib/permissions.ts";
 import { handleMcpRequest, UserPermissionsToolInput } from "./mcp/server.ts";
 import { checkBookableFrom } from "./lib/room-rules.ts";
 import { calendarPaidLine, publishBookingAnnotation } from "./lib/booking-annotations.ts";
-import { withCategory } from "./lib/tx-categories.ts";
+import { txUriFor } from "./lib/tx-categories.ts";
+import {
+  DEFAULT_REPORT_GUILD,
+  defaultReportChannel,
+  formatTransactionReport,
+  reportTransaction,
+  type TxReportFields,
+} from "./lib/tx-reports.ts";
+import { categoriesFor } from "./lib/tx-categories.ts";
 import {
   checkRoomAvailability,
   getRequestStatus,
@@ -124,6 +132,91 @@ function checkMcpAuth(req: Request): { caller: string } | Response {
     }
   }
   return error("Unauthorized", 401);
+}
+
+/** Constant-time bearer check against one secret. */
+function bearerMatches(req: Request, secret: string | undefined): boolean {
+  if (!secret) return false;
+  const auth = req.headers.get("Authorization") || "";
+  const given = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (given.length !== secret.length) return false;
+  let diff = 0;
+  for (let i = 0; i < secret.length; i++) diff |= secret.charCodeAt(i) ^ given.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * POST /api/transactions/report: other bots (stripe-bot, monerium-bot…) report a transaction the
+ * standard way: same format, category line and steward dropdown as the bot's own reports.
+ * Auth: Bearer TX_REPORT_TOKEN. Idempotent by `uri`.
+ */
+async function handleTransactionReport(req: Request): Promise<Response> {
+  const secret = Deno.env.get("TX_REPORT_TOKEN");
+  if (!secret) return error("TX_REPORT_TOKEN not configured", 503);
+  if (!bearerMatches(req, secret)) return error("Unauthorized", 401);
+  if (!discordClient) return error("Discord client not ready", 503);
+
+  let b: Record<string, unknown>;
+  try {
+    b = await req.json();
+  } catch {
+    return error("Invalid JSON body");
+  }
+  const str = (k: string, max = 500) => (typeof b[k] === "string" && (b[k] as string).trim() ? (b[k] as string).trim().slice(0, max) : undefined);
+  const uri = str("uri", 300);
+  const currency = str("currency", 20);
+  const amount = b.amount;
+  if (!uri || !/^[a-z][a-z0-9+.-]*:\S+$/i.test(uri)) return error("uri is required (e.g. ethereum:100:tx:0x…, stripe:txn_…, iban:<iban>:tx:<id>)");
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) return error("amount must be a non-negative number");
+  if (!currency) return error("currency is required (e.g. EUR, EURe, CHT)");
+  if (b.direction !== "in" && b.direction !== "out") return error('direction must be "in" or "out"');
+  if (b.links !== undefined && (!Array.isArray(b.links) || b.links.some((l) => !l || typeof (l as { url?: unknown }).url !== "string" || typeof (l as { label?: unknown }).label !== "string"))) {
+    return error("links must be [{ label, url }]");
+  }
+  const category = str("category", 60);
+  if (category && !categoriesFor(currency).some((c) => c.slug === category)) {
+    return error(`Unknown category "${category}" for ${currency}. Known: ${categoriesFor(currency).map((c) => c.slug).join(", ")}`);
+  }
+  const occurredAt = str("occurredAt", 40);
+  if (occurredAt && isNaN(Date.parse(occurredAt))) return error("occurredAt must be an ISO date");
+
+  // Where: a thread or channel if given, else the currency's transactions channel in the guild.
+  const guildId = str("guildId", 30) ?? Deno.env.get("TX_REPORT_GUILD_ID") ?? DEFAULT_REPORT_GUILD;
+  const channelId = str("threadId", 30) ?? str("channelId", 30) ?? await defaultReportChannel(guildId, currency);
+  if (!channelId) return error(`No transactions channel for ${currency} in guild ${guildId}; pass channelId`, 400);
+
+  const fields: TxReportFields = {
+    uri,
+    amount,
+    currency,
+    direction: b.direction,
+    counterparty: str("counterparty", 200),
+    description: str("description", 500),
+    links: b.links as TxReportFields["links"],
+    occurredAt,
+  };
+  try {
+    const r = await reportTransaction({
+      client: discordClient,
+      channelId,
+      content: formatTransactionReport(fields),
+      uris: [uri],
+      currency,
+      category,
+      allowedMentions: { parse: [] },
+    });
+    return json({
+      ok: true,
+      alreadyReported: r.alreadyReported,
+      messageUrl: r.url,
+      messageId: r.record.messageId,
+      channelId: r.record.channelId,
+      category: r.record.category,
+    }, r.alreadyReported ? 200 : 201);
+  } catch (err) {
+    console.error("[tx-report] failed:", err);
+    return error(`Could not post the report: ${(err as Error)?.message || err}`.slice(0, 300), 502);
+  }
 }
 
 // Store Discord client reference
@@ -292,10 +385,14 @@ Booking Chain: ${tokenConfig.chain}`;
           const startTimeStr = formatDiscordTime(startTime);
           const endTimeStr = formatDiscordTime(endTime);
 
-          await transactionsChannel.send(withCategory(
-            `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
-            { chain: tokenConfig.chain, tokenSymbol, category: "rental" },
-          ));
+          await reportTransaction({
+            client: discordClient,
+            channelId: transactionsChannel.id,
+            content: `🗓️ <@${userId}> booked ${product.name} for ${dateStr} from ${startTimeStr} till ${endTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol} [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`,
+            uris: [txUriFor(tokenConfig.chain, txHash)],
+            currency: tokenSymbol,
+            category: "rental",
+          });
         }
       } catch (err) {
         console.error("Error posting to transactions channel:", err);
@@ -548,6 +645,8 @@ async function handleRequest(req: Request): Promise<Response> {
     response = await handleListRooms(req);
   } else if (path === "/api/permissions" && req.method === "GET") {
     response = await handlePermissionsCheck(req);
+  } else if (path === "/api/transactions/report" && req.method === "POST") {
+    response = await handleTransactionReport(req);
   } else if (path === "/mcp" && req.method === "POST") {
     const auth = checkMcpAuth(req);
     response = auth instanceof Response ? auth : await handleMcpRequest(req, {
@@ -601,6 +700,7 @@ export function startApiServer() {
   console.log(`   GET  /api/rooms?guildId=...`);
   console.log(`   GET  /api/permissions?guildId=...&userId=...`);
   console.log(`   POST /mcp  (MCP, Streamable HTTP; Bearer ELINOR_MCP_TOKEN or API_KEY)`);
+  console.log(`   POST /api/transactions/report  (Bearer TX_REPORT_TOKEN)`);
   console.log(`   GET  /health`);
 
   Deno.serve({ port: API_PORT }, handleRequest);

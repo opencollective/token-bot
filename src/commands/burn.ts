@@ -13,7 +13,8 @@ import {
 } from "../lib/blockchain.ts";
 import { parseUnits } from "@wevm/viem";
 import { findTokenByInput, loadGuildSettings } from "../lib/utils.ts";
-import { withCategory } from "../lib/tx-categories.ts";
+import { txUriFor } from "../lib/tx-categories.ts";
+import { reportTransaction } from "../lib/tx-reports.ts";
 import { refreshTokenStats } from "../lib/token-stats-cache.ts";
 import { Nostr, URI } from "../lib/nostr.ts";
 import { getAccountAddressForToken } from "../lib/citizenwallet.ts";
@@ -234,7 +235,13 @@ export default async function handleBurnCommand(
         if (description) {
           discordMessage += `\n📝 ${description}`;
         }
-        await transactionsChannel.send(withCategory(discordMessage, { chain: token.chain, tokenSymbol: token.symbol }));
+        await reportTransaction({
+          client: interaction.client,
+          channelId: transactionsChannel.id,
+          content: discordMessage,
+          uris: successfulBurns.map((r) => txUriFor(token.chain, r.hash!)),
+          currency: token.symbol,
+        });
       }
     } catch (error) {
       console.error("Error sending message to transactions channel:", error);
