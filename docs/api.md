@@ -365,3 +365,55 @@ Every transaction report the bot posts in a transactions channel ends with `🏷
 For euro transactions the MCP tool takes chb's URIs: `stripe:txn_…` (`k` = `stripe:txn`), `iban:<iban>:tx:<line id>` (`k` = `iban:tx`), and `odoo:<host>:<db>:account.move:<id>` (`k` = `odoo:account.move`). The report is then edited to `🏷️ Category: Governance · set by @steward`, and the change is logged in the logs channel.
 
 **Stewards' keys:** members don't hold Nostr keys. The bot derives one per member, `sha256("token-bot:shift-member:<guildId>:<discordUserId>:<bot secret hex>")`; it is deterministic and never stored, and the shifts RSVPs already use it. The bot attests the key with kind 31926: `d` = `discord:<id>`, `p` = the key, `role` tags for the member's current roles (`member` with the member role, `steward` with a "…steward" role), plus `i` = `discord:<guildId>` and `k` = `discord`. A profile (kind 0) names it. Attestations are republished at startup, daily and on role changes for every steward and everyone attested before, so a lost steward role is revoked. chb (v3.39.0+) trusts the bot as a seed, so keys it attests with `steward` can change categories.
+
+## Reporting a transaction: `POST /api/transactions/report`
+
+The standard way for any bot to report a euro or token transaction in Discord, with the same format, category line and steward-only category dropdown as token-bot's own reports. token-bot's mints, sends, burns, bookings and shift rewards go through the same function.
+
+**Auth:** `Authorization: Bearer <TX_REPORT_TOKEN>`, a dedicated secret in the bot's environment. Without it set, the endpoint answers 503.
+
+**Body:**
+
+```json
+{
+  "uri": "stripe:txn_1Q…",
+  "amount": 25,
+  "currency": "EUR",
+  "direction": "in",
+  "counterparty": "Ana Example",
+  "description": "Membership (monthly)",
+  "links": [{ "label": "Stripe", "url": "https://dashboard.stripe.com/payments/py_…" }],
+  "category": "membership",
+  "occurredAt": "2026-09-03T10:00:00Z",
+  "guildId": "1280532848604086365",
+  "channelId": "…",
+  "threadId": "…"
+}
+```
+
+- `uri` (required) is the transaction's URI, as chb uses it:
+  - `ethereum:<chainId>:tx:<0x hash>` for tokens, EURe and EURb;
+  - `stripe:txn_…` for a Stripe balance transaction;
+  - `iban:<iban, lowercase>:tx:<line id>` for bank lines.
+- `amount` (required, ≥ 0), `currency` (required: `EUR`, `EURe`, `CHT`…) and `direction` (required, `in` or `out`).
+- `counterparty`, `description` (≤ 500 chars) and `links` (≤ 5, http(s) only) are optional.
+- `category` is optional, and must be a slug valid for the currency (euro or token list). Default: `uncategorized`. It's shown only; nothing is published.
+- `occurredAt` is optional (ISO); it's shown as a Discord timestamp, which is useful for backfills.
+- `threadId`, else `channelId`, else the currency's transactions channel: the token's own channel, and for euros the euro tokens' channel (#💶€-transactions). `guildId` defaults to Commons Hub.
+- Mentions in the text never ping.
+
+**Responses:**
+- `201 { ok, alreadyReported: false, messageUrl, messageId, channelId, category }` when posted.
+- `200 { …, alreadyReported: true }` when this `uri` was already reported in the guild. Nothing is posted again.
+- `400` bad input, `401` bad token, `502` Discord refused, `503` not configured or Discord not ready.
+
+**Message:**
+
+```
+💰 Received **€25.00** from Ana Example · <time>
+📝 Membership (monthly)
+🔗 [Stripe](<…>)
+🏷️ Category: Membership
+```
+
+The message has a dropdown. A steward's change publishes a kind 1111 annotation for `uri`, signed by the steward, as described in "Transaction categories". Reports are recorded in `DATA_DIR/<guild>/tx-reports.json`, keyed by message (URIs and currency) and by URI (idempotency).

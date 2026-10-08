@@ -26,7 +26,8 @@ import { Nostr, URI } from "../lib/nostr.ts";
 import { type DiscordMember, ShiftsNostr, type ShiftsNostrSettings, dayString } from "../lib/shifts-nostr.ts";
 import { buildDoorLink, timeRange } from "../lib/door-link.ts";
 import { hhmm, sendShiftConfirmation } from "../lib/shift-email.ts";
-import { withCategory } from "../lib/tx-categories.ts";
+import { txUriFor } from "../lib/tx-categories.ts";
+import { reportTransaction } from "../lib/tx-reports.ts";
 
 const SHIFTS_LOG_CHANNEL_ID = "1484493597901455370";
 
@@ -2128,10 +2129,14 @@ async function buildRewardResultContent(
       });
       if (message.channelId) {
         try {
-          const transactionsChannel = (await interaction.client.channels.fetch(message.channelId)) as TextChannel;
-          if (transactionsChannel) {
-            await transactionsChannel.send(withCategory(message.content, { chain: token.chain, tokenSymbol: token.symbol, category: "shift" }));
-          }
+          await reportTransaction({
+            client: interaction.client,
+            channelId: message.channelId,
+            content: message.content,
+            uris: successfulRewards.filter((r) => r.hash).map((r) => txUriFor(token.chain, r.hash!)),
+            currency: token.symbol,
+            category: "shift",
+          });
         } catch (error) {
           console.error("Error sending shift reward message to transactions channel:", error);
         }

@@ -57,7 +57,7 @@ const EURO_MENU = [
   "expense", "refund", "internal_transfer", "debt", "exceptional", "other-expense", "other", "uncategorized",
 ];
 
-export const isEuroToken = (symbol: string) => /^eur/i.test(symbol);
+export const isEuroToken = (symbol: string) => /^(eur|€)/i.test(symbol.trim());
 
 // ── The live lists (from chb, refreshed hourly) ─────────────────────────────
 
@@ -137,7 +137,10 @@ export { isSteward } from "./community-roles.ts";
 export const CATEGORY_SELECT_PREFIX = "txcat:";
 export const CATEGORY_LINE_RE = /^🏷️ Category: .*$/m;
 
-/** customId: "txcat:<chain>:<token symbol>". The tx hashes are read from the message's tx links. */
+/**
+ * Legacy customId (reports posted before the report store): "txcat:<chain>:<token symbol>", with the
+ * tx hashes read from the message's links. New reports use REPORT_SELECT_ID (tx-reports.ts).
+ */
 export function categorySelectId(chain: string, tokenSymbol: string): string {
   return `${CATEGORY_SELECT_PREFIX}${chain}:${tokenSymbol}`;
 }
@@ -145,6 +148,7 @@ export function categorySelectId(chain: string, tokenSymbol: string): string {
 export function parseCategorySelectId(customId: string): { chain: string; tokenSymbol: string } | null {
   if (!customId.startsWith(CATEGORY_SELECT_PREFIX)) return null;
   const [chain, tokenSymbol] = customId.slice(CATEGORY_SELECT_PREFIX.length).split(":");
+  if (chain === "r" && tokenSymbol === undefined) return null; // a report-store dropdown
   return chain && tokenSymbol ? { chain, tokenSymbol } : null;
 }
 
@@ -152,30 +156,20 @@ export function categoryLine(slug: string | undefined, tokenSymbol: string, setB
   return `🏷️ Category: ${categoryLabel(slug, tokenSymbol)}${setBy ? ` · set by <@${setBy}>` : ""}`;
 }
 
-export function categoryMenu(chain: string, tokenSymbol: string, currentSlug?: string) {
+/** The dropdown: `customId` is REPORT_SELECT_ID for new reports, categorySelectId(…) for legacy ones. */
+export function categoryMenu(customId: string, tokenSymbol: string, currentSlug?: string) {
   const current = normalize(currentSlug || DEFAULT_CATEGORY);
   const slugs = isEuroToken(tokenSymbol) ? EURO_MENU : lists.token.map((c) => c.slug);
   const options = slugs.map((s) => findCategory(tokenSymbol, s)!).filter(Boolean);
   if (current && !options.some((c) => c.slug === current)) options.unshift({ slug: current, label: categoryLabel(current, tokenSymbol) });
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(categorySelectId(chain, tokenSymbol))
+      .setCustomId(customId)
       .setPlaceholder("Change the category (stewards)")
       .addOptions(options.slice(0, 25).map((c) =>
         new StringSelectMenuOptionBuilder().setLabel(c.label).setValue(c.slug).setDefault(c.slug === current)
       )),
   );
-}
-
-/** Add the category line and dropdown to a transaction report. */
-export function withCategory(
-  content: string,
-  p: { chain: string; tokenSymbol: string; category?: string },
-): { content: string; components: ActionRowBuilder<StringSelectMenuBuilder>[] } {
-  return {
-    content: `${content}\n${categoryLine(p.category, p.tokenSymbol)}`,
-    components: [categoryMenu(p.chain, p.tokenSymbol, p.category)],
-  };
 }
 
 /** Swap the category line of a report (adds one if missing). */

@@ -11,7 +11,7 @@ import {
   TOKEN_CATEGORIES,
   txHashesIn,
   txUriFor,
-  withCategory,
+  categorySelectId,
 } from "../src/lib/tx-categories.ts";
 import { buildCategoryAnnotation, kindOfUri, newest } from "../src/lib/category-annotations.ts";
 import { resolveTxUri } from "../src/lib/proposals.ts";
@@ -36,25 +36,25 @@ Deno.test("category lists: Xavier's token categories; chb's euro ones; none → 
 Deno.test("dropdown: ≤ 25 options, current one selected, unknown current kept", () => {
   // deno-lint-ignore no-explicit-any
   const json = (row: any) => row.toJSON().components[0];
-  const cht = json(categoryMenu("celo", "CHT", "shift"));
+  const cht = json(categoryMenu(categorySelectId("celo", "CHT"), "CHT", "shift"));
   expect(cht.custom_id).toBe("txcat:celo:CHT");
   expect(cht.options.map((o: { value: string }) => o.value)).toEqual(TOKEN_CATEGORIES.map((c) => c.slug));
   expect(cht.options.find((o: { default?: boolean }) => o.default).value).toBe("shift");
-  const eur = json(categoryMenu("gnosis", "EURb", "rental"));
+  const eur = json(categoryMenu(categorySelectId("gnosis", "EURb"), "EURb", "rental"));
   expect(eur.options.length).toBe(25);
   expect(eur.options.slice(-2).map((o: { value: string }) => o.value)).toEqual(["other", "uncategorized"]);
-  const odd = json(categoryMenu("gnosis", "EURb", "loan"));
+  const odd = json(categoryMenu(categorySelectId("gnosis", "EURb"), "EURb", "loan"));
   expect(odd.options[0]).toMatchObject({ value: "loan", default: true });
-  expect(json(categoryMenu("celo", "CHT")).options.find((o: { default?: boolean }) => o.default).value).toBe("uncategorized");
+  expect(json(categoryMenu(categorySelectId("celo", "CHT"), "CHT")).options.find((o: { default?: boolean }) => o.default).value).toBe("uncategorized");
   // Older reports said "none": shown as Uncategorized.
-  expect(json(categoryMenu("celo", "CHT", "none")).options.find((o: { default?: boolean }) => o.default).value).toBe("uncategorized");
+  expect(json(categoryMenu(categorySelectId("celo", "CHT"), "CHT", "none")).options.find((o: { default?: boolean }) => o.default).value).toBe("uncategorized");
   expect(parseCategorySelectId("txcat:gnosis:EURb")).toEqual({ chain: "gnosis", tokenSymbol: "EURb" });
   expect(parseCategorySelectId("book_x")).toBeNull();
 });
 
 Deno.test("report text: category line added, replaced with who set it; tx hashes read from links", () => {
   const report = `🪙 <@1> minted 1 CHT for <@2> [[tx]](<https://txinfo.xyz/celo/tx/${H1}>)\n🪙 <@1> minted 1 CHT for <@3> [[tx]](<https://celoscan.io/tx/${H2}>)`;
-  const { content } = withCategory(report, { chain: "celo", tokenSymbol: "CHT" });
+  const content = `${report}\n${categoryLine(undefined, "CHT")}`;
   expect(content.endsWith("\n🏷️ Category: Uncategorized")).toBe(true);
   const changed = replaceCategoryLine(content, categoryLine("governance", "CHT", "42"));
   expect(changed.endsWith("\n🏷️ Category: Governance · set by <@42>")).toBe(true);

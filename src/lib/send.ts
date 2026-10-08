@@ -14,7 +14,8 @@ import {
 } from "@citizenwallet/sdk";
 import { parseUnits } from "@wevm/viem";
 import { ChainConfig, getBalance, parseInsufficientGasError, SupportedChain } from "./blockchain.ts";
-import { withCategory } from "./tx-categories.ts";
+import { txUriFor } from "./tx-categories.ts";
+import { reportTransaction } from "./tx-reports.ts";
 import { getAccountAddressForToken } from "./citizenwallet.ts";
 import { Nostr, URI } from "./nostr.ts";
 import { refreshTokenStats } from "./token-stats-cache.ts";
@@ -249,7 +250,13 @@ export async function executeSend(opts: ExecuteSendOptions): Promise<SendResult[
         let msg = lines.join("\n");
         if (description) msg += `\n📝 ${description}`;
         if (source?.messageUrl) msg += `\n🔗 [context](<${source.messageUrl}>)`;
-        await channel.send(withCategory(msg, { chain: token.chain, tokenSymbol: token.symbol }));
+        await reportTransaction({
+          client,
+          channelId: channel.id,
+          content: msg,
+          uris: successful.map((r) => txUriFor(token.chain, r.hash!)),
+          currency: token.symbol,
+        });
       }
     } catch (err) {
       console.error("Error posting to transactions channel:", err);
