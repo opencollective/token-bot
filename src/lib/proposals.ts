@@ -388,10 +388,21 @@ export function resolveTxUri(tx: string, chain = "celo"): string {
 }
 
 /** Link to show for a transaction URI (txinfo for on-chain ones). */
-function txLink(uri: string): string {
+/**
+ * How a transaction is shown in Discord (prompts and logs may be public): on-chain as a txinfo link;
+ * bank lines without the IBAN ("bank line …8636 / 39976"); Odoo entries by number. The full URI
+ * stays server-side (request store, Nostr annotation).
+ */
+export function txLink(uri: string): string {
   const m = uri.match(/^ethereum:(\d+):tx:(0x[0-9a-f]{64})$/);
   const chain = m && ({ "42220": "celo", "100": "gnosis", "8453": "base", "137": "polygon" } as Record<string, string>)[m[1]];
-  return m && chain ? `[${m[2].slice(0, 10)}…](<https://txinfo.xyz/${chain}/tx/${m[2]}>)` : `\`${uri}\``;
+  if (m && chain) return `[${m[2].slice(0, 10)}…](<https://txinfo.xyz/${chain}/tx/${m[2]}>)`;
+  const iban = uri.match(/^iban:([^:]+):tx:(.+)$/i);
+  if (iban) return `bank line …${iban[1].replace(/\s/g, "").slice(-4)} / ${iban[2]}`;
+  const odoo = uri.match(/^odoo:.*:account\.move:(\d+)$/i);
+  if (odoo) return `Odoo entry ${odoo[1]}`;
+  if (/^stripe:txn_/i.test(uri)) return `Stripe \`${uri.slice("stripe:".length)}\``;
+  return `\`${uri.split(":")[0]}:…\``;
 }
 
 export async function proposeTransactionCategory(input: Common & {
