@@ -14,7 +14,7 @@ import {
   categorySelectId,
 } from "../src/lib/tx-categories.ts";
 import { buildCategoryAnnotation, kindOfUri, newest } from "../src/lib/category-annotations.ts";
-import { resolveTxUri } from "../src/lib/proposals.ts";
+import { resolveTxUri, txLink } from "../src/lib/proposals.ts";
 import { communityRoles } from "../src/lib/community-roles.ts";
 import { buildAttestation } from "../src/lib/shifts-nostr.ts";
 
@@ -171,4 +171,13 @@ Deno.test("refreshCategories: uses chb's list, keeps the previous one on errors"
   } finally {
     _setCategoryLists();
   }
+});
+
+Deno.test("prompts never show an IBAN or a full Odoo URI", () => {
+  expect(txLink("iban:be46734072238636:tx:39976")).toBe("bank line …8636 / 39976");
+  expect(txLink("odoo:odoo.example.com:chb:account.move:1234")).toBe("Odoo entry 1234");
+  expect(txLink("stripe:txn_1ABC")).toBe("Stripe `txn_1ABC`");
+  expect(txLink("custom:secret-thing")).toBe("`custom:…`");
+  expect(txLink(`ethereum:100:tx:${H1}`)).toBe(`[${H1.slice(0, 10)}…](<https://txinfo.xyz/gnosis/tx/${H1}>)`);
+  for (const uri of ["iban:be46734072238636:tx:39976"]) expect(txLink(uri)).not.toContain("be4673");
 });
