@@ -10,7 +10,7 @@ export const REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const KEEP_DECIDED_MS = 14 * 24 * 60 * 60 * 1000;
 const FILE = "pending-requests.json";
 
-export type RequestKind = "mint" | "shift_signup" | "room_booking" | "tx_category" | "purchase";
+export type RequestKind = "mint" | "shift_signup" | "room_booking" | "tx_category" | "purchase" | "claim";
 
 /**
  * pending: waiting for a click · confirmed: executed · cancelled: the user said no ·
@@ -56,6 +56,16 @@ export type PurchaseParams = {
   description?: string;
 };
 
+/** A token claim (/claim, propose_claim): posted in the transactions channel, any other minter approves. */
+export type ClaimParams = {
+  tokenSymbol: string;
+  recipientIds: string[];
+  amount: number; // per recipient
+  reason: string;
+  category?: string;
+  rejectReason?: string;
+};
+
 export type PendingRequest = {
   id: string;
   kind: RequestKind;
@@ -71,7 +81,7 @@ export type PendingRequest = {
   approval?: "confirmer" | "any_minter";
   /** The Discord user who asked for it (requested by). They can always cancel. */
   requesterId?: string;
-  params: MintParams | ShiftSignupParams | RoomBookingParams | CategoryParams | PurchaseParams;
+  params: MintParams | ShiftSignupParams | RoomBookingParams | CategoryParams | PurchaseParams | ClaimParams;
   summary: string;
   status: RequestStatus;
   createdAt: string;
@@ -140,13 +150,14 @@ export function newRequestId(): string {
 export function createRequest(
   r: Omit<PendingRequest, "id" | "status" | "createdAt" | "expiresAt">,
   now = new Date(),
+  ttlMs = REQUEST_TTL_MS,
 ): Promise<PendingRequest> {
   const request: PendingRequest = {
     ...r,
     id: newRequestId(),
     status: "pending",
     createdAt: now.toISOString(),
-    expiresAt: new Date(now.getTime() + REQUEST_TTL_MS).toISOString(),
+    expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
   };
   return locked(r.guildId, (map) => {
     map.set(request.id, request);

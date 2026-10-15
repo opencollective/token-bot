@@ -35,6 +35,7 @@ import {
   proposeTransactionCategory,
   listPurchasableItems,
   proposePurchase,
+  proposeClaim,
 } from "./lib/proposals.ts";
 
 const API_KEY = Deno.env.get("API_KEY");
@@ -663,6 +664,7 @@ async function handleRequest(req: Request): Promise<Response> {
       proposeTransactionCategory: (a) => proposeTransactionCategory(a as Parameters<typeof proposeTransactionCategory>[0]),
       listPurchasableItems: (a) => listPurchasableItems(a as { guildId: string; userId?: string }),
       proposePurchase: (a) => proposePurchase(a as Parameters<typeof proposePurchase>[0]),
+      proposeClaim: (a) => proposeClaim(a as Parameters<typeof proposeClaim>[0]),
     });
   } else if (path === "/mcp") {
     // Streamable HTTP: no server-initiated stream and no sessions to delete.

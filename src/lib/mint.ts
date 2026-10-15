@@ -95,7 +95,7 @@ export function buildMessageUrl(guildId: string, channelId: string, messageId: s
 }
 
 export type MintSource = {
-  via: "command" | "context-menu" | "reaction" | "elinor";
+  via: "command" | "context-menu" | "reaction" | "elinor" | "claim";
   messageUrl?: string;
 };
 
@@ -115,12 +115,16 @@ export type ExecuteMintOptions = {
   description?: string;
   minterId: string;
   source?: MintSource;
+  /** Category of the mints (Nostr tag and report); default: the report's default. */
+  category?: string;
+  /** More Nostr tags, e.g. ["t", "claim"]. */
+  extraTags?: string[][];
 };
 
 // Mint `amount` tokens for each recipient, annotate each tx on Nostr and post to the
 // transactions channel. Returns one result per recipient; never throws for a single failure.
 export async function executeMint(opts: ExecuteMintOptions): Promise<MintResult[]> {
-  const { client, guildSettings, token, recipients, amount, description, minterId, source } = opts;
+  const { client, guildSettings, token, recipients, amount, description, minterId, source, category, extraTags } = opts;
   const chain = token.chain as SupportedChain;
   const chainId = ChainConfig[chain].id;
   const results: MintResult[] = [];
@@ -172,6 +176,8 @@ export async function executeMint(opts: ExecuteMintOptions): Promise<MintResult[
           tags.push(["via", source.via]);
           if (source.messageUrl) tags.push(["r", source.messageUrl]);
         }
+        if (category) tags.push(["category", category]);
+        tags.push(...(extraTags ?? []));
         await nostr.publishMetadata(`ethereum:${chainId}:tx:${hash}` as URI, {
           content: description || `Minted ${amount} ${token.symbol} for ${recipient.label}`,
           tags,
@@ -210,6 +216,7 @@ export async function executeMint(opts: ExecuteMintOptions): Promise<MintResult[
           content: message,
           uris: successful.map((r) => txUriFor(token.chain, r.hash!)),
           currency: token.symbol,
+          category,
         });
       }
     } catch (error) {

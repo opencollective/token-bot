@@ -40,6 +40,7 @@ const ALL_EXECUTORS = {
   proposeTransactionCategory: noop,
   listPurchasableItems: noop,
   proposePurchase: noop,
+  proposeClaim: noop,
 };
 
 // ── MCP server ──────────────────────────────────────────────────────────────
@@ -47,7 +48,7 @@ const ALL_EXECUTORS = {
 Deno.test("MCP lists every tool when executors exist, only those with an executor otherwise", () => {
   expect(getMcpTools(ALL_EXECUTORS).map((t) => t.name)).toEqual([
     "check_user_permissions", "list_rooms", "check_room_availability", "list_upcoming_shifts", "list_purchasable_items",
-    "propose_mint", "propose_shift_signup", "propose_room_booking", "propose_transaction_category", "propose_purchase", "get_request_status",
+    "propose_mint", "propose_shift_signup", "propose_room_booking", "propose_transaction_category", "propose_purchase", "propose_claim", "get_request_status",
   ]);
   expect(getMcpTools({ checkUserPermissions: noop }).map((t) => t.name)).toEqual(["check_user_permissions"]);
 });

@@ -179,6 +179,8 @@ export async function handleReactionAdd(
   }
 
   const message = reaction.message as Message;
+  // Reactions on the bot's own posts (reports, claims) are support or comments, not mint/send requests.
+  if (message.author?.id && message.author.id === message.client.user?.id) return;
   const guild = message.guild;
   const guildId = message.guildId;
   if (!guild || !guildId) return;

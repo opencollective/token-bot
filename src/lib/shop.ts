@@ -42,6 +42,8 @@ export function shopToken(settings: GuildSettings | null | undefined): Token | n
   return mintable.length === 1 ? mintable[0] : null;
 }
 
+export const CLAIM_HINT = "You can /claim tokens for a contribution.";
+
 /** "1 token", "2 tokens", "1.5 tokens". */
 export const tokens = (n: number) => `${n} token${n === 1 ? "" : "s"}`;
 
@@ -118,7 +120,7 @@ export async function checkBalance(userId: string, token: Token, item: ShopItem)
       ok: false,
       balance,
       address: found.address,
-      message: `Not enough tokens: a ${item.label} costs ${tokens(item.price)} and the balance is ${tokens(balance)}.` +
+      message: `Not enough tokens: a ${item.label} costs ${tokens(item.price)} and the balance is ${tokens(balance)}. ${CLAIM_HINT}` +
         (token.mintInstructions ? `\n${token.mintInstructions}` : ""),
     };
   }

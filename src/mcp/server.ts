@@ -40,6 +40,7 @@ export interface McpToolExecutors {
   proposeTransactionCategory?(input: JsonObject): Promise<unknown>;
   listPurchasableItems?(input: JsonObject): Promise<unknown>;
   proposePurchase?(input: JsonObject): Promise<unknown>;
+  proposeClaim?(input: JsonObject): Promise<unknown>;
 }
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -244,6 +245,30 @@ const TOOLS: ToolSpec[] = [
           replyToMessageId: REPLY_TO,
         },
         required: ["guildId", "userId", "item", "requestedBy"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    executor: "proposeClaim",
+    definition: {
+      name: "propose_claim",
+      description:
+        "Claim tokens for a contribution, for the person asking and/or others (e.g. \"claim 2 tokens for @alain, @leen and me for cleaning the coworking space\"). Anyone can claim. Posts the claim in the tokens transactions channel with Approve/Reject buttons, like /claim: nothing is minted until a minter approves, and a minter can't approve a claim they asked for or receive from (another minter has to). The requester can withdraw it. Amount is per person: more than 0, at most 2 decimals, at most 10; at most 20 people. Pass channelId/replyToMessageId to also reply there with the link. Say \"tokens\" to people, not the token's symbol. Follow up with get_request_status (claims expire after 14 days).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          guildId: GUILD_ID,
+          requesterUserId: str("Discord user ID of the person asking (OpenClaw sender.id)."),
+          amount: { type: "number", exclusiveMinimum: 0, maximum: 10, description: "Tokens per person." },
+          reason: str("What the contribution was (required), e.g. \"cleaning the coworking space\"."),
+          recipientUserIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 20, description: "Discord user IDs who get the tokens. Default: only the requester. Include the requester's id when they said \"and me\"." },
+          category: str("Optional token category slug (governance, cleaning, shift, note-taking, admin, care, …)."),
+          requestedBy: REQUESTED_BY,
+          channelId: CHANNEL_ID,
+          replyToMessageId: REPLY_TO,
+        },
+        required: ["guildId", "requesterUserId", "amount", "reason", "requestedBy"],
         additionalProperties: false,
       },
     },
