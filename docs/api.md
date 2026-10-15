@@ -315,6 +315,7 @@ if (data.success) {
 | `list_rooms` | `guildId` | Rooms with slug, capacity, hourly prices (euro prices excl. VAT) and `bookableFrom` |
 | `check_room_availability` | `guildId`, `room`, `start`, `end` | `available`, overlapping bookings, and `reason` when the start is before `bookableFrom` |
 | `list_upcoming_shifts` | `guildId`, `days?` (1–31, default 7) | Shifts with sign-ups and spots left, standard slots, capacity, reward, timezone |
+| `list_purchasable_items` | `guildId`, `userId?` | What can be bought with tokens (item id, label, price, category); with `userId`, their balance and `affordable` per item |
 | `get_request_status` | `requestId` | The status of a proposal, below |
 
 ### Proposal tools
@@ -327,6 +328,7 @@ These never act directly. Each one validates the request, creates a pending requ
 | `propose_shift_signup` (`userId`, `eventId` or `start`+`end`, `email?`) | The member | Same as `/shifts`: calendar, nostr for standard slots, #shifts log, confirmation email |
 | `propose_room_booking` (`userId`, `room`, `start`, `end`, `title`, `guestName?`, `guestEmail?`) | The member | Opens `/book` prefilled at the payment step; the member picks how to pay and confirms there |
 | `propose_transaction_category` (`requesterUserId`, `tx`, `chain?`, `category`) | The requesting steward | Publishes the category change signed by their key, the same as the dropdown on transaction reports |
+| `propose_purchase` (`userId`, `item`, `description?`) | The buyer (`userId` must be the person asking: nobody buys for someone else). Refused upfront when their balance is too low. | Same as `/buy`: burns the price from their own account, category `coworking`, Nostr annotation, transaction report |
 
 All take `guildId`, `requestedBy` (free text for the audit log), and optional `channelId` and `replyToMessageId`. They return the request status.
 
@@ -334,13 +336,29 @@ All take `guildId`, `requestedBy` (free text for the audit log), and optional `c
 
 Every proposal and outcome is logged in the server's logs channel. A requester can have at most 10 pending requests. Requests are stored in `DATA_DIR/<guildId>/pending-requests.json` and survive restarts.
 
+## Buying with tokens: `/buy`
+
+`/buy [item] [description]` lists what members can buy with CHT, with their balance, as buttons; clicking one burns the price from the clicker's own account. Elinor does the same with `propose_purchase`, which the buyer confirms in Discord.
+
+| Item id | Label | Price | Category |
+|---|---|---|---|
+| `coworking-day` | Coworking day | 2 CHT | `coworking` |
+| `coworking-half-day` | Half day coworking | 1 CHT | `coworking` |
+
+Each purchase:
+- burns the price from the buyer's account;
+- publishes a Nostr annotation on the burn: content "Coworking day for Ana: <description>", tags `t:burn`, `t:purchase`, `t:<item id>`, `category:coworking`, `amount`, `token`, `buyer:discord:<id>`, `via`;
+- posts the standard transaction report, categorized Coworking.
+
+To add an item, add a line to `SHOP_ITEMS` in `src/lib/shop.ts`, a choice to `/buy` in `src/commands.json`, and the id to `propose_purchase`'s `item` enum in `src/mcp/server.ts`.
+
 ## Room rules
 
 `products.json` can set `bookableFrom: "HH:MM"`, in the hub's timezone, on a room: bookings can't start earlier. The coworking space has `"bookableFrom": "19:00"`, the same as the website's `rooms.json`. The rule is enforced in `/book`, where earlier start times aren't offered and are rejected if they come in anyway, in `POST /api/book/execute`, and in the MCP tools. The message is "The coworking space can only be booked from 7pm."
 
 ## Transaction categories
 
-Every transaction report the bot posts in a transactions channel ends with `🏷️ Category: <label>` and a dropdown. This covers mints, sends, burns, bookings and shift rewards. Bookings start as `rental`, shift rewards as `shift`, and everything else as `uncategorized`. Older reports showing "None" are read as Uncategorized.
+Every transaction report the bot posts in a transactions channel ends with `🏷️ Category: <label>` and a dropdown. This covers mints, sends, burns, bookings and shift rewards. Bookings start as `rental`, shift rewards as `shift`, `/buy` purchases as `coworking`, and everything else as `uncategorized`. Older reports showing "None" are read as Uncategorized.
 
 **Who:** stewards, meaning anyone with a Discord role whose name contains "steward", in any case, such as "Plant steward" or "Kitchen steward". Nothing else counts. Others get an ephemeral "Only stewards can change the category."
 

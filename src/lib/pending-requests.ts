@@ -10,7 +10,7 @@ export const REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const KEEP_DECIDED_MS = 14 * 24 * 60 * 60 * 1000;
 const FILE = "pending-requests.json";
 
-export type RequestKind = "mint" | "shift_signup" | "room_booking" | "tx_category";
+export type RequestKind = "mint" | "shift_signup" | "room_booking" | "tx_category" | "purchase";
 
 /**
  * pending: waiting for a click · confirmed: executed · cancelled: the user said no ·
@@ -49,6 +49,13 @@ export type CategoryParams = {
   previous?: string | null;
 };
 
+export type PurchaseParams = {
+  item: string; // shop item id
+  tokenSymbol: string;
+  price: number;
+  description?: string;
+};
+
 export type PendingRequest = {
   id: string;
   kind: RequestKind;
@@ -64,7 +71,7 @@ export type PendingRequest = {
   approval?: "confirmer" | "any_minter";
   /** The Discord user who asked for it (requested by). They can always cancel. */
   requesterId?: string;
-  params: MintParams | ShiftSignupParams | RoomBookingParams | CategoryParams;
+  params: MintParams | ShiftSignupParams | RoomBookingParams | CategoryParams | PurchaseParams;
   summary: string;
   status: RequestStatus;
   createdAt: string;

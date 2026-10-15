@@ -65,6 +65,7 @@ import {
   MINT_CONTEXT_MODAL_ID,
 } from "./commands/mint-context.ts";
 import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
+import { BUY_PREFIX, handleBuyButton, handleBuyCommand } from "./commands/buy.ts";
 import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalExpiry } from "./lib/proposals.ts";
 import { backfillBookingAnnotations } from "./lib/booking-annotations.ts";
 import { CATEGORY_SELECT_PREFIX, startCategoryRefresh } from "./lib/tx-categories.ts";
@@ -487,6 +488,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "send") {
         return handleSendCommand(interaction, userId, guildId);
       }
+      if (interaction.commandName === "buy") {
+        return handleBuyCommand(interaction, userId, guildId);
+      }
       if (interaction.commandName === "balance") {
         return handleBalanceCommand(interaction, userId, guildId);
       }
@@ -563,6 +567,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId.startsWith("rx_")) {
         return handleReactionButton(interaction);
+      }
+      if (interaction.customId.startsWith(BUY_PREFIX)) {
+        return handleBuyButton(interaction);
       }
       return handleButton(interaction, userId, guildId);
     }
