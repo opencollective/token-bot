@@ -25,6 +25,7 @@ import { bookableFromMessage, startTimeAllowed } from "../lib/room-rules.ts";
 import { calendarPaidLine, publishBookingAnnotation } from "../lib/booking-annotations.ts";
 import { txUriFor } from "../lib/tx-categories.ts";
 import { reportTransaction } from "../lib/tx-reports.ts";
+import { CLAIM_HINT } from "../lib/shop.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -252,6 +253,9 @@ async function getCachedAddress(discordUserId: string): Promise<string> {
 }
 
 export const bookStates = new Map<string, BookState>();
+
+/** For community tokens (not euros), a pointer to /claim when the balance is too low. */
+const claimHint = (tokenSymbol: string) => (/^eur/i.test(tokenSymbol) ? "" : `\n${CLAIM_HINT}`);
 
 /** The guild of a /book interaction; for a booking continued in DMs (Elinor proposals), the one it was made for. */
 function guildOf(interaction: Interaction, guildId: string) {
@@ -1741,7 +1745,7 @@ async function showConfirmation(
 
   if (!hasEnoughBalance) {
     const mintInstructions = tokenConfig.mintInstructions || "";
-    content += `\n\n⚠️ **Insufficient balance**\nYou need ${priceAmount.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.\n\n${mintInstructions}`;
+    content += `\n\n⚠️ **Insufficient balance**\nYou need ${priceAmount.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.${claimHint(tokenSymbol)}\n\n${mintInstructions}`;
   }
 
   if (interaction.isButton()) {
@@ -1860,7 +1864,7 @@ async function processBooking(
         content: `❌ **Insufficient balance**
 
 **Balance:** ${balanceFormatted} ${tokenSymbol}
-**Required:** ${priceAmount.toFixed(2)} ${tokenSymbol}
+**Required:** ${priceAmount.toFixed(2)} ${tokenSymbol}${claimHint(tokenSymbol)}
 
 ${mintInstructions}`,
       });
@@ -2177,7 +2181,7 @@ ${checked.map(occurrenceLine).join("\n")}
     content += `\n\nOnly the ✅ dates will be booked and paid for.`;
   }
   if (free.length > 0 && !hasEnoughBalance) {
-    content += `\n\n⚠️ **Insufficient balance**\nYou need ${total.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.\n\n${tokenConfig.mintInstructions || ""}`;
+    content += `\n\n⚠️ **Insufficient balance**\nYou need ${total.toFixed(2)} ${tokenSymbol} but only have ${balanceFormatted} ${tokenSymbol}.${claimHint(tokenSymbol)}\n\n${tokenConfig.mintInstructions || ""}`;
   }
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -2237,7 +2241,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     const balance = await getBalance(tokenConfig.chain as SupportedChain, tokenConfig.address, userAddress);
     if (balance < parseUnits(amount, tokenConfig.decimals)) {
       const balanceFormatted = parseFloat(formatUnits(balance, tokenConfig.decimals)).toFixed(2);
-      await interaction.editReply({ content: `❌ **Insufficient balance**\n\n**Balance:** ${balanceFormatted} ${tokenSymbol}\n**Required:** ${total.toFixed(2)} ${tokenSymbol}\n\n${tokenConfig.mintInstructions || ""}` });
+      await interaction.editReply({ content: `❌ **Insufficient balance**\n\n**Balance:** ${balanceFormatted} ${tokenSymbol}\n**Required:** ${total.toFixed(2)} ${tokenSymbol}${claimHint(tokenSymbol)}\n\n${tokenConfig.mintInstructions || ""}` });
       return;
     }
     txHash = await burnTokensFrom(tokenConfig.chain as SupportedChain, tokenConfig.address, userAddress, amount, tokenConfig.decimals);

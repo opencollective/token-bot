@@ -328,6 +328,7 @@ These never act directly. Each one validates the request, creates a pending requ
 | `propose_shift_signup` (`userId`, `eventId` or `start`+`end`, `email?`) | The member | Same as `/shifts`: calendar, nostr for standard slots, #shifts log, confirmation email |
 | `propose_room_booking` (`userId`, `room`, `start`, `end`, `title`, `guestName?`, `guestEmail?`) | The member | Opens `/book` prefilled at the payment step; the member picks how to pay and confirms there |
 | `propose_transaction_category` (`requesterUserId`, `tx`, `chain?`, `category`) | The requesting steward | Publishes the category change signed by their key, the same as the dropdown on transaction reports |
+| `propose_claim` (`requesterUserId`, `amount`, `reason`, `recipientUserIds?`, `category?`) | Not the requester: any other minter, in the transactions channel | Same as `/claim`: posts the claim in the token's transactions channel (and a link in `channelId` when given). Anyone can ask; nothing is minted until a minter approves |
 | `propose_purchase` (`userId`, `item`, `description?`) | The buyer (`userId` must be the person asking: nobody buys for someone else). Refused upfront when their balance is too low. | Same as `/buy`: burns the price from their own account, category `coworking`, Nostr annotation, transaction report |
 
 All take `guildId`, `requestedBy` (free text for the audit log), and optional `channelId` and `replyToMessageId`. They return the request status.
@@ -335,6 +336,26 @@ All take `guildId`, `requestedBy` (free text for the audit log), and optional `c
 **Statuses:** `pending`, `confirmed`, `cancelled`, `expired` (no answer within 24 hours), `failed` (confirmed but execution failed; see `error`), `handed_off` (a room booking continued in `/book`). The status also has `approval` (`confirmer` or `any_minter`), `requesterId`, `confirmedBy` and `cancelledBy`.
 
 Every proposal and outcome is logged in the server's logs channel. A requester can have at most 10 pending requests. Requests are stored in `DATA_DIR/<guildId>/pending-requests.json` and survive restarts.
+
+## Claiming tokens: `/claim`
+
+`/claim amount reason [for] [category]` asks for tokens for a contribution. `amount` is per person. `for` lists the recipients as @mentions; without it, the claim is only for the caller, who is included only if they mention themselves. Elinor does the same with `propose_claim`.
+
+The claim is posted in the token's transactions channel with **Approve** and **Reject** buttons. It's a normal message, so anyone can react to it, and reacting with :mint: or 🪙 does nothing there.
+
+- **Approve:** anyone who may `/mint` the token, except the requester and the recipients; another minter has to approve those. It mints the amount to each recipient like `/mint`: the reason is the description, the Nostr annotation gets `t:claim`, `via:claim` and the category, and there is a transaction report per mint. The claim message then shows "Approved by @x" with the transactions.
+- **Reject:** a minter, or the requester to withdraw it, with an optional reason.
+- **One decision only:** a second click is told it's already decided.
+- **Expiry:** 14 days.
+
+**Limits:**
+- the amount is more than 0, with at most 2 decimals and at most 10 per person;
+- at most 20 people;
+- a reason is required;
+- the category must be a token category;
+- a requester can have at most 10 pending claims.
+
+Claims are stored with Elinor's requests, so `get_request_status` works for them. Everything people read says "tokens". When a balance is too low for `/buy`, `propose_purchase` or a token room booking, the message suggests `/claim`.
 
 ## Buying with tokens: `/buy`
 

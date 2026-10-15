@@ -9,6 +9,7 @@
  *   room_booking  → the member themselves → the /book flow, prefilled, at its payment step
  *   tx_category   → the requesting steward → the category annotation, signed with their key
  *   purchase      → the buyer themselves → executePurchase (burns from their own account), like /buy
+ *   claim         → posted in the transactions channel like /claim; another minter approves (claims.ts)
  * Requests expire after 24 hours. Every proposal and outcome is logged in the guild's log channel.
  */
 import {
@@ -45,6 +46,7 @@ import {
   signUpForShift,
 } from "../commands/shifts.ts";
 import { startPrefilledBooking } from "../commands/book.ts";
+import { createClaim } from "./claims.ts";
 import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken, tokens } from "./shop.ts";
 import {
   countPendingFor,
@@ -470,9 +472,55 @@ export async function proposePurchase(input: Common & { userId: string; item: st
   return await propose({ ...input, kind: "purchase", confirmerId: buyer.id, requesterId: buyer.id, params, summary });
 }
 
+/**
+ * A token claim, like /claim: posted in the token's transactions channel, where a minter other than
+ * the requester and recipients approves. When channelId is given, a short note with the link is
+ * posted there too (as a reply to replyToMessageId).
+ */
+export async function proposeClaim(input: Common & {
+  requesterUserId: string;
+  amount: number;
+  reason: string;
+  recipientUserIds?: string[];
+  category?: string;
+}) {
+  const c = requireClient();
+  const { request, url } = await createClaim({
+    client: c,
+    guildId: input.guildId,
+    requesterId: input.requesterUserId,
+    recipientIds: input.recipientUserIds,
+    amount: input.amount,
+    reason: input.reason,
+    category: input.category,
+    via: "elinor",
+    requestedBy: input.requestedBy || "elinor",
+  });
+  let deliveryNote: string | undefined;
+  if (input.channelId && input.channelId !== request.message?.channelId) {
+    const channel = await c.channels.fetch(input.channelId).catch(() => null);
+    if (channel?.isThread() && !channel.joined) await channel.join().catch(() => {});
+    if (channel && "guildId" in channel && channel.guildId === input.guildId && channel.isTextBased() && "send" in channel) {
+      const content = `📝 Claim posted for a minter to approve: ${url}`;
+      const send = (withReply: boolean) => (channel as TextChannel).send({
+        content,
+        allowedMentions: { parse: [] },
+        ...(withReply && input.replyToMessageId ? { reply: { messageReference: input.replyToMessageId, failIfNotExists: false } } : {}),
+      });
+      await send(true).catch(() => send(false)).catch((e) => {
+        deliveryNote = `couldn't post the link in that channel (${e?.message || e}); the claim itself is posted`;
+      });
+    } else {
+      deliveryNote = "that channel isn't usable; the claim itself is posted";
+    }
+  }
+  await log(input.guildId, `🙋 Elinor posted a token claim (${request.id}) for <@${input.requesterUserId}>: ${url}`);
+  return { ...publicStatus(request), claimUrl: url, ...(deliveryNote ? { deliveryNote } : {}) };
+}
+
 // ── Creating and delivering a request ───────────────────────────────────────
 
-const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking", tx_category: "category change", purchase: "purchase" } as const;
+const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking", tx_category: "category change", purchase: "purchase", claim: "token claim" } as const;
 
 function buttons(id: string, kind: PendingRequest["kind"]) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -832,7 +880,7 @@ export async function expireDueRequests(now = new Date()) {
   if (!client) return;
   for (const r of await findExpired([...client.guilds.cache.keys()], now)) {
     if (!await transition(r.guildId, r.id, "expired", undefined, now)) continue;
-    await closePrompt(r, "⌛ Expired: nobody confirmed within 24 hours.");
+    await closePrompt(r, r.kind === "claim" ? "⌛ Expired: no minter approved it within 14 days." : "⌛ Expired: nobody confirmed within 24 hours.");
     await log(r.guildId, `🤖 ⌛ Elinor's ${KIND_LABEL[r.kind]} request (${r.id}) for <@${r.confirmerId}> expired`);
   }
 }

@@ -94,6 +94,7 @@ Deno.test("checkBalance: too low or no account explains why", async () => {
     const low = await checkBalance("42", CHT, day);
     expect(low.ok).toBe(false);
     expect(low.message).toContain("Not enough tokens: a Coworking day costs 2 tokens and the balance is 1.5 tokens");
+    expect(low.message).toContain("You can /claim tokens for a contribution.");
     stubs(null);
     expect((await checkBalance("42", CHT, day)).message).toContain("No token account found");
   } finally {

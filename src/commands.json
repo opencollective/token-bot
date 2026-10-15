@@ -192,5 +192,40 @@
         "max_length": 300
       }
     ]
+  },
+  {
+    "name": "claim",
+    "description": "Claim tokens for a contribution, for yourself or others; a minter approves",
+    "options": [
+      {
+        "name": "amount",
+        "description": "Tokens per person (at most 10)",
+        "required": true,
+        "type": 10,
+        "min_value": 0.01,
+        "max_value": 10
+      },
+      {
+        "name": "reason",
+        "description": "What was the contribution?",
+        "required": true,
+        "type": 3,
+        "max_length": 300
+      },
+      {
+        "name": "for",
+        "description": "Who gets them: @mention each person (default: you)",
+        "required": false,
+        "type": 3,
+        "max_length": 1000
+      },
+      {
+        "name": "category",
+        "description": "Kind of contribution",
+        "required": false,
+        "type": 3,
+        "autocomplete": true
+      }
+    ]
   }
 ]

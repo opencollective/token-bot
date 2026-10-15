@@ -66,6 +66,8 @@ import {
 } from "./commands/mint-context.ts";
 import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
 import { BUY_PREFIX, handleBuyButton, handleBuyCommand } from "./commands/buy.ts";
+import { handleClaimAutocomplete, handleClaimCommand } from "./commands/claim.ts";
+import { CLAIM_PREFIX, handleClaimButton, handleClaimRejectModal } from "./lib/claims.ts";
 import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalExpiry } from "./lib/proposals.ts";
 import { backfillBookingAnnotations } from "./lib/booking-annotations.ts";
 import { CATEGORY_SELECT_PREFIX, startCategoryRefresh } from "./lib/tx-categories.ts";
@@ -454,6 +456,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "burn") {
         return handleBurnAutocomplete(interaction, guildId);
       }
+      if (interaction.commandName === "claim") {
+        return handleClaimAutocomplete(interaction);
+      }
       if (interaction.commandName === "send") {
         return handleSendAutocomplete(interaction, guildId);
       }
@@ -487,6 +492,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "send") {
         return handleSendCommand(interaction, userId, guildId);
+      }
+      if (interaction.commandName === "claim") {
+        return handleClaimCommand(interaction, userId, guildId);
       }
       if (interaction.commandName === "buy") {
         return handleBuyCommand(interaction, userId, guildId);
@@ -570,6 +578,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId.startsWith(BUY_PREFIX)) {
         return handleBuyButton(interaction);
+      }
+      if (interaction.customId.startsWith(CLAIM_PREFIX)) {
+        return handleClaimButton(interaction);
       }
       return handleButton(interaction, userId, guildId);
     }
@@ -1598,6 +1609,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const userId = interaction.user.id;
   // A /book flow continued by DM (Elinor proposal) keeps its guild in the booking state.
   const guildId = interaction.guildId ?? (interaction.customId.startsWith("book_") ? bookStates.get(userId)?.guildId : undefined)!;
+
+  if (interaction.customId.startsWith(`${CLAIM_PREFIX}rejectmodal:`)) {
+    return handleClaimRejectModal(interaction);
+  }
 
   // Handle book modals
   if (interaction.customId === "book_name_modal" || interaction.customId === "book_date_modal" || interaction.customId === "book_guest_modal" || interaction.customId === "book_my_email_modal") {
