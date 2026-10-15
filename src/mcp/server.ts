@@ -38,6 +38,8 @@ export interface McpToolExecutors {
   proposeRoomBooking?(input: JsonObject): Promise<unknown>;
   getRequestStatus?(input: JsonObject): Promise<unknown>;
   proposeTransactionCategory?(input: JsonObject): Promise<unknown>;
+  listPurchasableItems?(input: JsonObject): Promise<unknown>;
+  proposePurchase?(input: JsonObject): Promise<unknown>;
 }
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -107,6 +109,20 @@ const TOOLS: ToolSpec[] = [
       inputSchema: {
         type: "object",
         properties: { guildId: GUILD_ID, days: { type: "integer", description: "How many days ahead (1-31, default 7).", minimum: 1, maximum: 31 } },
+        required: ["guildId"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    executor: "listPurchasableItems",
+    definition: {
+      name: "list_purchasable_items",
+      description:
+        "List what members can buy with their tokens (coworking day: 2 CHT, half day coworking: 1 CHT), with item ids for propose_purchase. Pass userId to also get that member's balance and what they can afford.",
+      inputSchema: {
+        type: "object",
+        properties: { guildId: GUILD_ID, userId: str("Optional. Discord user ID of the member asking, to include their balance.") },
         required: ["guildId"],
         additionalProperties: false,
       },
@@ -192,7 +208,7 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "propose_transaction_category",
       description:
-        "Propose changing a transaction's category. Stewards only. Creates a pending request only, posted as a reply in the channel/thread: the requesting steward clicks Confirm, and the change is published as a Nostr annotation signed with their own key (keeping the transaction's description). Token categories: governance, cleaning, shift, note-taking, admin, care, rental, none. Euro categories: chb's (rental, membership, donation, rent, utilities…).",
+        "Propose changing a transaction's category. Stewards only. Creates a pending request only, posted as a reply in the channel/thread: the requesting steward clicks Confirm, and the change is published as a Nostr annotation signed with their own key (keeping the transaction's description). Token categories: governance, cleaning, shift, note-taking, admin, care, rental, coworking, other, uncategorized. Euro categories: chb's (rental, coworking, membership, donation, rent, utilities…, other, uncategorized).",
       inputSchema: {
         type: "object",
         properties: {
@@ -206,6 +222,28 @@ const TOOLS: ToolSpec[] = [
           replyToMessageId: REPLY_TO,
         },
         required: ["guildId", "requesterUserId", "tx", "category", "requestedBy"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    executor: "proposePurchase",
+    definition: {
+      name: "propose_purchase",
+      description:
+        "Propose that a member buys something with their own tokens: item \"coworking-day\" (2 CHT) or \"coworking-half-day\" (1 CHT); see list_purchasable_items. userId must be the person asking (OpenClaw sender.id): nobody can buy for someone else. Refused when their balance is too low. Creates a pending request only, posted as a reply in the channel/thread (or by DM): the buyer clicks Confirm, then the price is burned from their account, categorized \"coworking\" and annotated on Nostr.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          guildId: GUILD_ID,
+          userId: str("Discord user ID of the member who asked and pays (OpenClaw sender.id). They confirm."),
+          item: { type: "string", enum: ["coworking-day", "coworking-half-day"], description: "Item id from list_purchasable_items." },
+          description: str("Optional note recorded with the transaction (e.g. the day they come)."),
+          requestedBy: REQUESTED_BY,
+          channelId: CHANNEL_ID,
+          replyToMessageId: REPLY_TO,
+        },
+        required: ["guildId", "userId", "item", "requestedBy"],
         additionalProperties: false,
       },
     },
@@ -263,6 +301,7 @@ export function validateArguments(schema: JsonObject, args: JsonObject): string 
     if (!prop || value === undefined || value === null) continue;
     const t = prop.type;
     if (t === "string" && typeof value !== "string") return `Argument ${key} must be a string`;
+    if (Array.isArray(prop.enum) && !prop.enum.includes(value)) return `Argument ${key} must be one of: ${prop.enum.join(", ")}`;
     if (t === "number" && (typeof value !== "number" || !Number.isFinite(value))) return `Argument ${key} must be a number`;
     if (t === "integer" && !Number.isInteger(value)) return `Argument ${key} must be an integer`;
     if (t === "array") {

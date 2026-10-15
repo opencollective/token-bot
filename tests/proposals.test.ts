@@ -15,7 +15,8 @@ import {
   REQUEST_TTL_MS,
   transition,
 } from "../src/lib/pending-requests.ts";
-import { handleProposalButton, MEMBER_ROLE_BY_GUILD, promptText, proposeMint, proposeRoomBooking, proposeTransactionCategory, setProposalsClient, whenText } from "../src/lib/proposals.ts";
+import { handleProposalButton, listPurchasableItems, MEMBER_ROLE_BY_GUILD, promptText, proposeMint, proposePurchase, proposeRoomBooking, proposeTransactionCategory, setProposalsClient, whenText } from "../src/lib/proposals.ts";
+import { _setShopDeps } from "../src/lib/shop.ts";
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -37,14 +38,16 @@ const ALL_EXECUTORS = {
   proposeRoomBooking: noop,
   getRequestStatus: noop,
   proposeTransactionCategory: noop,
+  listPurchasableItems: noop,
+  proposePurchase: noop,
 };
 
 // ── MCP server ──────────────────────────────────────────────────────────────
 
 Deno.test("MCP lists every tool when executors exist, only those with an executor otherwise", () => {
   expect(getMcpTools(ALL_EXECUTORS).map((t) => t.name)).toEqual([
-    "check_user_permissions", "list_rooms", "check_room_availability", "list_upcoming_shifts",
-    "propose_mint", "propose_shift_signup", "propose_room_booking", "propose_transaction_category", "get_request_status",
+    "check_user_permissions", "list_rooms", "check_room_availability", "list_upcoming_shifts", "list_purchasable_items",
+    "propose_mint", "propose_shift_signup", "propose_room_booking", "propose_transaction_category", "propose_purchase", "get_request_status",
   ]);
   expect(getMcpTools({ checkUserPermissions: noop }).map((t) => t.name)).toEqual(["check_user_permissions"]);
 });
@@ -421,4 +424,49 @@ Deno.test("MCP: read tools are read-only, proposals are flagged as acting in Dis
   const tools = getMcpTools(ALL_EXECUTORS);
   expect(tools.find((t) => t.name === "list_rooms")!.annotations).toMatchObject({ readOnlyHint: true });
   expect(tools.find((t) => t.name === "propose_transaction_category")!.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true, title: "Propose transaction category" });
+});
+
+// ── propose_purchase ────────────────────────────────────────────────────────
+
+Deno.test("list_purchasable_items: the catalogue, and with userId the balance and what's affordable", async () => {
+  try {
+    _setShopDeps({ balanceOf: () => Promise.resolve({ address: "0xa", balance: 1_000_000n }) });
+    const res = await listPurchasableItems({ guildId: GUILD, userId: "2000000002" });
+    expect(res.token).toBe("CHT");
+    expect(res.balance).toBe(1);
+    expect(res.items.map((i) => [i.item, i.price, i.affordable])).toEqual([["coworking-day", 2, false], ["coworking-half-day", 1, true]]);
+  } finally {
+    _setShopDeps();
+  }
+});
+
+Deno.test("propose_purchase: the buyer confirms; refused when the balance is too low or the item unknown", async () => {
+  const { sent } = fakeClient();
+  const base = { guildId: GUILD, userId: "2000000002", item: "coworking-day", requestedBy: "elinor for <@2000000002>", channelId: "chan-1", replyToMessageId: "m1" };
+  try {
+    _setShopDeps({ balanceOf: () => Promise.resolve({ address: "0xa", balance: 1_000_000n }) });
+    await expect(proposePurchase(base)).rejects.toThrow("a Coworking day costs 2 CHT and the balance is 1 CHT");
+    await expect(proposePurchase({ ...base, item: "pizza" })).rejects.toThrow('Unknown item "pizza"');
+    expect(sent.filter((m) => m.where === "channel:chan-1")).toEqual([]);
+
+    _setShopDeps({ balanceOf: () => Promise.resolve({ address: "0xa", balance: 3_000_000n }) });
+    const res = await proposePurchase({ ...base, description: "Thursday" });
+    expect(res.status).toBe("pending");
+    const prompt = sent.find((m) => m.where === "channel:chan-1")!;
+    expect(prompt.content).toContain("Elinor proposes a purchase** for <@2000000002> to confirm");
+    expect(prompt.content).toContain("<@2000000002> buys a **Coworking day (2 CHT)**, paid from their own balance (now 3 CHT)");
+    expect(prompt.content).toContain("📝 Thursday");
+    expect(prompt.content).toContain("only <@2000000002> can confirm");
+  } finally {
+    _setShopDeps();
+  }
+});
+
+Deno.test("MCP: propose_purchase only accepts catalogue items and is flagged as a proposal", async () => {
+  const tools = getMcpTools(ALL_EXECUTORS);
+  expect(tools.find((t) => t.name === "propose_purchase")!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+  expect(tools.find((t) => t.name === "list_purchasable_items")!.annotations).toMatchObject({ readOnlyHint: true });
+  const schema = tools.find((t) => t.name === "propose_purchase")!.inputSchema;
+  expect(validateArguments(schema, { guildId: "g", userId: "1", item: "pizza", requestedBy: "e" })).toBe("Argument item must be one of: coworking-day, coworking-half-day");
+  expect(validateArguments(schema, { guildId: "g", userId: "1", item: "coworking-day", requestedBy: "e" })).toBeNull();
 });

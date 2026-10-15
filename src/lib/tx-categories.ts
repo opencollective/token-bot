@@ -5,7 +5,8 @@
  * https://commonshub.brussels/opendata/latest/categories.json), refreshed hourly, with the copies
  * below as fallback:
  * - token (CHT) categories: chb's "contributions" group, plus "rental" (room bookings paid in tokens),
- *   "other" (a steward's deliberate choice) and "uncategorized" (the default);
+ *   "coworking" (coworking bought with /buy), "other" (a steward's deliberate choice) and
+ *   "uncategorized" (the default);
  * - euro-token (EURb, EURchb…) categories: every other chb category, including other and uncategorized.
  * "none" (used before Oct 2026) is read as "uncategorized".
  * The Discord dropdown shows at most 25 options, so for euros it offers the common ones; the MCP
@@ -16,7 +17,7 @@ import { ChainConfig, type SupportedChain } from "./blockchain.ts";
 
 export type Category = { slug: string; label: string };
 
-/** Fallback copy of the token categories (chb "contributions" group + rental). */
+/** Fallback copy of the token categories (chb "contributions" group + rental and coworking). */
 export const TOKEN_CATEGORIES: Category[] = [
   { slug: "governance", label: "Governance" },
   { slug: "cleaning", label: "Cleaning" },
@@ -25,6 +26,7 @@ export const TOKEN_CATEGORIES: Category[] = [
   { slug: "admin", label: "Admin" },
   { slug: "care", label: "Care" },
   { slug: "rental", label: "Room rental" },
+  { slug: "coworking", label: "Coworking" },
   { slug: "other", label: "Other" },
   { slug: "uncategorized", label: "Uncategorized" },
 ];
@@ -80,7 +82,7 @@ export function listsFromChb(json: unknown): { token: Category[]; euro: Category
   const find = (slug: string, label: string) => usable.find((c) => c.slug === slug) ?? { slug, label };
   const tail = [find("other", "Other"), find("uncategorized", "Uncategorized")];
   const strip = ({ slug, label }: Category) => ({ slug, label });
-  const tokenList = [...token, find("rental", "Room rental"), ...tail].map(strip);
+  const tokenList = [...token, find("rental", "Room rental"), find("coworking", "Coworking"), ...tail].map(strip);
   const euroList = [...usable.filter((c) => c.group !== "contributions" && !["other", "uncategorized"].includes(c.slug)), ...tail].map(strip);
   return { token: tokenList, euro: euroList };
 }

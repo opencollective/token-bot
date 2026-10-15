@@ -22,7 +22,7 @@ const H1 = "0xfab8c02fe66ddc201402ced431bbb9d1b871fbd7892eca8730654ac9b5262e98";
 const H2 = "0xab3f1a17b678e46663718ff7f1c223f0bb0b22bddd8911b5a4440591467a0a2e";
 
 Deno.test("category lists: Xavier's token categories; chb's euro ones; none → uncategorized", () => {
-  expect(TOKEN_CATEGORIES.map((c) => c.slug)).toEqual(["governance", "cleaning", "shift", "note-taking", "admin", "care", "rental", "other", "uncategorized"]);
+  expect(TOKEN_CATEGORIES.map((c) => c.slug)).toEqual(["governance", "cleaning", "shift", "note-taking", "admin", "care", "rental", "coworking", "other", "uncategorized"]);
   expect(categoriesFor("CHT")).toBe(TOKEN_CATEGORIES);
   expect(categoriesFor("EURb")).toBe(EURO_CATEGORIES);
   expect(EURO_CATEGORIES.length).toBe(45);
@@ -140,14 +140,14 @@ import { _setCategoryLists, categoriesFor as liveFor, findCategory as liveFind, 
 Deno.test("chb's public categories file: contributions → token list (+ rental), the rest → euro list (+ none)", async () => {
   const chb = JSON.parse(await Deno.readTextFile(new URL("./fixtures-chb-categories.json", import.meta.url)));
   const lists = listsFromChb(chb)!;
-  expect(lists.token.map((c) => c.slug)).toEqual(["governance", "cleaning", "shift", "note-taking", "admin", "care", "rental", "other", "uncategorized"]);
+  expect(lists.token.map((c) => c.slug)).toEqual(["governance", "cleaning", "shift", "note-taking", "admin", "care", "rental", "coworking", "other", "uncategorized"]);
   expect(lists.euro.some((c) => c.slug === "rent")).toBe(true);
   expect(lists.euro.some((c) => c.slug === "governance")).toBe(false);
   expect(lists.euro.slice(-2)).toEqual([{ slug: "other", label: "Other" }, { slug: "uncategorized", label: "Uncategorized" }]);
   expect(lists.euro.filter((c) => c.slug === "other").length).toBe(1);
   // An older file with "none" and no other/uncategorized still works.
   const old = listsFromChb({ categories: [...chb.categories.filter((c: { slug: string }) => !["other", "uncategorized"].includes(c.slug)), { slug: "none", label: "None", group: "contributions" }] })!;
-  expect(old.token.slice(-3).map((c) => c.slug)).toEqual(["rental", "other", "uncategorized"]);
+  expect(old.token.slice(-4).map((c) => c.slug)).toEqual(["rental", "coworking", "other", "uncategorized"]);
   expect(listsFromChb({ categories: [] })).toBeNull();
   expect(listsFromChb({ nope: 1 })).toBeNull();
   expect(listsFromChb(null)).toBeNull();

@@ -163,5 +163,34 @@
   {
     "name": "shifts",
     "description": "View and sign up for caretaking shifts"
+  },
+  {
+    "name": "buy",
+    "description": "Buy something with your tokens (e.g. a coworking day)",
+    "options": [
+      {
+        "name": "item",
+        "description": "What to buy",
+        "required": false,
+        "type": 3,
+        "choices": [
+          {
+            "name": "Coworking day — 2 tokens",
+            "value": "coworking-day"
+          },
+          {
+            "name": "Half day coworking — 1 token",
+            "value": "coworking-half-day"
+          }
+        ]
+      },
+      {
+        "name": "description",
+        "description": "Optional note (e.g. the date)",
+        "required": false,
+        "type": 3,
+        "max_length": 300
+      }
+    ]
   }
 ]

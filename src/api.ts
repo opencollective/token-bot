@@ -33,6 +33,8 @@ import {
   proposeRoomBooking,
   proposeShiftSignup,
   proposeTransactionCategory,
+  listPurchasableItems,
+  proposePurchase,
 } from "./lib/proposals.ts";
 
 const API_KEY = Deno.env.get("API_KEY");
@@ -659,6 +661,8 @@ async function handleRequest(req: Request): Promise<Response> {
       proposeRoomBooking: (a) => proposeRoomBooking(a as Parameters<typeof proposeRoomBooking>[0]),
       getRequestStatus: (a) => getRequestStatus(a as { requestId: string }),
       proposeTransactionCategory: (a) => proposeTransactionCategory(a as Parameters<typeof proposeTransactionCategory>[0]),
+      listPurchasableItems: (a) => listPurchasableItems(a as { guildId: string; userId?: string }),
+      proposePurchase: (a) => proposePurchase(a as Parameters<typeof proposePurchase>[0]),
     });
   } else if (path === "/mcp") {
     // Streamable HTTP: no server-initiated stream and no sessions to delete.

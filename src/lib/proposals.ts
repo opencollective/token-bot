@@ -7,6 +7,8 @@
  *   mint          → the confirmer must be allowed to mint (checked again on click) → executeMint
  *   shift_signup  → the member themselves → signUpForShift + confirmation email, like /shifts
  *   room_booking  → the member themselves → the /book flow, prefilled, at its payment step
+ *   tx_category   → the requesting steward → the category annotation, signed with their key
+ *   purchase      → the buyer themselves → executePurchase (burns from their own account), like /buy
  * Requests expire after 24 hours. Every proposal and outcome is logged in the guild's log channel.
  */
 import {
@@ -43,6 +45,7 @@ import {
   signUpForShift,
 } from "../commands/shifts.ts";
 import { startPrefilledBooking } from "../commands/book.ts";
+import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken } from "./shop.ts";
 import {
   countPendingFor,
   createRequest,
@@ -52,6 +55,7 @@ import {
   type PendingRequest,
   publicStatus,
   type CategoryParams,
+  type PurchaseParams,
   type RoomBookingParams,
   type ShiftSignupParams,
   transition,
@@ -198,6 +202,27 @@ export async function listUpcomingShifts(input: { guildId: string; days?: number
         })),
       };
     }),
+  };
+}
+
+/** What can be bought with /buy or propose_purchase; with userId, also their balance and what they can afford. */
+export async function listPurchasableItems(input: { guildId: string; userId?: string }) {
+  const token = shopToken(await loadGuildSettings(input.guildId));
+  if (!token) throw new Error("No token to buy with is configured in this server");
+  const balance = input.userId && /^\d{5,25}$/.test(input.userId)
+    ? (await checkBalance(input.userId, token, SHOP_ITEMS[0])).balance
+    : undefined;
+  return {
+    token: token.symbol,
+    ...(balance !== undefined ? { balance } : {}),
+    items: SHOP_ITEMS.map((i) => ({
+      item: i.id,
+      label: i.label,
+      price: i.price,
+      category: i.category,
+      ...(balance !== undefined ? { affordable: balance >= i.price } : {}),
+    })),
+    note: "Members buy with their own balance: propose_purchase asks them to confirm in Discord, then burns the price from their account.",
   };
 }
 
@@ -427,13 +452,31 @@ export async function proposeTransactionCategory(input: Common & {
   return await propose({ ...input, kind: "tx_category", confirmerId: requester.id, requesterId: requester.id, params, summary });
 }
 
+export async function proposePurchase(input: Common & { userId: string; item: string; description?: string }) {
+  const guild = await getGuild(input.guildId);
+  const buyer = await getMember(guild, input.userId, "buyer");
+  const item = findShopItem(input.item);
+  if (!item) throw new Error(`Unknown item "${input.item}". Items: ${SHOP_ITEMS.map((i) => i.id).join(", ")}.`);
+  const token = shopToken(await loadGuildSettings(input.guildId));
+  if (!token) throw new Error("No token to buy with is configured in this server");
+  const check = await checkBalance(buyer.id, token, item);
+  if (!check.ok) throw new Error(check.message!.replace(`<@${buyer.id}>`, nameOf(buyer)));
+  await guardPending(input.guildId, buyer.id);
+
+  const description = input.description?.replace(/\s+/g, " ").trim().slice(0, 300) || undefined;
+  const params: PurchaseParams = { item: item.id, tokenSymbol: token.symbol, price: item.price, description };
+  const summary = `<@${buyer.id}> buys a **${itemLine(item, token.symbol)}**, paid from their own balance (now ${check.balance} ${token.symbol})` +
+    (description ? `\n📝 ${description}` : "");
+  return await propose({ ...input, kind: "purchase", confirmerId: buyer.id, requesterId: buyer.id, params, summary });
+}
+
 // ── Creating and delivering a request ───────────────────────────────────────
 
-const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking", tx_category: "category change" } as const;
+const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking", tx_category: "category change", purchase: "purchase" } as const;
 
 function buttons(id: string, kind: PendingRequest["kind"]) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}confirm:${id}`).setLabel(kind === "room_booking" ? "Confirm, then pay" : "Confirm").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}confirm:${id}`).setLabel(kind === "room_booking" ? "Confirm, then pay" : kind === "purchase" ? "Confirm and pay" : "Confirm").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}cancel:${id}`).setLabel("Cancel").setStyle(ButtonStyle.Secondary),
   );
 }
@@ -624,6 +667,8 @@ export async function handleProposalButton(interaction: ButtonInteraction): Prom
       ? await runMint(r, interaction)
       : r.kind === "tx_category"
       ? await runCategory(r, interaction)
+      : r.kind === "purchase"
+      ? await runPurchase(r, interaction)
       : await runShiftSignup(r, interaction);
     await updateRequest(r.guildId, r.id, (x) => {
       x.status = outcome.ok ? "confirmed" : "failed";
@@ -700,6 +745,35 @@ async function runCategory(r: PendingRequest, interaction: ButtonInteraction): P
     ok: true,
     text: `🏷️ Category set to **${categoryLabel(p.category)}** by <@${member.id}>.`,
     result: { category: p.category, events: changes.map((c) => c.eventId), signedBy: npub },
+  };
+}
+
+/** Same as /buy: the buyer pays from their own account, at the current price, if they still can. */
+async function runPurchase(r: PendingRequest, interaction: ButtonInteraction): Promise<Outcome> {
+  const p = r.params as PurchaseParams;
+  const guild = await getGuild(r.guildId);
+  const buyer = await getMember(guild, interaction.user.id, "buyer");
+  const settings = await loadGuildSettings(r.guildId);
+  const token = shopToken(settings);
+  const item = findShopItem(p.item);
+  if (!settings || !token || !item) return { ok: false, text: "❌ This item is no longer available. Nothing was charged." };
+  if (token.symbol !== p.tokenSymbol || item.price !== p.price) {
+    return { ok: false, text: `❌ The price changed to ${itemLine(item, token.symbol)}. Nothing was charged; ask again.` };
+  }
+  const result = await executePurchase({
+    client: interaction.client,
+    guildSettings: settings,
+    token,
+    item,
+    buyer: { id: buyer.id, name: nameOf(buyer) },
+    description: p.description,
+    via: "elinor",
+  });
+  if (!result.ok) return { ok: false, text: `❌ ${result.error}\nNothing was charged.` };
+  return {
+    ok: true,
+    text: `✅ <@${buyer.id}> bought a **${item.label}** for ${item.price} ${token.symbol}. New balance: ${result.balanceAfter} ${token.symbol}. [View transaction](<https://txinfo.xyz/${token.chain}/tx/${result.hash}>)`,
+    result: { item: item.id, price: item.price, token: token.symbol, txHash: result.hash, txUri: result.txUri, balanceAfter: result.balanceAfter },
   };
 }
 
