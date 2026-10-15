@@ -119,7 +119,7 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "list_purchasable_items",
       description:
-        "List what members can buy with their tokens (coworking day: 2 CHT, half day coworking: 1 CHT), with item ids for propose_purchase. Pass userId to also get that member's balance and what they can afford.",
+        "List what members can buy with their tokens (coworking day: 2 tokens, half day coworking: 1 token), with item ids for propose_purchase. Pass userId to also get that member's balance and what they can afford. Prices and balances are in tokens: say \"tokens\" to people, not the token's symbol.",
       inputSchema: {
         type: "object",
         properties: { guildId: GUILD_ID, userId: str("Optional. Discord user ID of the member asking, to include their balance.") },
@@ -231,7 +231,7 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "propose_purchase",
       description:
-        "Propose that a member buys something with their own tokens: item \"coworking-day\" (2 CHT) or \"coworking-half-day\" (1 CHT); see list_purchasable_items. userId must be the person asking (OpenClaw sender.id): nobody can buy for someone else. Refused when their balance is too low. Creates a pending request only, posted as a reply in the channel/thread (or by DM): the buyer clicks Confirm, then the price is burned from their account, categorized \"coworking\" and annotated on Nostr.",
+        "Propose that a member buys something with their own tokens: item \"coworking-day\" (2 tokens) or \"coworking-half-day\" (1 token); see list_purchasable_items. userId must be the person asking (OpenClaw sender.id): nobody can buy for someone else. Refused when their balance is too low. Creates a pending request only, posted as a reply in the channel/thread (or by DM): the buyer clicks Confirm, then the price is burned from their account, categorized \"coworking\" and annotated on Nostr.",
       inputSchema: {
         type: "object",
         properties: {

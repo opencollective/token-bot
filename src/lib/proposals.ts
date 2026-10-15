@@ -45,7 +45,7 @@ import {
   signUpForShift,
 } from "../commands/shifts.ts";
 import { startPrefilledBooking } from "../commands/book.ts";
-import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken } from "./shop.ts";
+import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken, tokens } from "./shop.ts";
 import {
   countPendingFor,
   createRequest,
@@ -213,7 +213,7 @@ export async function listPurchasableItems(input: { guildId: string; userId?: st
     ? (await checkBalance(input.userId, token, SHOP_ITEMS[0])).balance
     : undefined;
   return {
-    token: token.symbol,
+    unit: "tokens",
     ...(balance !== undefined ? { balance } : {}),
     items: SHOP_ITEMS.map((i) => ({
       item: i.id,
@@ -222,7 +222,7 @@ export async function listPurchasableItems(input: { guildId: string; userId?: st
       category: i.category,
       ...(balance !== undefined ? { affordable: balance >= i.price } : {}),
     })),
-    note: "Members buy with their own balance: propose_purchase asks them to confirm in Discord, then burns the price from their account.",
+    note: "Prices and balances are in tokens; say \"tokens\", not the token's symbol. Members buy with their own balance: propose_purchase asks them to confirm in Discord, then burns the price from their account.",
   };
 }
 
@@ -465,7 +465,7 @@ export async function proposePurchase(input: Common & { userId: string; item: st
 
   const description = input.description?.replace(/\s+/g, " ").trim().slice(0, 300) || undefined;
   const params: PurchaseParams = { item: item.id, tokenSymbol: token.symbol, price: item.price, description };
-  const summary = `<@${buyer.id}> buys a **${itemLine(item, token.symbol)}**, paid from their own balance (now ${check.balance} ${token.symbol})` +
+  const summary = `<@${buyer.id}> buys a **${itemLine(item)}**, paid from their own balance (now ${tokens(check.balance)})` +
     (description ? `\n📝 ${description}` : "");
   return await propose({ ...input, kind: "purchase", confirmerId: buyer.id, requesterId: buyer.id, params, summary });
 }
@@ -758,7 +758,7 @@ async function runPurchase(r: PendingRequest, interaction: ButtonInteraction): P
   const item = findShopItem(p.item);
   if (!settings || !token || !item) return { ok: false, text: "❌ This item is no longer available. Nothing was charged." };
   if (token.symbol !== p.tokenSymbol || item.price !== p.price) {
-    return { ok: false, text: `❌ The price changed to ${itemLine(item, token.symbol)}. Nothing was charged; ask again.` };
+    return { ok: false, text: `❌ The price changed to ${itemLine(item)}. Nothing was charged; ask again.` };
   }
   const result = await executePurchase({
     client: interaction.client,
@@ -772,8 +772,8 @@ async function runPurchase(r: PendingRequest, interaction: ButtonInteraction): P
   if (!result.ok) return { ok: false, text: `❌ ${result.error}\nNothing was charged.` };
   return {
     ok: true,
-    text: `✅ <@${buyer.id}> bought a **${item.label}** for ${item.price} ${token.symbol}. New balance: ${result.balanceAfter} ${token.symbol}. [View transaction](<https://txinfo.xyz/${token.chain}/tx/${result.hash}>)`,
-    result: { item: item.id, price: item.price, token: token.symbol, txHash: result.hash, txUri: result.txUri, balanceAfter: result.balanceAfter },
+    text: `✅ <@${buyer.id}> bought a **${item.label}** for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}. [View transaction](<https://txinfo.xyz/${token.chain}/tx/${result.hash}>)`,
+    result: { item: item.id, price: item.price, unit: "tokens", txHash: result.hash, txUri: result.txUri, balanceAfter: result.balanceAfter },
   };
 }
 

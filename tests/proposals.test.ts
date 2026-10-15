@@ -432,7 +432,8 @@ Deno.test("list_purchasable_items: the catalogue, and with userId the balance an
   try {
     _setShopDeps({ balanceOf: () => Promise.resolve({ address: "0xa", balance: 1_000_000n }) });
     const res = await listPurchasableItems({ guildId: GUILD, userId: "2000000002" });
-    expect(res.token).toBe("CHT");
+    expect(res.unit).toBe("tokens");
+    expect(JSON.stringify(res)).not.toContain("CHT");
     expect(res.balance).toBe(1);
     expect(res.items.map((i) => [i.item, i.price, i.affordable])).toEqual([["coworking-day", 2, false], ["coworking-half-day", 1, true]]);
   } finally {
@@ -445,7 +446,7 @@ Deno.test("propose_purchase: the buyer confirms; refused when the balance is too
   const base = { guildId: GUILD, userId: "2000000002", item: "coworking-day", requestedBy: "elinor for <@2000000002>", channelId: "chan-1", replyToMessageId: "m1" };
   try {
     _setShopDeps({ balanceOf: () => Promise.resolve({ address: "0xa", balance: 1_000_000n }) });
-    await expect(proposePurchase(base)).rejects.toThrow("a Coworking day costs 2 CHT and the balance is 1 CHT");
+    await expect(proposePurchase(base)).rejects.toThrow("a Coworking day costs 2 tokens and the balance is 1 token.");
     await expect(proposePurchase({ ...base, item: "pizza" })).rejects.toThrow('Unknown item "pizza"');
     expect(sent.filter((m) => m.where === "channel:chan-1")).toEqual([]);
 
@@ -454,7 +455,8 @@ Deno.test("propose_purchase: the buyer confirms; refused when the balance is too
     expect(res.status).toBe("pending");
     const prompt = sent.find((m) => m.where === "channel:chan-1")!;
     expect(prompt.content).toContain("Elinor proposes a purchase** for <@2000000002> to confirm");
-    expect(prompt.content).toContain("<@2000000002> buys a **Coworking day (2 CHT)**, paid from their own balance (now 3 CHT)");
+    expect(prompt.content).toContain("<@2000000002> buys a **Coworking day (2 tokens)**, paid from their own balance (now 3 tokens)");
+    expect(prompt.content).not.toContain("CHT");
     expect(prompt.content).toContain("📝 Thursday");
     expect(prompt.content).toContain("only <@2000000002> can confirm");
   } finally {

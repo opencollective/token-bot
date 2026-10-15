@@ -62,7 +62,8 @@ Deno.test("annotation and report: category, item, buyer, description", () => {
     ["token", "ethereum:42220:address:0x65dd32834927de9e57e72a3e2130a19f81c6371d"], ["buyer", "discord:42"], ["via", "elinor"],
   ]);
   const r = purchaseReport(half, CHT, "42", HASH);
-  expect(r).toContain("🛒 <@42> bought a **Half day coworking** for 1 [CHT]");
+  expect(r).toContain("🛒 <@42> bought a **Half day coworking** for [1 token](");
+  expect(r).not.toContain("CHT");
   expect(r).toContain(`https://txinfo.xyz/celo/tx/${HASH}`);
 });
 
@@ -92,9 +93,9 @@ Deno.test("checkBalance: too low or no account explains why", async () => {
     expect(await checkBalance("42", CHT, half)).toMatchObject({ ok: true, balance: 1.5 });
     const low = await checkBalance("42", CHT, day);
     expect(low.ok).toBe(false);
-    expect(low.message).toContain("a Coworking day costs 2 CHT and the balance is 1.5 CHT");
+    expect(low.message).toContain("Not enough tokens: a Coworking day costs 2 tokens and the balance is 1.5 tokens");
     stubs(null);
-    expect((await checkBalance("42", CHT, day)).message).toContain("No CHT account found");
+    expect((await checkBalance("42", CHT, day)).message).toContain("No token account found");
   } finally {
     _setShopDeps();
   }

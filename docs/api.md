@@ -338,12 +338,14 @@ Every proposal and outcome is logged in the server's logs channel. A requester c
 
 ## Buying with tokens: `/buy`
 
-`/buy [item] [description]` lists what members can buy with CHT, with their balance, as buttons; clicking one burns the price from the clicker's own account. Elinor does the same with `propose_purchase`, which the buyer confirms in Discord.
+`/buy [item] [description]` lists what members can buy with their tokens (CHT), with their balance, as buttons; clicking one burns the price from the clicker's own account. Elinor does the same with `propose_purchase`, which the buyer confirms in Discord.
 
 | Item id | Label | Price | Category |
 |---|---|---|---|
-| `coworking-day` | Coworking day | 2 CHT | `coworking` |
-| `coworking-half-day` | Half day coworking | 1 CHT | `coworking` |
+| `coworking-day` | Coworking day | 2 tokens | `coworking` |
+| `coworking-half-day` | Half day coworking | 1 token | `coworking` |
+
+Everything people read (Discord messages, buttons, prompts, Elinor's tool descriptions and answers) says "tokens", never "CHT". The symbol stays in the data: the Nostr `token` tag and the report's currency.
 
 Each purchase:
 - burns the price from the buyer's account;

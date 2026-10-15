@@ -13,7 +13,7 @@ import {
   MessageFlags,
 } from "discord.js";
 import { loadGuildSettings } from "../lib/utils.ts";
-import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken, type ShopItem } from "../lib/shop.ts";
+import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken, type ShopItem, tokens } from "../lib/shop.ts";
 import { txUrlFor } from "../lib/mint.ts";
 
 export const BUY_PREFIX = "buy:";
@@ -30,13 +30,13 @@ function newIntent(userId: string, guildId: string, description?: string): strin
   return id;
 }
 
-export function buyButtons(intentId: string, items: ShopItem[], symbol: string, balance: number) {
+export function buyButtons(intentId: string, items: ShopItem[], balance: number) {
   const row = new ActionRowBuilder<ButtonBuilder>();
   for (const item of items.slice(0, 4)) {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`${BUY_PREFIX}${intentId}:${item.id}`)
-        .setLabel(`Buy: ${itemLine(item, symbol)}`.slice(0, 80))
+        .setLabel(`Buy: ${itemLine(item)}`.slice(0, 80))
         .setStyle(ButtonStyle.Primary)
         .setDisabled(balance < item.price),
     );
@@ -64,10 +64,10 @@ export async function handleBuyCommand(interaction: ChatInputCommandInteraction,
   const items = item ? [item] : SHOP_ITEMS;
   const check = await checkBalance(userId, token, items.reduce((a, b) => (a.price <= b.price ? a : b)));
   const lines = [
-    `🛒 **Buy with your ${token.symbol}**`,
-    `Your balance: **${check.balance} ${token.symbol}**`,
+    `🛒 **Buy with your tokens**`,
+    `Your balance: **${tokens(check.balance)}**`,
     "",
-    ...items.map((i) => `• ${itemLine(i, token.symbol)}`),
+    ...items.map((i) => `• ${itemLine(i)}`),
   ];
   if (description) lines.push("", `📝 ${description}`);
   if (!check.ok) {
@@ -78,7 +78,7 @@ export async function handleBuyCommand(interaction: ChatInputCommandInteraction,
   lines.push("", "-# The price is burned from your account when you click.");
   await interaction.editReply({
     content: lines.join("\n"),
-    components: [buyButtons(newIntent(userId, guildId, description), items, token.symbol, check.balance)],
+    components: [buyButtons(newIntent(userId, guildId, description), items, check.balance)],
   });
 }
 
@@ -107,7 +107,7 @@ export async function handleBuyButton(interaction: ButtonInteraction) {
   }
   // One click only: a second click on the same message finds no intent.
   intents.delete(intentId);
-  await interaction.update({ content: `⏳ Buying a ${item.label} for ${item.price} ${token.symbol}…`, components: [] });
+  await interaction.update({ content: `⏳ Buying a ${item.label} for ${tokens(item.price)}…`, components: [] });
 
   const member = interaction.member && "displayName" in interaction.member ? interaction.member : null;
   const result = await executePurchase({
@@ -121,7 +121,7 @@ export async function handleBuyButton(interaction: ButtonInteraction) {
   });
   await interaction.editReply({
     content: result.ok
-      ? `✅ You bought a **${item.label}** for ${item.price} ${token.symbol}. New balance: ${result.balanceAfter} ${token.symbol}.\n` +
+      ? `✅ You bought a **${item.label}** for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}.\n` +
         `[View transaction](<${txUrlFor(token, result.hash)}>)${result.reportUrl ? ` · [report](${result.reportUrl})` : ""}`
       : `❌ ${result.error}\nNothing was charged.`,
   });

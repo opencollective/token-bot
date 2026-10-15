@@ -11,7 +11,7 @@ import { Client } from "discord.js";
 import { formatUnits, parseUnits } from "@wevm/viem";
 import { burnTokensFrom, parseInsufficientGasError, type SupportedChain } from "./blockchain.ts";
 import { getSenderBalance } from "./send.ts";
-import { tokenLinkFor, tokenTag, txUrlFor } from "./mint.ts";
+import { tokenTag, txUrlFor } from "./mint.ts";
 import { Nostr, type URI } from "./nostr.ts";
 import { txUriFor } from "./tx-categories.ts";
 import { reportTransaction } from "./tx-reports.ts";
@@ -20,7 +20,7 @@ import type { GuildSettings, Token } from "../types.ts";
 
 export type ShopItem = { id: string; label: string; price: number; category: string };
 
-/** Prices are in the community token (CHT). */
+/** Prices are in the community token (CHT). People read "tokens", never the symbol (Xavier's rule). */
 export const SHOP_ITEMS: ShopItem[] = [
   { id: "coworking-day", label: "Coworking day", price: 2, category: "coworking" },
   { id: "coworking-half-day", label: "Half day coworking", price: 1, category: "coworking" },
@@ -42,10 +42,11 @@ export function shopToken(settings: GuildSettings | null | undefined): Token | n
   return mintable.length === 1 ? mintable[0] : null;
 }
 
-const plural = (n: number, symbol: string) => `${n} ${symbol}`;
+/** "1 token", "2 tokens", "1.5 tokens". */
+export const tokens = (n: number) => `${n} token${n === 1 ? "" : "s"}`;
 
-export function itemLine(item: ShopItem, symbol: string): string {
-  return `${item.label} (${plural(item.price, symbol)})`;
+export function itemLine(item: ShopItem): string {
+  return `${item.label} (${tokens(item.price)})`;
 }
 
 const clean = (s: string | undefined) => s?.replace(/\s+/g, " ").trim().slice(0, 300) || undefined;
@@ -70,7 +71,7 @@ export function purchaseAnnotation(item: ShopItem, token: Token, buyer: { id: st
 
 export function purchaseReport(item: ShopItem, token: Token, buyerId: string, hash: string, description?: string): string {
   const d = clean(description);
-  return `🛒 <@${buyerId}> bought a **${item.label}** for ${item.price} ${tokenLinkFor(token)} [[tx]](<${txUrlFor(token, hash)}>)` +
+  return `🛒 <@${buyerId}> bought a **${item.label}** for [${tokens(item.price)}](<https://txinfo.xyz/${token.chain}/token/${token.address}>) [[tx]](<${txUrlFor(token, hash)}>)` +
     (d ? `\n📝 ${d}` : "");
 }
 
@@ -110,14 +111,14 @@ export type BalanceCheck = { ok: boolean; balance: number; address?: string; mes
 /** Can this user pay for the item? `message` says why not. */
 export async function checkBalance(userId: string, token: Token, item: ShopItem): Promise<BalanceCheck> {
   const found = await deps.balanceOf(userId, token);
-  if (!found) return { ok: false, balance: 0, message: `No ${token.symbol} account found for <@${userId}>.` };
+  if (!found) return { ok: false, balance: 0, message: `No token account found for <@${userId}>.` };
   const balance = Number(formatUnits(found.balance, token.decimals));
   if (found.balance < parseUnits(item.price.toFixed(token.decimals), token.decimals)) {
     return {
       ok: false,
       balance,
       address: found.address,
-      message: `Not enough ${token.symbol}: a ${item.label} costs ${plural(item.price, token.symbol)} and the balance is ${plural(balance, token.symbol)}.` +
+      message: `Not enough tokens: a ${item.label} costs ${tokens(item.price)} and the balance is ${tokens(balance)}.` +
         (token.mintInstructions ? `\n${token.mintInstructions}` : ""),
     };
   }
