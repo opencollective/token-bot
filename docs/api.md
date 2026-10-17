@@ -363,15 +363,39 @@ Claims are stored with Elinor's requests, so `get_request_status` works for them
 
 | Item id | Label | Price | Category |
 |---|---|---|---|
-| `coworking-day` | Coworking day | 2 tokens | `coworking` |
-| `coworking-half-day` | Half day coworking | 1 token | `coworking` |
+| `coworking-day` | Contributor coworking day | 2 tokens | `coworking` |
+| `coworking-half-day` | Contributor coworking half day | 1 token | `coworking` |
 
 Everything people read (Discord messages, buttons, prompts, Elinor's tool descriptions and answers) says "tokens", never "CHT". The symbol stays in the data: the Nostr `token` tag and the report's currency.
 
 Each purchase:
 - burns the price from the buyer's account;
-- publishes a Nostr annotation on the burn: content "Coworking day for Ana: <description>", tags `t:burn`, `t:purchase`, `t:<item id>`, `category:coworking`, `amount`, `token`, `buyer:discord:<id>`, `via`;
+- publishes a Nostr annotation on the burn: content "Contributor coworking day for Ana: <description>", tags `t:burn`, `t:purchase`, `t:<item id>`, `category:coworking`, `amount`, `token`, `buyer:discord:<id>`, `via`;
 - posts the standard transaction report, categorized Coworking.
+
+## Paying with tokens is not the same service
+
+Paying with tokens doesn't get you the same service as paying in euros. Wherever the bot says people can pay with tokens, it adds the terms as fine print. The wording is the website's, kept in `src/lib/token-terms.ts`:
+
+- coworking: "Contributor coworking (with tokens): use an available desk when capacity is idle; no guaranteed desk, no advance reservation, subject to community activities."
+- rooms: "Rooms booked with tokens: only when capacity is idle, subject to community activities, without cleaning or stewarding."
+
+The coworking terms appear in:
+- the `/buy` list and its success message;
+- the `propose_purchase` prompt, its result and its tool description;
+- the purchase report;
+- `list_purchasable_items`, through a `terms` field on each item and a top-level `terms`.
+
+A purchase is for today. There's no advance reservation, so `/buy` takes no date.
+
+The room terms appear in:
+- the `/book` room list, payment choice, summary and confirmation, when tokens are involved;
+- the calendar event description of a token booking, on its own line after the `Paid:` line;
+- the confirmation email, in the "Paid with time" section, or under the token rate when the booking was paid in euros;
+- the `propose_room_booking` prompt and tool description;
+- `list_rooms`, through `tokenTerms`.
+
+Messages about euro payments don't change.
 
 To add an item, add a line to `SHOP_ITEMS` in `src/lib/shop.ts`, a choice to `/buy` in `src/commands.json`, and the id to `propose_purchase`'s `item` enum in `src/mcp/server.ts`.
 

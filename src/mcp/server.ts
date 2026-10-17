@@ -79,7 +79,7 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "list_rooms",
       description:
-        "List the bookable rooms with their slug, capacity, hourly prices (tokens and euros; euro prices are excl. 21% VAT) and bookableFrom, the earliest start time (e.g. coworking only from 19:00).",
+        "List the bookable rooms with their slug, capacity, hourly prices (tokens and euros; euro prices are excl. 21% VAT) and bookableFrom, the earliest start time (e.g. coworking only from 19:00). Booking with tokens is not the same service as paying in euros: whenever you mention token prices, also give tokenTerms (only when capacity is idle, subject to community activities, without cleaning or stewarding).",
       inputSchema: {
         type: "object",
         properties: { guildId: GUILD_ID },
@@ -120,7 +120,7 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "list_purchasable_items",
       description:
-        "List what members can buy with their tokens (coworking day: 2 tokens, half day coworking: 1 token), with item ids for propose_purchase. Pass userId to also get that member's balance and what they can afford. Prices and balances are in tokens: say \"tokens\" to people, not the token's symbol.",
+        "List what members can buy with their tokens (contributor coworking day: 2 tokens, half day: 1 token), with item ids for propose_purchase and each item's terms. Paying with tokens is not the same service as paying in euros: contributor coworking means an available desk when capacity is idle, no guaranteed desk, no advance reservation (it's for today), subject to community activities. Always relay the terms when you offer or confirm an item. Pass userId to also get that member's balance and what they can afford. Prices and balances are in tokens: say \"tokens\" to people, not the token's symbol.",
       inputSchema: {
         type: "object",
         properties: { guildId: GUILD_ID, userId: str("Optional. Discord user ID of the member asking, to include their balance.") },
@@ -183,7 +183,7 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "propose_room_booking",
       description:
-        "Propose a room booking. Creates a pending request only: the member confirms, then picks how to pay in the regular /book flow (they pay with their own balance).",
+        "Propose a room booking. Creates a pending request only: the member confirms, then picks how to pay in the regular /book flow (they pay with their own balance). Booked with tokens, a room is only available when capacity is idle, subject to community activities, without cleaning or stewarding: say so when you mention paying with tokens.",
       inputSchema: {
         type: "object",
         properties: {
@@ -232,14 +232,14 @@ const TOOLS: ToolSpec[] = [
     definition: {
       name: "propose_purchase",
       description:
-        "Propose that a member buys something with their own tokens: item \"coworking-day\" (2 tokens) or \"coworking-half-day\" (1 token); see list_purchasable_items. userId must be the person asking (OpenClaw sender.id): nobody can buy for someone else. Refused when their balance is too low. Creates a pending request only, posted as a reply in the channel/thread (or by DM): the buyer clicks Confirm, then the price is burned from their account, categorized \"coworking\" and annotated on Nostr.",
+        "Propose that a member buys contributor coworking for today with their own tokens: item \"coworking-day\" (2 tokens) or \"coworking-half-day\" (1 token); see list_purchasable_items. Not the same service as paying in euros: an available desk when capacity is idle, no guaranteed desk, no advance reservation, subject to community activities; tell them so. userId must be the person asking (OpenClaw sender.id): nobody can buy for someone else. Refused when their balance is too low. Creates a pending request only, posted as a reply in the channel/thread (or by DM): the buyer clicks Confirm, then the price is burned from their account, categorized \"coworking\" and annotated on Nostr.",
       inputSchema: {
         type: "object",
         properties: {
           guildId: GUILD_ID,
           userId: str("Discord user ID of the member who asked and pays (OpenClaw sender.id). They confirm."),
           item: { type: "string", enum: ["coworking-day", "coworking-half-day"], description: "Item id from list_purchasable_items." },
-          description: str("Optional note recorded with the transaction (e.g. the day they come)."),
+          description: str("Optional note recorded with the transaction. The purchase is for today: no reservation for another day."),
           requestedBy: REQUESTED_BY,
           channelId: CHANNEL_ID,
           replyToMessageId: REPLY_TO,

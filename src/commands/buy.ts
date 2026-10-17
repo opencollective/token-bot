@@ -13,7 +13,7 @@ import {
   MessageFlags,
 } from "discord.js";
 import { loadGuildSettings } from "../lib/utils.ts";
-import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken, type ShopItem, tokens } from "../lib/shop.ts";
+import { checkBalance, executePurchase, findShopItem, itemLine, itemsFinePrint, SHOP_ITEMS, shopToken, type ShopItem, tokens } from "../lib/shop.ts";
 import { txUrlFor } from "../lib/mint.ts";
 
 export const BUY_PREFIX = "buy:";
@@ -70,6 +70,7 @@ export async function handleBuyCommand(interaction: ChatInputCommandInteraction,
     ...items.map((i) => `• ${itemLine(i)}`),
   ];
   if (description) lines.push("", `📝 ${description}`);
+  lines.push(`-# ${itemsFinePrint(items)}`);
   if (!check.ok) {
     lines.push("", `❌ ${check.message}`);
     await interaction.editReply({ content: lines.join("\n") });
@@ -121,8 +122,9 @@ export async function handleBuyButton(interaction: ButtonInteraction) {
   });
   await interaction.editReply({
     content: result.ok
-      ? `✅ You bought a **${item.label}** for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}.\n` +
-        `[View transaction](<${txUrlFor(token, result.hash)}>)${result.reportUrl ? ` · [report](${result.reportUrl})` : ""}`
+      ? `✅ You bought a **${item.label}** for today, for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}.\n` +
+        `[View transaction](<${txUrlFor(token, result.hash)}>)${result.reportUrl ? ` · [report](${result.reportUrl})` : ""}\n` +
+        `-# ${item.terms}`
       : `❌ ${result.error}\nNothing was charged.`,
   });
 }

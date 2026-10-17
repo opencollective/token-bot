@@ -11,6 +11,7 @@
  */
 
 import { getEnv } from "./utils.ts";
+import { ROOM_TOKEN_TERMS } from "./token-terms.ts";
 
 export const HUB = {
   name: "Commons Hub Brussels",
@@ -304,6 +305,9 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   const price = `${Number(d.priceTotal.toFixed(2))} ${d.tokenSymbol}`;
   const paid = paidLine(d.priceTotal, d.tokenSymbol);
   const paidWithTime = !/^eur/i.test(d.tokenSymbol);
+  // Paying with tokens is not the same service as paying in euros: said where the payment is, else under the token rates.
+  const ratesShown = !!d.rates && kind !== "cancelled";
+  const ratesTerms = ratesShown && !paidWithTime && !!d.rates?.tokensPerHour;
 
   const paragraphs = {
     intro: self
@@ -357,7 +361,7 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
   <h1 style="font-size:22px;line-height:1.3;margin:12px 0 8px">Hi ${esc(d.guestName)}, ${heading}</h1>
   <p style="margin:0 0 16px">${esc(paragraphs.intro)}</p>
   ${d.roomImageUrl && kind !== "cancelled" ? `<img src="${esc(d.roomImageUrl)}" alt="${esc(d.roomName)}" width="544" style="display:block;width:100%;max-width:544px;height:auto;border:0;border-radius:10px;margin:0 0 ${d.rates ? "6px" : "16px"}">` : ""}
-  ${d.rates && kind !== "cancelled" ? `<p style="margin:0 0 16px;font-size:14px;color:#5d625e">${esc(roomLine(d.roomName, d.rates))}</p>` : ""}
+  ${d.rates && kind !== "cancelled" ? `<p style="margin:0 0 16px;font-size:14px;color:#5d625e">${esc(roomLine(d.roomName, d.rates))}${ratesTerms ? `<br><span style="font-size:12px">${esc(ROOM_TOKEN_TERMS)}</span>` : ""}</p>` : ""}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF4F2;border-radius:10px">
     <tr><td style="padding:16px 18px;font-size:15px">
       <div style="margin-bottom:6px"><strong>${esc(d.eventName)}</strong></div>
@@ -375,7 +379,8 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
 ${kind === "cancelled" ? "" : doorHtml}
 ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
   ${paidWithTime ? `<h2 style="font-size:17px;margin:28px 0 6px">Paid with time, not money</h2>
-  <p style="margin:0 0 8px">${esc(paragraphs.cht)}</p>` : ""}
+  <p style="margin:0 0 8px">${esc(paragraphs.cht)}</p>
+  <p style="margin:0 0 8px;font-size:14px;color:#5d625e">${esc(ROOM_TOKEN_TERMS)}</p>` : ""}
   ${d.txUrl ? `<p style="margin:${paidWithTime ? "0" : "16px 0 0"};font-size:14px"><a href="${esc(d.txUrl)}" style="color:#b83500">See the transaction</a></p>` : ""}
 
   <h2 style="font-size:17px;margin:28px 0 6px">A community space</h2>
@@ -401,7 +406,8 @@ ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
     paragraphs.intro,
     "",
     d.eventName,
-    `Room: ${d.rates && kind !== "cancelled" ? roomLine(d.roomName, d.rates) : d.roomName}`,
+    `Room: ${ratesShown ? roomLine(d.roomName, d.rates) : d.roomName}`,
+    ...(ratesTerms ? [`(${ROOM_TOKEN_TERMS})`] : []),
     `When: ${dates.join("; ")}`,
     `Where: ${HUB.address} (right in front of Brussels Central Station)`,
     ...(kind === "cancelled" ? [] : [`Paid: ${paid}`]),
@@ -413,7 +419,7 @@ ${kind === "cancelled" ? `<!-- cancelled: no further sections -->` : `
     contact,
     ...(kind === "cancelled" ? [] : [...doorText,
     "",
-    ...(paidWithTime ? ["PAID WITH TIME, NOT MONEY", paragraphs.cht] : []),
+    ...(paidWithTime ? ["PAID WITH TIME, NOT MONEY", paragraphs.cht, ROOM_TOKEN_TERMS] : []),
     ...(d.txUrl ? [`Transaction: ${d.txUrl}`] : []),
     "",
     "A COMMUNITY SPACE",

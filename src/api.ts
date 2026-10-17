@@ -15,6 +15,7 @@ import { buildUserPermissionReport } from "./lib/permissions.ts";
 import { handleMcpRequest, UserPermissionsToolInput } from "./mcp/server.ts";
 import { checkBookableFrom } from "./lib/room-rules.ts";
 import { calendarPaidLine, publishBookingAnnotation } from "./lib/booking-annotations.ts";
+import { calendarTermsLine } from "./lib/token-terms.ts";
 import { txUriFor } from "./lib/tx-categories.ts";
 import {
   DEFAULT_REPORT_GUILD,
@@ -345,7 +346,7 @@ async function handleBookExecute(req: Request): Promise<Response> {
     const bookingTimeStr = formatDiscordTime(bookingTime);
 
     const eventDescription = `Booked by Discord user on ${bookingDateStr} at ${bookingTimeStr} for ${priceAmount.toFixed(2)} ${tokenSymbol}
-${calendarPaidLine(priceAmount, tokenSymbol)}
+${calendarPaidLine(priceAmount, tokenSymbol)}${calendarTermsLine(tokenSymbol)}
 
 To cancel, run the /cancel command in Discord.
 

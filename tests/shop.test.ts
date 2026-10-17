@@ -9,6 +9,7 @@ import {
   checkBalance,
   executePurchase,
   findShopItem,
+  itemsFinePrint,
   purchaseAnnotation,
   purchaseReport,
   SHOP_ITEMS,
@@ -16,6 +17,7 @@ import {
 } from "../src/lib/shop.ts";
 import { findCategory } from "../src/lib/tx-categories.ts";
 import { getMcpTools } from "../src/mcp/server.ts";
+import { COWORKING_TOKEN_TERMS } from "../src/lib/token-terms.ts";
 import type { GuildSettings, Token } from "../src/types.ts";
 
 const CHT: Token = {
@@ -34,8 +36,25 @@ Deno.test("catalogue: coworking day 2 CHT, half day 1 CHT, both categorized cowo
     ["coworking-half-day", 1, "coworking"],
   ]);
   expect(half.id).toBe("coworking-half-day");
+  expect(findShopItem("Contributor coworking day")?.id).toBe("coworking-day");
+  expect(SHOP_ITEMS.map((i) => i.label)).toEqual(["Contributor coworking day", "Contributor coworking half day"]);
   expect(findShopItem("pizza")).toBeUndefined();
   for (const item of SHOP_ITEMS) expect(findCategory("CHT", item.category)?.slug).toBe(item.category);
+});
+
+Deno.test("paying with tokens is not the same service: every item carries the website's terms, and it's for today", () => {
+  expect(COWORKING_TOKEN_TERMS).toBe(
+    "Contributor coworking (with tokens): use an available desk when capacity is idle; no guaranteed desk, no advance reservation, subject to community activities.",
+  );
+  for (const item of SHOP_ITEMS) expect(item.terms).toBe(COWORKING_TOKEN_TERMS);
+  expect(itemsFinePrint()).toBe(`For today: there's no advance reservation. ${COWORKING_TOKEN_TERMS}`);
+  const buy = (commands as { name: string; description: string; options?: { name: string; choices?: { name: string }[] }[] }[]).find((c) => c.name === "buy")!;
+  expect(buy.options!.find((o) => o.name === "item")!.choices!.map((c) => c.name)).toEqual([
+    "Contributor coworking day (today) — 2 tokens",
+    "Contributor coworking half day (today) — 1 token",
+  ]);
+  const tool = getMcpTools().find((t) => t.name === "propose_purchase")!;
+  expect(tool.description).toContain("no guaranteed desk, no advance reservation");
 });
 
 Deno.test("/buy offers exactly the catalogue's items", () => {
@@ -56,13 +75,14 @@ Deno.test("prices are in CHT, else the only mintable token", () => {
 
 Deno.test("annotation and report: category, item, buyer, description", () => {
   const a = purchaseAnnotation(day, CHT, { id: "42", name: "Ana" }, "  Monday\n desk ", "elinor");
-  expect(a.content).toBe("Coworking day for Ana: Monday desk");
+  expect(a.content).toBe("Contributor coworking day for Ana: Monday desk");
   expect(a.tags).toEqual([
     ["t", "burn"], ["t", "purchase"], ["t", "coworking-day"], ["category", "coworking"], ["amount", "2"],
     ["token", "ethereum:42220:address:0x65dd32834927de9e57e72a3e2130a19f81c6371d"], ["buyer", "discord:42"], ["via", "elinor"],
   ]);
   const r = purchaseReport(half, CHT, "42", HASH);
-  expect(r).toContain("🛒 <@42> bought a **Half day coworking** for [1 token](");
+  expect(r).toContain("🛒 <@42> bought a **Contributor coworking half day** for [1 token](");
+  expect(r).toContain(`\n-# ${COWORKING_TOKEN_TERMS}`);
   expect(r).not.toContain("CHT");
   expect(r).toContain(`https://txinfo.xyz/celo/tx/${HASH}`);
 });
@@ -93,7 +113,7 @@ Deno.test("checkBalance: too low or no account explains why", async () => {
     expect(await checkBalance("42", CHT, half)).toMatchObject({ ok: true, balance: 1.5 });
     const low = await checkBalance("42", CHT, day);
     expect(low.ok).toBe(false);
-    expect(low.message).toContain("Not enough tokens: a Coworking day costs 2 tokens and the balance is 1.5 tokens");
+    expect(low.message).toContain("Not enough tokens: a Contributor coworking day costs 2 tokens and the balance is 1.5 tokens");
     expect(low.message).toContain("You can /claim tokens for a contribution.");
     stubs(null);
     expect((await checkBalance("42", CHT, day)).message).toContain("No token account found");

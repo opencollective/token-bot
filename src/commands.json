@@ -166,7 +166,7 @@
   },
   {
     "name": "buy",
-    "description": "Buy something with your tokens (e.g. a coworking day)",
+    "description": "Buy contributor coworking for today with your tokens",
     "options": [
       {
         "name": "item",
@@ -175,18 +175,18 @@
         "type": 3,
         "choices": [
           {
-            "name": "Coworking day — 2 tokens",
+            "name": "Contributor coworking day (today) — 2 tokens",
             "value": "coworking-day"
           },
           {
-            "name": "Half day coworking — 1 token",
+            "name": "Contributor coworking half day (today) — 1 token",
             "value": "coworking-half-day"
           }
         ]
       },
       {
         "name": "description",
-        "description": "Optional note (e.g. the date)",
+        "description": "Optional note",
         "required": false,
         "type": 3,
         "max_length": 300
