@@ -17,20 +17,36 @@ import { txUriFor } from "./tx-categories.ts";
 import { reportTransaction } from "./tx-reports.ts";
 import { refreshTokenStats } from "./token-stats-cache.ts";
 import type { GuildSettings, Token } from "../types.ts";
+import { COWORKING_TOKEN_TERMS } from "./token-terms.ts";
 
-export type ShopItem = { id: string; label: string; price: number; category: string };
+/** `terms`: what paying with tokens gets you; not the same service as paying in euros (see token-terms.ts). */
+export type ShopItem = { id: string; label: string; price: number; category: string; terms: string };
 
-/** Prices are in the community token (CHT). People read "tokens", never the symbol (Xavier's rule). */
+/**
+ * Prices are in the community token (CHT). People read "tokens", never the symbol (Xavier's rule).
+ * Contributor coworking is for today: an idle desk, no reservation (COWORKING_TOKEN_TERMS).
+ */
 export const SHOP_ITEMS: ShopItem[] = [
-  { id: "coworking-day", label: "Coworking day", price: 2, category: "coworking" },
-  { id: "coworking-half-day", label: "Half day coworking", price: 1, category: "coworking" },
+  { id: "coworking-day", label: "Contributor coworking day", price: 2, category: "coworking", terms: COWORKING_TOKEN_TERMS },
+  { id: "coworking-half-day", label: "Contributor coworking half day", price: 1, category: "coworking", terms: COWORKING_TOKEN_TERMS },
 ];
+
+/** Bought with /buy or propose_purchase, an item is for today: there's no advance reservation. */
+export const FOR_TODAY = "For today: there's no advance reservation.";
+
+/** The fine print under anything that offers or confirms these items: "For today… <terms>". */
+export function itemsFinePrint(items: ShopItem[] = SHOP_ITEMS): string {
+  return [FOR_TODAY, ...new Set(items.map((i) => i.terms))].join(" ");
+}
 
 export const SHOP_TOKEN_SYMBOL = "CHT";
 
+/** Labels before "Contributor …", still understood. */
+const OLD_LABELS: Record<string, string> = { "coworking-day": "coworking day", "coworking-half-day": "half day coworking" };
+
 export function findShopItem(input: string): ShopItem | undefined {
   const wanted = input.trim().toLowerCase();
-  return SHOP_ITEMS.find((i) => i.id === wanted || i.label.toLowerCase() === wanted);
+  return SHOP_ITEMS.find((i) => i.id === wanted || i.label.toLowerCase() === wanted || OLD_LABELS[i.id] === wanted);
 }
 
 /** The token prices are in: CHT, else the guild's only mintable token. */
@@ -74,7 +90,7 @@ export function purchaseAnnotation(item: ShopItem, token: Token, buyer: { id: st
 export function purchaseReport(item: ShopItem, token: Token, buyerId: string, hash: string, description?: string): string {
   const d = clean(description);
   return `🛒 <@${buyerId}> bought a **${item.label}** for [${tokens(item.price)}](<https://txinfo.xyz/${token.chain}/token/${token.address}>) [[tx]](<${txUrlFor(token, hash)}>)` +
-    (d ? `\n📝 ${d}` : "");
+    (d ? `\n📝 ${d}` : "") + `\n-# ${item.terms}`;
 }
 
 // ── Balance and burn (replaceable in tests) ─────────────────────────────────

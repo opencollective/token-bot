@@ -47,7 +47,8 @@ import {
 } from "../commands/shifts.ts";
 import { startPrefilledBooking } from "../commands/book.ts";
 import { createClaim } from "./claims.ts";
-import { checkBalance, executePurchase, findShopItem, itemLine, SHOP_ITEMS, shopToken, tokens } from "./shop.ts";
+import { checkBalance, executePurchase, findShopItem, itemLine, itemsFinePrint, SHOP_ITEMS, shopToken, tokens } from "./shop.ts";
+import { isEuroToken, ROOM_TOKEN_TERMS } from "./token-terms.ts";
 import {
   countPendingFor,
   createRequest,
@@ -149,7 +150,9 @@ export async function listRooms(input: { guildId: string }) {
   const products = await loadProducts(input.guildId);
   return {
     timezone: (await loadGuildSettings(input.guildId))?.guild?.timezone || TZ,
-    note: "Euro prices are per hour, excl. 21% VAT. Members pay with their own balance in the token they choose.",
+    note: "Euro prices are per hour, excl. 21% VAT. Members pay with their own balance in the token they choose. " +
+      "Booking with tokens is not the same service as paying in euros: whenever you mention token prices, also give tokenTerms.",
+    tokenTerms: ROOM_TOKEN_TERMS,
     rooms: products.filter((p) => p.type === "room" && p.calendarId).map((p) => ({
       slug: p.slug,
       name: p.name,
@@ -222,9 +225,12 @@ export async function listPurchasableItems(input: { guildId: string; userId?: st
       label: i.label,
       price: i.price,
       category: i.category,
+      terms: i.terms,
       ...(balance !== undefined ? { affordable: balance >= i.price } : {}),
     })),
-    note: "Prices and balances are in tokens; say \"tokens\", not the token's symbol. Members buy with their own balance: propose_purchase asks them to confirm in Discord, then burns the price from their account.",
+    terms: itemsFinePrint(),
+    note: "Prices and balances are in tokens; say \"tokens\", not the token's symbol. Members buy with their own balance: propose_purchase asks them to confirm in Discord, then burns the price from their account. " +
+      "Paying with tokens is not the same service as paying in euros: always tell people the terms when you offer or confirm an item. A purchase is for today, there's no advance reservation.",
   };
 }
 
@@ -402,7 +408,8 @@ export async function proposeRoomBooking(input: Common & {
   };
   const summary = `Book **${product.name}** on **${whenText(start, end, tz)}** for “${params.title}”` +
     (guestEmail ? `\n👤 For ${guestName} (${guestEmail})` : "") +
-    `\n💰 ${prices}${product.price.some((p) => /^eur/i.test(p.token)) ? " (euro prices + VAT)" : ""}: you choose and pay in the next step`;
+    `\n💰 ${prices}${product.price.some((p) => /^eur/i.test(p.token)) ? " (euro prices + VAT)" : ""}: you choose and pay in the next step` +
+    (product.price.some((p) => !isEuroToken(p.token)) ? `\n-# ${ROOM_TOKEN_TERMS}` : "");
   return await propose({ ...input, kind: "room_booking", confirmerId: member.id, params, summary });
 }
 
@@ -462,13 +469,14 @@ export async function proposePurchase(input: Common & { userId: string; item: st
   const token = shopToken(await loadGuildSettings(input.guildId));
   if (!token) throw new Error("No token to buy with is configured in this server");
   const check = await checkBalance(buyer.id, token, item);
-  if (!check.ok) throw new Error(check.message!.replace(`<@${buyer.id}>`, nameOf(buyer)));
+  if (!check.ok) throw new Error(`${check.message!.replace(`<@${buyer.id}>`, nameOf(buyer))}\n${item.terms}`);
   await guardPending(input.guildId, buyer.id);
 
   const description = input.description?.replace(/\s+/g, " ").trim().slice(0, 300) || undefined;
   const params: PurchaseParams = { item: item.id, tokenSymbol: token.symbol, price: item.price, description };
-  const summary = `<@${buyer.id}> buys a **${itemLine(item)}**, paid from their own balance (now ${tokens(check.balance)})` +
-    (description ? `\n📝 ${description}` : "");
+  const summary = `<@${buyer.id}> buys a **${itemLine(item)}** for today, paid from their own balance (now ${tokens(check.balance)})` +
+    (description ? `\n📝 ${description}` : "") +
+    `\n-# ${itemsFinePrint([item])}`;
   return await propose({ ...input, kind: "purchase", confirmerId: buyer.id, requesterId: buyer.id, params, summary });
 }
 
@@ -820,8 +828,8 @@ async function runPurchase(r: PendingRequest, interaction: ButtonInteraction): P
   if (!result.ok) return { ok: false, text: `❌ ${result.error}\nNothing was charged.` };
   return {
     ok: true,
-    text: `✅ <@${buyer.id}> bought a **${item.label}** for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}. [View transaction](<https://txinfo.xyz/${token.chain}/tx/${result.hash}>)`,
-    result: { item: item.id, price: item.price, unit: "tokens", txHash: result.hash, txUri: result.txUri, balanceAfter: result.balanceAfter },
+    text: `✅ <@${buyer.id}> bought a **${item.label}** for today, for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}. [View transaction](<https://txinfo.xyz/${token.chain}/tx/${result.hash}>)\n-# ${item.terms}`,
+    result: { item: item.id, price: item.price, unit: "tokens", txHash: result.hash, txUri: result.txUri, balanceAfter: result.balanceAfter, terms: item.terms },
   };
 }
 

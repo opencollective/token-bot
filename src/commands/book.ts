@@ -26,6 +26,7 @@ import { calendarPaidLine, publishBookingAnnotation } from "../lib/booking-annot
 import { txUriFor } from "../lib/tx-categories.ts";
 import { reportTransaction } from "../lib/tx-reports.ts";
 import { CLAIM_HINT } from "../lib/shop.ts";
+import { calendarTermsLine, isEuroToken, ROOM_TOKEN_TERMS, roomFinePrint } from "../lib/token-terms.ts";
 import { recordGuestBooking } from "../lib/guest-bookings.ts";
 import { bookingReason, buildDoorLink } from "../lib/door-link.ts";
 import { findConflict, MAX_BOOKING_DATES, type Occurrence, occurrencesFor, parseDateList } from "../lib/book-dates.ts";
@@ -255,7 +256,10 @@ async function getCachedAddress(discordUserId: string): Promise<string> {
 export const bookStates = new Map<string, BookState>();
 
 /** For community tokens (not euros), a pointer to /claim when the balance is too low. */
-const claimHint = (tokenSymbol: string) => (/^eur/i.test(tokenSymbol) ? "" : `\n${CLAIM_HINT}`);
+const claimHint = (tokenSymbol: string) => (isEuroToken(tokenSymbol) ? "" : `\n${CLAIM_HINT}`);
+
+/** Under a room list: the token terms when any of these rooms can be paid with tokens. */
+const roomsFinePrint = (rooms: Product[]) => (rooms.some((r) => r.price?.some((p) => !isEuroToken(p.token))) ? `-# ${ROOM_TOKEN_TERMS}\n` : "");
 
 /** The guild of a /book interaction; for a booking continued in DMs (Elinor proposals), the one it was made for. */
 function guildOf(interaction: Interaction, guildId: string) {
@@ -633,7 +637,7 @@ export async function handleBookCommand(
   rows.push(cancelRow);
 
   await interaction.reply({
-    content: `🗓️ **Book a Room**\n\n${roomList}\n🏠 **Select a room:**`,
+    content: `🗓️ **Book a Room**\n\n${roomList}${roomsFinePrint(bookableRooms)}\n🏠 **Select a room:**`,
     components: rows,
     flags: MessageFlags.Ephemeral,
   });
@@ -1024,7 +1028,7 @@ export async function handleBookButton(
     rows.push(cancelRow);
 
     await updateMessage(interaction, {
-      content: `🗓️ **Book a Room**\n\n${roomList}\n🏠 **Select a room:**`,
+      content: `🗓️ **Book a Room**\n\n${roomList}${roomsFinePrint(bookableRooms)}\n🏠 **Select a room:**`,
       components: rows,
     });
     return;
@@ -1614,7 +1618,7 @@ async function showPaymentSelection(
   );
 
   const updateContent = {
-    content: `${header}\n💳 **Choose payment method:**`,
+    content: `${header}\n💳 **Choose payment method:**${product.price.some((p) => !isEuroToken(p.token)) ? `\n-# ${ROOM_TOKEN_TERMS}` : ""}`,
     components: [row, navRow],
   };
 
@@ -1741,7 +1745,7 @@ async function showConfirmation(
 **Duration:** ${formatDuration(state.duration)}
 **Price:** ${priceAmount.toFixed(2)} ${tokenSymbol}
 
-**Your balance:** ${balanceFormatted} ${tokenSymbol}`;
+**Your balance:** ${balanceFormatted} ${tokenSymbol}${roomFinePrint(tokenSymbol)}`;
 
   if (!hasEnoughBalance) {
     const mintInstructions = tokenConfig.mintInstructions || "";
@@ -1936,7 +1940,7 @@ ${mintInstructions}`,
       let eventDescription =
         `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${bookingDateStr} at ${bookingTimeStr} for ${
           priceAmount.toFixed(2)
-        } ${tokenSymbol}\n${calendarPaidLine(priceAmount, tokenSymbol)}`;
+        } ${tokenSymbol}\n${calendarPaidLine(priceAmount, tokenSymbol)}${calendarTermsLine(tokenSymbol)}`;
       if (transactionMessageLink) {
         eventDescription += `\n${transactionMessageLink}`;
       }
@@ -2013,7 +2017,7 @@ Booking Chain: ${tokenConfig.chain}`;
 **Room:** ${product.name}
 **Start:** ${state.startTime.toLocaleString()}
 **End:** ${state.endTime.toLocaleString()}
-**Paid:** ${priceAmount.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}
+**Paid:** ${priceAmount.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}${roomFinePrint(tokenSymbol)}
 
 ${inviteNote(state, invite)}${mailNote}[View transaction](<${txUrl}>)
 
@@ -2173,7 +2177,7 @@ async function showMultiDateConfirmation(interaction: Interaction, userId: strin
 ${checked.map(occurrenceLine).join("\n")}
 
 **Price:** ${free.length} × ${perBooking.toFixed(2)} = ${total.toFixed(2)} ${tokenSymbol}
-**Your balance:** ${balanceFormatted} ${tokenSymbol}`;
+**Your balance:** ${balanceFormatted} ${tokenSymbol}${roomFinePrint(tokenSymbol)}`;
 
   if (free.length === 0) {
     content += `\n\n⚠️ The room is already booked at that time on every date. Go back and pick another time.`;
@@ -2267,7 +2271,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
   const invitees = inviteEmails(state, guildId, userId);
   let invite: { invited: boolean; inviteError?: string; eventId?: string } = { invited: false };
   for (const [i, occurrence] of free.entries()) {
-    let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)\n${calendarPaidLine(perBooking, tokenSymbol)}`;
+    let description = `Booked by ${interaction.user.displayName} (@${interaction.user.username})${state.bookedFor ? ` on behalf of ${forLabel(state, false)}` : ""} on ${formatDiscordDate(bookingTime)} at ${formatDiscordTime(bookingTime)}, date ${i + 1} of ${free.length} in one booking, ${total.toFixed(2)} ${tokenSymbol} in total (${perBooking.toFixed(2)} for this date)\n${calendarPaidLine(perBooking, tokenSymbol)}${calendarTermsLine(tokenSymbol)}`;
     if (state.eventUrl) description += `\nEvent URL: ${state.eventUrl}`;
     description += `\n\nPlease reach out to @${interaction.user.username} on Discord for questions about this booking.\n\nTo cancel, ${interaction.user.displayName} needs to run the /cancel command in Discord.\n\nUser ID: ${userId}\nBooking TX: ${txHash}\nBooking Chain: ${tokenConfig.chain}`;
     const event: any = {
@@ -2331,7 +2335,7 @@ async function processMultiDateBooking(interaction: Interaction, userId: string,
     content += `\n${failed.map((f) => `⚠️ ${formatShortDate(f.occurrence.start)} — ${f.reason}`).join("\n")}`;
     content += `\n\n**${(perBooking * failed.length).toFixed(2)} ${tokenSymbol} was charged for ${failed.length === 1 ? "that date" : "those dates"} but it could not be booked. Please contact an administrator for a refund** (tx below).`;
   }
-  content += `\n${inviteNote(state, invite)}${mailNote}**Paid:** ${total.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}\n\n[View transaction](<${txUrl}>) · [${product.name} calendar](<${calendarUrl}>)`;
+  content += `\n${inviteNote(state, invite)}${mailNote}**Paid:** ${total.toFixed(2)} ${tokenSymbol}${state.eventUrl ? `\n**URL:** ${state.eventUrl}` : ""}${roomFinePrint(tokenSymbol)}\n\n[View transaction](<${txUrl}>) · [${product.name} calendar](<${calendarUrl}>)`;
   await interaction.editReply({ content });
 }
 

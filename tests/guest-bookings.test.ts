@@ -133,6 +133,21 @@ Deno.test("under the photo: room name, capacity and hourly prices in euros (+ VA
   expect(cancelled.text).toContain("Room: Mush Room\n");
 });
 
+Deno.test("paid with tokens: the room terms are said; paid in euros: only under the token rate", () => {
+  const terms = "Rooms booked with tokens: only when capacity is idle, subject to community activities, without cleaning or stewarding.";
+  const cht = buildBookingEmail(base, FALLBACK_COSTS);
+  expect(cht.html).toContain(terms);
+  expect(cht.text).toContain(`PAID WITH TIME, NOT MONEY`);
+  expect(cht.text).toContain(terms);
+  const rates = ratesFromPrices([{ token: "CHT", amount: 1 }, { token: "EURb", amount: 40 }], 10);
+  const eur = buildBookingEmail({ ...base, priceTotal: 80, tokenSymbol: "EURb", rates }, FALLBACK_COSTS);
+  expect(eur.html).toContain(`€40/h + VAT or 1 token/h<br><span style="font-size:12px">${terms}</span></p>`);
+  expect(eur.text).toContain(`€40/h + VAT or 1 token/h\n(${terms})`);
+  const eurOnly = buildBookingEmail({ ...base, priceTotal: 80, tokenSymbol: "EURb", rates: ratesFromPrices([{ token: "EURb", amount: 40 }]) }, FALLBACK_COSTS);
+  expect(eurOnly.text).not.toContain(terms);
+  expect(buildBookingEmail({ ...base, kind: "cancelled", rates }, FALLBACK_COSTS).text).not.toContain(terms);
+});
+
 Deno.test("what was paid: tokens as is, euros excl. VAT", () => {
   expect(paidLine(2, "CHT")).toBe("2 CHT");
   expect(paidLine(260, "EURb")).toBe("€260 (paid in EURb, excl. VAT)");

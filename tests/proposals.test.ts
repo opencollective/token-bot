@@ -437,6 +437,8 @@ Deno.test("list_purchasable_items: the catalogue, and with userId the balance an
     expect(JSON.stringify(res)).not.toContain("CHT");
     expect(res.balance).toBe(1);
     expect(res.items.map((i) => [i.item, i.price, i.affordable])).toEqual([["coworking-day", 2, false], ["coworking-half-day", 1, true]]);
+    for (const i of res.items) expect(i.terms).toContain("no guaranteed desk, no advance reservation, subject to community activities");
+    expect(res.terms).toContain("For today");
   } finally {
     _setShopDeps();
   }
@@ -447,7 +449,7 @@ Deno.test("propose_purchase: the buyer confirms; refused when the balance is too
   const base = { guildId: GUILD, userId: "2000000002", item: "coworking-day", requestedBy: "elinor for <@2000000002>", channelId: "chan-1", replyToMessageId: "m1" };
   try {
     _setShopDeps({ balanceOf: () => Promise.resolve({ address: "0xa", balance: 1_000_000n }) });
-    await expect(proposePurchase(base)).rejects.toThrow("a Coworking day costs 2 tokens and the balance is 1 token.");
+    await expect(proposePurchase(base)).rejects.toThrow("a Contributor coworking day costs 2 tokens and the balance is 1 token.");
     await expect(proposePurchase({ ...base, item: "pizza" })).rejects.toThrow('Unknown item "pizza"');
     expect(sent.filter((m) => m.where === "channel:chan-1")).toEqual([]);
 
@@ -456,7 +458,8 @@ Deno.test("propose_purchase: the buyer confirms; refused when the balance is too
     expect(res.status).toBe("pending");
     const prompt = sent.find((m) => m.where === "channel:chan-1")!;
     expect(prompt.content).toContain("Elinor proposes a purchase** for <@2000000002> to confirm");
-    expect(prompt.content).toContain("<@2000000002> buys a **Coworking day (2 tokens)**, paid from their own balance (now 3 tokens)");
+    expect(prompt.content).toContain("<@2000000002> buys a **Contributor coworking day (2 tokens)** for today, paid from their own balance (now 3 tokens)");
+    expect(prompt.content).toContain("-# For today: there's no advance reservation. Contributor coworking (with tokens): use an available desk when capacity is idle;");
     expect(prompt.content).not.toContain("CHT");
     expect(prompt.content).toContain("📝 Thursday");
     expect(prompt.content).toContain("only <@2000000002> can confirm");
