@@ -26,7 +26,8 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { loadGuildSettings } from "./utils.ts";
-import { executeMint, type Recipient, txUrlFor } from "./mint.ts";
+import { executeMint, type MintResult, type Recipient, txUrlFor } from "./mint.ts";
+import { clip, DISCORD_MAX, txSummary } from "./discord-text.ts";
 import { hasTokenPermission } from "../commands/mint.ts";
 import { shopToken, tokens } from "./shop.ts";
 import { categoryLabel, findCategory, tokenCategories } from "./tx-categories.ts";
@@ -260,9 +261,11 @@ export async function handleClaimButton(interaction: ButtonInteraction): Promise
   await interaction.update({ content: `${r.summary}\n\n⏳ Approved by <@${m.id}>, minting…`, components: [], allowedMentions: { parse: [] } });
 
   const p = r.params as ClaimParams;
+  const summary = clip(r.summary, 700);
+  let results: MintResult[];
   try {
     const recipients: Recipient[] = p.recipientIds.map((uid) => ({ type: "discord", id: uid, label: `<@${uid}>`, accountId: `discord:${uid}` }));
-    const results = await mint({
+    results = await mint({
       client: interaction.client,
       guildSettings: settings,
       token,
@@ -274,24 +277,36 @@ export async function handleClaimButton(interaction: ButtonInteraction): Promise
       category: p.category,
       extraTags: [["t", "claim"]],
     });
-    const ok = results.filter((x) => x.success);
-    const failed = results.filter((x) => !x.success);
-    const lines = [`✅ Approved by <@${m.id}>`];
-    if (ok.length) lines.push(`Minted ${tokens(p.amount)} for ${ok.map((x) => `${x.recipient.label} [[tx]](<${txUrlFor(token, x.hash!)}>)`).join(", ")}`);
-    if (failed.length) lines.push(`⚠️ Not minted for ${failed.map((x) => `${x.recipient.label} (${x.error})`).join(", ")}`);
-    await updateRequest(r.guildId, r.id, (x) => {
-      x.status = ok.length ? "confirmed" : "failed";
-      x.result = results.map((y) => ({ userId: y.recipient.id, success: y.success, txHash: y.hash ?? null, error: y.error ?? null }));
-      if (!ok.length) x.error = failed.map((y) => y.error).join("; ");
-    });
-    await interaction.editReply({ content: `${r.summary}\n\n${lines.join("\n")}`, components: [], allowedMentions: { parse: [] } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateRequest(r.guildId, r.id, (x) => {
       x.status = "failed";
       x.error = message;
     });
-    await interaction.editReply({ content: `${r.summary}\n\n❌ Approved by <@${m.id}> but minting failed: ${message}`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
+    await interaction.editReply({ content: clip(`${summary}\n\n❌ Approved by <@${m.id}> but minting failed: ${message}`), components: [], allowedMentions: { parse: [] } }).catch(() => {});
+    return;
+  }
+
+  // Record the outcome first: a message that can't be edited is a display problem, not a failed mint.
+  const ok = results.filter((x) => x.success);
+  const failed = results.filter((x) => !x.success);
+  await updateRequest(r.guildId, r.id, (x) => {
+    x.status = ok.length ? "confirmed" : "failed";
+    x.result = results.map((y) => ({ userId: y.recipient.id, success: y.success, txHash: y.hash ?? null, error: y.error ?? null }));
+    if (!ok.length) x.error = failed.map((y) => y.error).join("; ");
+  });
+  const approved = `✅ Approved by <@${m.id}>`;
+  const notMinted = failed.length ? clip(`\n⚠️ Not minted for ${failed.map((x) => `${x.recipient.label} (${x.error})`).join(", ")}`, 500) : "";
+  const room = DISCORD_MAX - summary.length - approved.length - notMinted.length - 4;
+  const minted = ok.length
+    ? `\n${txSummary(`Minted ${tokens(p.amount)} for`, ok.map((x) => ({ label: x.recipient.label, url: txUrlFor(token, x.hash!) })), room)}`
+    : "";
+  try {
+    await interaction.editReply({ content: clip(`${summary}\n\n${approved}${minted}${notMinted}`), components: [], allowedMentions: { parse: [] } });
+  } catch (error) {
+    console.error(`[claims] could not show the outcome of ${r.id}:`, error);
+    const short = ok.length ? `Minted ${tokens(p.amount)} for ${ok.length} ${ok.length === 1 ? "person" : "people"}.` : "Nothing was minted.";
+    await interaction.editReply({ content: clip(`${summary}\n\n${approved}\n${short}`), components: [], allowedMentions: { parse: [] } }).catch(() => {});
   }
 }
 

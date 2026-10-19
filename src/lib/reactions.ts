@@ -35,6 +35,7 @@ import {
   txUrlFor,
 } from "./mint.ts";
 import { executeSend, getSenderBalance, type SendResult, toUnits } from "./send.ts";
+import { clip, DISCORD_MAX, txSummary } from "./discord-text.ts";
 import { hasTokenPermission } from "../commands/mint.ts";
 import type { GuildSettings, Token } from "../types.ts";
 
@@ -379,14 +380,18 @@ export async function handleReactionButton(interaction: ButtonInteraction): Prom
   const failed = results.filter((r) => !r.success);
   const verb = kind === "mint" ? "minted" : "sent";
   const emoji = kind === "mint" ? "🪙" : "💸";
+  const failedText = failed.length > 0
+    ? clip(`❌ Failed for ${failed.map((r) => `${r.recipient.label} (${r.error})`).join(", ")}`, 600)
+    : "";
   let content = "";
   if (successful.length > 0) {
-    const txs = successful.map((r) => `[tx](<${txUrlFor(token, r.hash!)}>)`).join(" ");
-    content = `${emoji} <@${actorId}> ${verb} ${formatAmount(amount)} ${tokenLinkFor(token)} ${kind === "send" ? "to" : "for"} ${labels(successful.map((r) => r.recipient))} · ${txs}`;
+    content = txSummary(
+      `${emoji} <@${actorId}> ${verb} ${formatAmount(amount)} ${tokenLinkFor(token)} ${kind === "send" ? "to" : "for"}`,
+      successful.map((r) => ({ label: r.recipient.label, url: txUrlFor(token, r.hash!) })),
+      DISCORD_MAX - failedText.length - 1,
+    );
   }
-  if (failed.length > 0) {
-    content += `${content ? "\n" : ""}❌ Failed for ${failed.map((r) => `${r.recipient.label} (${r.error})`).join(", ")}`;
-  }
+  if (failedText) content += `${content ? "\n" : ""}${failedText}`;
 
   // Post the acknowledgement as a fresh reply so recipients get notified (edits don't ping),
   // and drop the prompt.

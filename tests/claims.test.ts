@@ -68,7 +68,10 @@ function setup() {
   const sent: { channel: string; content: string; components?: unknown[]; allowedMentions?: unknown }[] = [];
   const guild = {
     id: GUILD,
-    members: { fetch: (id: string) => (members.has(id) ? Promise.resolve(members.get(id)) : Promise.reject(new Error("no"))) },
+    members: {
+      // Members 41xxxxxxxxxxxxxxxxx exist too (for claims with many people).
+      fetch: (id: string) => (members.has(id) ? Promise.resolve(members.get(id)) : /^41\d{17}$/.test(id) ? Promise.resolve(fakeMember(id)) : Promise.reject(new Error("no"))),
+    },
   };
   const client = {
     guilds: { cache: new Map([[GUILD, guild]]), fetch: (id: string) => (id === GUILD ? Promise.resolve(guild) : Promise.reject(new Error("no"))) },
@@ -222,4 +225,40 @@ Deno.test("MCP propose_claim: schema and annotations", () => {
   expect(validateArguments(tool.inputSchema, { ...base, amount: 11 })).toBe("Argument amount must be ≤ 10");
   expect(validateArguments(tool.inputSchema, { ...base, reason: "" })).toBe("Missing required string argument: reason");
   expect(tool.description).not.toContain("CHT");
+});
+
+Deno.test("approving a claim for 15 people: within Discord's limit, and confirmed even if the edit fails", async () => {
+  const many = Array.from({ length: 15 }, (_, i) => String(4100000000000000000n + BigInt(i)));
+  _setClaimMint((o) => Promise.resolve(o.recipients.map((r, i) => ({ recipient: r, success: true, hash: "0x" + String(i).padStart(64, "0") }))));
+  try {
+    for (const editFails of [false, true]) {
+      const { client, guild } = setup();
+      const { request } = await createClaim({
+        // deno-lint-ignore no-explicit-any
+        client: client as any, guildId: GUILD, requesterId: NOBODY, recipientIds: many, amount: 1,
+        reason: "Heartbeat 108 attendance: " + "x".repeat(250), via: "elinor",
+      });
+      const ok = click(client, guild, OTHER_MINTER, `claim:approve:${request.id}`);
+      const shown: string[] = [];
+      let calls = 0;
+      ok.interaction.editReply = (m: { content: string }) => {
+        calls++;
+        if (m.content.length > 2000) return Promise.reject(new Error("Invalid Form Body content[BASE_TYPE_MAX_LENGTH]"));
+        if (editFails && calls === 1) return Promise.reject(new Error("Unknown interaction"));
+        shown.push(m.content);
+        return Promise.resolve();
+      };
+      await handleClaimButton(ok.interaction);
+      const r = await getRequest(request.id, [GUILD]);
+      expect(r?.status).toBe("confirmed");
+      expect((r?.result as { success: boolean }[]).filter((x) => x.success).length).toBe(15);
+      const last = shown.at(-1)!;
+      expect(last).toContain(`✅ Approved by <@${OTHER_MINTER}>`);
+      expect(last).not.toContain("failed");
+      if (editFails) expect(last).toContain("Minted 1 token for 15 people.");
+      else for (const id of many) expect(last).toContain(`<@${id}>`);
+    }
+  } finally {
+    _setClaimMint();
+  }
 });

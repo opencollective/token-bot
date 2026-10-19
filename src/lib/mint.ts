@@ -2,7 +2,8 @@
 // and the :mint: emoji reaction handler.
 import { Client, Message, TextChannel } from "discord.js";
 import { txUriFor } from "./tx-categories.ts";
-import { reportTransaction } from "./tx-reports.ts";
+import { REPORT_MAX, reportTransaction } from "./tx-reports.ts";
+import { clip, DISCORD_MAX, txLines, txSummary } from "./discord-text.ts";
 import { parseUnits } from "@wevm/viem";
 import { ChainConfig, mintTokens, parseInsufficientGasError, SupportedChain } from "./blockchain.ts";
 import { Nostr, URI } from "./nostr.ts";
@@ -204,12 +205,13 @@ export async function executeMint(opts: ExecuteMintOptions): Promise<MintResult[
       const channel = (await client.channels.fetch(txChannelId)) as TextChannel;
       if (channel) {
         const tokenLink = tokenLinkFor(token);
-        const lines = successful.map((r) =>
-          `🪙 <@${minterId}> minted ${formatAmount(amount)} ${tokenLink} for ${r.recipient.label} [[tx]](<${txUrlFor(token, r.hash!)}>)`
-        );
-        let message = lines.join("\n");
-        if (description) message += `\n📝 ${description}`;
-        if (source?.messageUrl) message += `\n🔗 [context](<${source.messageUrl}>)`;
+        let extra = description ? clip(`\n📝 ${description}`, 400) : "";
+        if (source?.messageUrl) extra += `\n🔗 [context](<${source.messageUrl}>)`;
+        const message = txLines(
+          `🪙 <@${minterId}> minted ${formatAmount(amount)} ${tokenLink} for`,
+          successful.map((r) => ({ label: r.recipient.label, url: txUrlFor(token, r.hash!) })),
+          REPORT_MAX - extra.length,
+        ) + extra;
         await reportTransaction({
           client,
           channelId: channel.id,
@@ -242,10 +244,10 @@ export async function announceMintOnMessage(
 ): Promise<void> {
   const successful = results.filter((r) => r.success);
   if (successful.length === 0) return;
-  const who = successful.map((r) => r.recipient.label).join(", ");
-  const txs = successful.map((r) => `[tx](<${txUrlFor(token, r.hash!)}>)`).join(" ");
-  const content =
-    `🪙 <@${minterId}> minted ${formatAmount(amount)} ${tokenLinkFor(token)} for ${who} · ${txs}`;
+  const content = txSummary(
+    `🪙 <@${minterId}> minted ${formatAmount(amount)} ${tokenLinkFor(token)} for`,
+    successful.map((r) => ({ label: r.recipient.label, url: txUrlFor(token, r.hash!) })),
+  );
   try {
     await message.reply({ content });
   } catch (error) {
@@ -311,25 +313,25 @@ export function formatMintResults(
   token: Token,
   amount: number,
   description?: string,
+  /** Discord's limit by default; less when the text goes after something else. */
+  max = DISCORD_MAX,
 ): string {
   const successful = results.filter((r) => r.success);
   const failed = results.filter((r) => !r.success);
   const tokenLink = tokenLinkFor(token);
-  let content = "";
 
-  if (successful.length > 0) {
-    content = successful
-      .map((r) =>
-        `✅ Minted ${formatAmount(amount)} ${tokenLink} for ${r.recipient.label} [[tx]](<${txUrlFor(token, r.hash!)}>)`
-      )
-      .join("\n");
-    if (description) content += `\n📝 ${description}`;
-  }
-
+  let failedText = "";
   if (failed.length > 0) {
     const lines = failed.map((r) => `${r.recipient.label}: ${r.error}`).join("\n");
-    content += successful.length === 0 ? `❌ Failed to mint:\n${lines}` : `\n❌ Failed to mint for:\n${lines}`;
+    failedText = clip(successful.length === 0 ? `❌ Failed to mint:\n${lines}` : `\n❌ Failed to mint for:\n${lines}`, Math.floor(max / 3));
   }
+  if (successful.length === 0) return failedText;
 
-  return content;
+  const descText = description ? clip(`\n📝 ${description}`, Math.floor(max / 4)) : "";
+  const minted = txLines(
+    `✅ Minted ${formatAmount(amount)} ${tokenLink} for`,
+    successful.map((r) => ({ label: r.recipient.label, url: txUrlFor(token, r.hash!) })),
+    max - descText.length - failedText.length,
+  );
+  return clip(minted + descText + failedText, max);
 }

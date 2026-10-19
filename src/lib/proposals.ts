@@ -27,6 +27,7 @@ import {
 } from "discord.js";
 import { findTokenByInput, loadGuildFile, loadGuildSettings } from "./utils.ts";
 import { executeMint, formatAmount, formatMintResults, getMintableTokens, type Recipient } from "./mint.ts";
+import { clip, DISCORD_MAX } from "./discord-text.ts";
 import { hasTokenPermission } from "../commands/mint.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { getUser, getUserEmail, saveUser } from "./user-emails.ts";
@@ -137,7 +138,7 @@ async function log(guildId: string, text: string) {
     const channelId = settings?.channels?.logs || SHIFTS_LOG_CHANNEL_ID;
     const channel = await requireClient().channels.fetch(channelId).catch(() => null);
     if (channel?.isTextBased() && "send" in channel) {
-      await (channel as TextChannel).send({ content: text, allowedMentions: { parse: [] } });
+      await (channel as TextChannel).send({ content: clip(text), allowedMentions: { parse: [] } });
     }
   } catch (error) {
     console.error("[proposals] could not log:", error);
@@ -573,7 +574,7 @@ async function propose(input: Common & {
     params: input.params,
     summary: input.summary,
   });
-  const content = promptText(request);
+  const content = clip(promptText(request));
   const row = buttons(request.id, request.kind);
   const c = requireClient();
 
@@ -661,7 +662,7 @@ async function closePrompt(r: PendingRequest, footer: string) {
     const channel = await requireClient().channels.fetch(r.message.channelId);
     if (channel?.isTextBased()) {
       const msg = await channel.messages.fetch(r.message.messageId);
-      await msg.edit({ content: `${r.summary}\n\n${footer}`, components: [], allowedMentions: { parse: [] } });
+      await msg.edit({ content: clip(`${r.summary}\n\n${footer}`), components: [], allowedMentions: { parse: [] } });
     }
   } catch (error) {
     console.error("[proposals] could not update the prompt:", error);
@@ -700,13 +701,13 @@ export async function handleProposalButton(interaction: ButtonInteraction): Prom
   }
   if (r.status !== "pending" || Date.now() > new Date(r.expiresAt).getTime()) {
     if (r.status === "pending") await transition(r.guildId, r.id, "expired");
-    await interaction.update({ content: `${r.summary}\n\n⌛ This request is ${r.status === "pending" ? "expired" : r.status}.`, components: [] });
+    await interaction.update({ content: clip(`${r.summary}\n\n⌛ This request is ${r.status === "pending" ? "expired" : r.status}.`), components: [] });
     return;
   }
 
   if (action === "cancel") {
     if (!await transition(r.guildId, r.id, "cancelled", interaction.user.id)) return;
-    await interaction.update({ content: `${r.summary}\n\n❌ Cancelled by <@${interaction.user.id}>.`, components: [], allowedMentions: { parse: [] } });
+    await interaction.update({ content: clip(`${r.summary}\n\n❌ Cancelled by <@${interaction.user.id}>.`), components: [], allowedMentions: { parse: [] } });
     await log(r.guildId, `🤖 ❌ <@${interaction.user.id}> cancelled Elinor's ${KIND_LABEL[r.kind]} request (${r.id})`);
     return;
   }
@@ -716,38 +717,61 @@ export async function handleProposalButton(interaction: ButtonInteraction): Prom
 
   const claimed = await transition(r.guildId, r.id, "confirmed", interaction.user.id);
   if (!claimed) return;
-  await interaction.update({ content: `${r.summary}\n\n⏳ Confirmed by <@${interaction.user.id}>, working on it…`, components: [], allowedMentions: { parse: [] } });
+  await interaction.update({ content: clip(`${r.summary}\n\n⏳ Confirmed by <@${interaction.user.id}>, working on it…`), components: [], allowedMentions: { parse: [] } });
 
+  // The work itself. Only an error here means the request failed.
+  let outcome: Outcome;
   try {
-    const outcome = r.kind === "mint"
+    outcome = r.kind === "mint"
       ? await runMint(r, interaction)
       : r.kind === "tx_category"
       ? await runCategory(r, interaction)
       : r.kind === "purchase"
       ? await runPurchase(r, interaction)
       : await runShiftSignup(r, interaction);
-    await updateRequest(r.guildId, r.id, (x) => {
-      x.status = outcome.ok ? "confirmed" : "failed";
-      x.result = outcome.result;
-      if (!outcome.ok) x.error = outcome.text;
-    });
-    const header = r.kind === "mint" && outcome.ok
-      ? `✅ Minted by <@${interaction.user.id}>${r.requesterId && r.requesterId !== interaction.user.id ? `, requested by <@${r.requesterId}>` : ""}\n`
-      : "";
-    await interaction.editReply({ content: `${r.summary}\n\n${header}${outcome.text}`, components: [], allowedMentions: { parse: [] } });
-    await log(r.guildId, `🤖 ${outcome.ok ? "✅" : "⚠️"} <@${interaction.user.id}> confirmed Elinor's ${KIND_LABEL[r.kind]} request (${r.id}): ${outcome.ok ? "done" : outcome.text.slice(0, 300)}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateRequest(r.guildId, r.id, (x) => {
       x.status = "failed";
       x.error = message;
     });
-    await interaction.editReply({ content: `${r.summary}\n\n❌ Failed: ${message}`, components: [] }).catch(() => {});
+    await interaction.editReply({ content: clip(`${r.summary}\n\n❌ Failed: ${message}`), components: [], allowedMentions: { parse: [] } }).catch(() => {});
     await log(r.guildId, `🤖 ❌ Elinor's ${KIND_LABEL[r.kind]} request (${r.id}) failed after confirmation: ${message.slice(0, 300)}`);
+    return;
+  }
+
+  // Record the outcome before showing it: a message that can't be edited is a display problem, not a failure.
+  await updateRequest(r.guildId, r.id, (x) => {
+    x.status = outcome.ok ? "confirmed" : "failed";
+    x.result = outcome.result;
+    if (!outcome.ok) x.error = outcome.text;
+  });
+  await showOutcome(interaction, r, outcome);
+  await log(r.guildId, `🤖 ${outcome.ok ? "✅" : "⚠️"} <@${interaction.user.id}> confirmed Elinor's ${KIND_LABEL[r.kind]} request (${r.id}): ${outcome.ok ? "done" : outcome.text.slice(0, 300)}`);
+}
+
+/** The request message with its outcome, within Discord's limit; a short fallback if the edit fails anyway. */
+async function showOutcome(interaction: ButtonInteraction, r: PendingRequest, outcome: Outcome): Promise<void> {
+  const header = r.kind === "mint" && outcome.ok
+    ? `✅ Minted by <@${interaction.user.id}>${r.requesterId && r.requesterId !== interaction.user.id ? `, requested by <@${r.requesterId}>` : ""}\n`
+    : "";
+  const summary = clip(r.summary, 700);
+  try {
+    await interaction.editReply({ content: clip(`${summary}\n\n${header}${outcome.text}`), components: [], allowedMentions: { parse: [] } });
+  } catch (error) {
+    console.error(`[proposals] could not show the outcome of ${r.id}:`, error);
+    const short = outcome.ok ? `${header || "✅ "}Done. Details: ask Elinor for request ${r.id}.` : `⚠️ Not done. Details: ask Elinor for request ${r.id}.`;
+    await interaction.editReply({ content: clip(`${summary}\n\n${short}`), components: [], allowedMentions: { parse: [] } }).catch(() => {});
   }
 }
 
 type Outcome = { ok: boolean; text: string; result?: unknown };
+
+let mint = executeMint;
+/** For tests: replace the mint. */
+export function _setProposalMint(fn?: typeof executeMint) {
+  mint = fn ?? executeMint;
+}
 
 /** Same as /mint: the clicker must be allowed to mint this token right now. */
 async function runMint(r: PendingRequest, interaction: ButtonInteraction): Promise<Outcome> {
@@ -760,7 +784,7 @@ async function runMint(r: PendingRequest, interaction: ButtonInteraction): Promi
   if (!hasTokenPermission(member, token.minterRoleId)) return { ok: false, text: `❌ You no longer have permission to mint ${token.symbol}.` };
 
   const recipients: Recipient[] = p.recipientIds.map((id) => ({ type: "discord", id, label: `<@${id}>`, accountId: `discord:${id}` }));
-  const results = await executeMint({
+  const results = await mint({
     client: interaction.client,
     guildSettings: settings,
     token,
@@ -773,7 +797,7 @@ async function runMint(r: PendingRequest, interaction: ButtonInteraction): Promi
   const ok = results.some((x) => x.success);
   return {
     ok,
-    text: formatMintResults(results, token, p.amount, p.description),
+    text: formatMintResults(results, token, p.amount, p.description, DISCORD_MAX - 800),
     result: results.map((x) => ({ userId: x.recipient.id, success: x.success, txHash: x.hash ?? null, error: x.error ?? null })),
   };
 }

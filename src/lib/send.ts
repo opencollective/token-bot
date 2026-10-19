@@ -15,7 +15,8 @@ import {
 import { parseUnits } from "@wevm/viem";
 import { ChainConfig, getBalance, parseInsufficientGasError, SupportedChain } from "./blockchain.ts";
 import { txUriFor } from "./tx-categories.ts";
-import { reportTransaction } from "./tx-reports.ts";
+import { REPORT_MAX, reportTransaction } from "./tx-reports.ts";
+import { clip, txLines } from "./discord-text.ts";
 import { getAccountAddressForToken } from "./citizenwallet.ts";
 import { Nostr, URI } from "./nostr.ts";
 import { refreshTokenStats } from "./token-stats-cache.ts";
@@ -244,12 +245,13 @@ export async function executeSend(opts: ExecuteSendOptions): Promise<SendResult[
     try {
       const channel = (await client.channels.fetch(txChannelId)) as TextChannel;
       if (channel) {
-        const lines = successful.map((r) =>
-          `💸 <@${senderId}> sent ${formatAmount(amount)} ${tokenLinkFor(token)} to ${r.recipient.label} [[tx]](<${txUrlFor(token, r.hash!)}>)`
-        );
-        let msg = lines.join("\n");
-        if (description) msg += `\n📝 ${description}`;
-        if (source?.messageUrl) msg += `\n🔗 [context](<${source.messageUrl}>)`;
+        let extra = description ? clip(`\n📝 ${description}`, 400) : "";
+        if (source?.messageUrl) extra += `\n🔗 [context](<${source.messageUrl}>)`;
+        const msg = txLines(
+          `💸 <@${senderId}> sent ${formatAmount(amount)} ${tokenLinkFor(token)} to`,
+          successful.map((r) => ({ label: r.recipient.label, url: txUrlFor(token, r.hash!) })),
+          REPORT_MAX - extra.length,
+        ) + extra;
         await reportTransaction({
           client,
           channelId: channel.id,
