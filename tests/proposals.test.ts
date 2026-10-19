@@ -15,7 +15,7 @@ import {
   REQUEST_TTL_MS,
   transition,
 } from "../src/lib/pending-requests.ts";
-import { handleProposalButton, listPurchasableItems, MEMBER_ROLE_BY_GUILD, promptText, proposeMint, proposePurchase, proposeRoomBooking, proposeTransactionCategory, setProposalsClient, whenText } from "../src/lib/proposals.ts";
+import { _setProposalMint, handleProposalButton, listPurchasableItems, MEMBER_ROLE_BY_GUILD, promptText, proposeMint, proposePurchase, proposeRoomBooking, proposeTransactionCategory, setProposalsClient, whenText } from "../src/lib/proposals.ts";
 import { _setShopDeps } from "../src/lib/shop.ts";
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
@@ -475,4 +475,56 @@ Deno.test("MCP: propose_purchase only accepts catalogue items and is flagged as 
   const schema = tools.find((t) => t.name === "propose_purchase")!.inputSchema;
   expect(validateArguments(schema, { guildId: "g", userId: "1", item: "pizza", requestedBy: "e" })).toBe("Argument item must be one of: coworking-day, coworking-half-day");
   expect(validateArguments(schema, { guildId: "g", userId: "1", item: "coworking-day", requestedBy: "e" })).toBeNull();
+});
+
+// ── Many recipients: Discord's 2000-character limit ─────────────────────────
+
+Deno.test("confirming a mint for 12 people: within Discord's limit, recorded as confirmed even if the edit fails", async () => {
+  const recipientIds = Array.from({ length: 12 }, (_, i) => String(3000000000000000000n + BigInt(i)));
+  const description = "Heartbeat 108 attendance on 2026-10-19: Xavier, Miriam, Friedger, Alain, Cedric, Mathieu, Greet, Dean, Flo, Ben, Ana, Leen";
+  const minted: string[][] = [];
+  _setProposalMint((o) => {
+    minted.push(o.recipients.map((r) => r.id));
+    return Promise.resolve(o.recipients.map((r, i) => ({ recipient: r, success: true, hash: "0x" + String(i).padStart(64, "0") })));
+  });
+  try {
+    for (const editFails of [false, true]) {
+      const { client, sent } = fakeClient();
+      const r = await createRequest({
+        kind: "mint", guildId: GUILD, requestedBy: "elinor", confirmerId: "2000000001",
+        params: { tokenSymbol: "CHT", recipientIds, amount: 1, description },
+        summary: `Mint **1 CHT** each for ${recipientIds.map((id) => `<@${id}>`).join(", ")}\n📝 ${description}`,
+      });
+      const c = click(`preq_confirm:${r.id}`, "2000000001", client);
+      const edits: string[] = [];
+      let calls = 0;
+      // Like Discord: more than 2000 characters is rejected (and the first edit fails when editFails).
+      Object.assign(c.interaction, {
+        editReply: (m: { content: string }) => {
+          calls++;
+          if (m.content.length > 2000) return Promise.reject(new Error("Invalid Form Body content[BASE_TYPE_MAX_LENGTH]: Must be 2000 or fewer in length."));
+          if (editFails && calls === 1) return Promise.reject(new Error("Unknown interaction"));
+          edits.push(m.content);
+          return Promise.resolve();
+        },
+      });
+      await handleProposalButton(c.interaction as never);
+
+      expect(minted.length).toBe(editFails ? 2 : 1);
+      const stored = await getRequest(r.id, [GUILD]);
+      expect(stored?.status).toBe("confirmed");
+      expect(stored?.error).toBeUndefined();
+      expect((stored?.result as { success: boolean }[]).filter((x) => x.success).length).toBe(12);
+      const shown = edits.at(-1)!;
+      expect(shown).not.toContain("Failed");
+      expect(shown).toContain("✅ Minted by <@2000000001>");
+      if (!editFails) for (const id of recipientIds) expect(shown).toContain(`<@${id}>`);
+      else expect(shown).toContain(`Done. Details: ask Elinor for request ${r.id}.`);
+      const logged = sent.filter((m) => m.where === "channel:log-chan").map((m) => m.content);
+      expect(logged.some((l) => l.includes(`confirmed Elinor's mint request (${r.id}): done`))).toBe(true);
+      expect(logged.every((l) => l.length <= 2000)).toBe(true);
+    }
+  } finally {
+    _setProposalMint();
+  }
 });

@@ -15,6 +15,7 @@
 import type { Client, Message, MessageCreateOptions, TextChannel } from "discord.js";
 import { getEnv, loadGuildSettings } from "./utils.ts";
 import { categoryLine, categoryMenu, DEFAULT_CATEGORY } from "./tx-categories.ts";
+import { clip, DISCORD_MAX } from "./discord-text.ts";
 
 export const REPORT_SELECT_ID = "txcat:r";
 export const DEFAULT_REPORT_GUILD = "1280532848604086365";
@@ -147,6 +148,14 @@ export async function defaultReportChannel(guildId: string, currency: string): P
 
 // ── Posting ─────────────────────────────────────────────────────────────────
 
+/** Room for a report's text: the category line is added after it, and can change to a longer label. */
+export const REPORT_MAX = DISCORD_MAX - 200;
+
+/** The report's text, cut if needed so that it and any category line fit in one Discord message. */
+function withinLimit(content: string, line: string): string {
+  return `${clip(content, REPORT_MAX)}\n${line}`;
+}
+
 /**
  * Post a transaction report with the category line and dropdown, and record it. When the first URI
  * was already reported in this guild, nothing is posted and the existing report is returned.
@@ -174,7 +183,7 @@ export async function reportTransaction(p: {
 
   const category = p.category || DEFAULT_CATEGORY;
   const message = await (channel as TextChannel).send({
-    content: `${p.content}\n${categoryLine(category, p.currency)}`,
+    content: withinLimit(p.content, categoryLine(category, p.currency)),
     components: [categoryMenu(REPORT_SELECT_ID, p.currency, category)],
     ...(p.allowedMentions ? { allowedMentions: p.allowedMentions } : {}),
   });
