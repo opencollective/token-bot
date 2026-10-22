@@ -164,7 +164,7 @@ Deno.test("a pass burns the price like a coworking purchase; the guest's name an
     expect(text).toContain("https://commonshub.brussels/pass#sig=x&pass=half-day");
     expect(text).not.toContain("door.commonshub.brussels/open");
     expect(calls.email[0].passUrl).toBe("https://commonshub.brussels/pass#sig=x&pass=half-day");
-    expect(calls.email[0].cost).toBe("Half day: 1 token (a coworking day is €25 + VAT)");
+    expect(calls.email[0].cost).toBe("Half day: €15 (+ VAT) or 1 token");
     expect(text).toContain("today, 09:00–14:00");
     expect(text).toContain("emailed");
   }
@@ -203,7 +203,7 @@ Deno.test("the guest's email: who invited them, when, the door button, the cowor
   expect(text).toContain("It works Friday 23 October, 09:00–14:00, and only then.");
   expect(text).not.toContain(COWORKING_TOKEN_TERMS); // Xavier: no token terms paragraph in the guest's email
   expect(html).not.toContain(COWORKING_TOKEN_TERMS);
-  expect(text).toContain("Cost: Half day: 1 token (a coworking day is €25 + VAT), paid by Xavier");
+  expect(text).toContain("Cost: Half day: €15 (+ VAT) or 1 token, paid by Xavier");
   expect(html).toMatch(/<td align="center">\s*<a href="https:\/\/door\.commonshub\.brussels\/open\?a=1&amp;sig=2"/); // centered button
   expect(text).toContain("Your pass: https://commonshub.brussels/pass#a=1&sig=2&pass=half-day");
   expect(text).toContain(PASS_DISCLAIMER);
@@ -228,5 +228,5 @@ Deno.test("the pass page link carries the signed door-link parameters in the fra
   expect(q.get("name")).toBe("Leo (Xavier's guest)");
   expect(q.get("sig")).toBe("0xab");
   expect(q.get("pass")).toBe("day");
-  expect(passCost(GUEST_PASSES.day)).toBe("Full day: €25 (+VAT) or 2 tokens");
+  expect(passCost(GUEST_PASSES.day)).toBe("Full day: €25 (+ VAT) or 2 tokens");
 });

@@ -25,16 +25,16 @@ export type GuestPassLength = "half-day" | "day";
 
 export type GuestPassItem = ShopItem & { hours: number; length: GuestPassLength };
 
-/** Desk coworking in euros, as on commonshub.brussels/coworking (+ VAT). There is no half-day euro price. */
-export const COWORKING_DAY_EUR = 25;
+/** Desk coworking in euros, excl. VAT (commonshub.brussels/coworking shows them with "+ VAT"); Xavier set the half day at €15. */
+export const COWORKING_EUR: Record<GuestPassLength, number> = { "half-day": 15, "day": 25 };
 
 /** The pass page on the website: commonshub.brussels/pass#<signed door-link parameters>&pass=<length>. */
 export const PASS_PAGE_URL = "https://commonshub.brussels/pass";
 
-/** The cost line of a pass: "Half day: 1 token (a coworking day is €25 + VAT)", "Full day: €25 (+VAT) or 2 tokens". */
+/** The cost line of a pass: "Half day: €15 (+ VAT) or 1 token", "Full day: €25 (+ VAT) or 2 tokens". */
 export function passCost(item: Pick<GuestPassItem, "length" | "price">): string {
   const t = `${item.price} token${item.price === 1 ? "" : "s"}`;
-  return item.length === "day" ? `Full day: €${COWORKING_DAY_EUR} (+VAT) or ${t}` : `Half day: ${t} (a coworking day is €${COWORKING_DAY_EUR} + VAT)`;
+  return `${item.length === "day" ? "Full day" : "Half day"}: €${COWORKING_EUR[item.length]} (+ VAT) or ${t}`;
 }
 
 /**

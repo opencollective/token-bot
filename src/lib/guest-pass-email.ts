@@ -23,7 +23,7 @@ export interface GuestPassEmail {
   /** The pass page on the website (same pass, with the door button). */
   passUrl?: string;
   length: "half-day" | "day";
-  /** "Half day: 1 token (a coworking day is €25 + VAT)" (passCost). */
+  /** "Half day: €15 (+ VAT) or 1 token" (passCost). */
   cost?: string;
   timezone?: string;
 }
