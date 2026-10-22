@@ -25,6 +25,36 @@ export type GuestPassLength = "half-day" | "day";
 
 export type GuestPassItem = ShopItem & { hours: number; length: GuestPassLength };
 
+/** Desk coworking in euros, as on commonshub.brussels/coworking (+ VAT). There is no half-day euro price. */
+export const COWORKING_DAY_EUR = 25;
+
+/** The pass page on the website: commonshub.brussels/pass#<signed door-link parameters>&pass=<length>. */
+export const PASS_PAGE_URL = "https://commonshub.brussels/pass";
+
+/** The cost line of a pass: "Half day: 1 token (a coworking day is €25 + VAT)", "Full day: €25 (+VAT) or 2 tokens". */
+export function passCost(item: Pick<GuestPassItem, "length" | "price">): string {
+  const t = `${item.price} token${item.price === 1 ? "" : "s"}`;
+  return item.length === "day" ? `Full day: €${COWORKING_DAY_EUR} (+VAT) or ${t}` : `Half day: ${t} (a coworking day is €${COWORKING_DAY_EUR} + VAT)`;
+}
+
+/**
+ * Plain-language fine print under a pass, for the guest (email and pass page): same text as the
+ * website's PASS_DISCLAIMER (src/lib/guest-pass.ts there), based on the membership poster's fine print.
+ */
+export const PASS_DISCLAIMER =
+  "Spaces paid with tokens are only offered when there is spare, unsold capacity, a bit like Too Good To Go: there's no guaranteed desk or room, and it is not a commercial rental. " +
+  "Membership fees support the association and are not payment for a service; anything bought with money (coworking, renting a room, an event ticket) is invoiced separately, with VAT.";
+
+/**
+ * The page to share: the signed door-link parameters in the fragment (never sent to the website's
+ * server), plus the pass length for display. The page's button opens the real signed link.
+ */
+export function passPageUrl(doorLink: string, length: GuestPassLength): string {
+  const q = new URLSearchParams(new URL(doorLink).search);
+  q.set("pass", length);
+  return `${PASS_PAGE_URL}#${q.toString()}`;
+}
+
 /** The door's grace before and after a signed link's window (door server, verifyEventOrganizerSignature). */
 export const DOOR_GRACE_MINUTES = 30;
 /** How far ahead a pass can start. */
@@ -230,7 +260,7 @@ export type GuestPassRequest = {
 };
 
 export type GuestPassResult =
-  | { ok: true; link: string; guest: string; start: Date; end: Date; hash: string; txUri: string; balanceAfter: number; reportUrl?: string; email?: { sent: boolean; error?: string } }
+  | { ok: true; link: string; pageUrl: string; guest: string; start: Date; end: Date; hash: string; txUri: string; balanceAfter: number; reportUrl?: string; email?: { sent: boolean; error?: string } }
   | { ok: false; error: string };
 
 type Deps = {
@@ -287,7 +317,9 @@ export async function executeGuestPass(p: GuestPassRequest): Promise<GuestPassRe
         start,
         end,
         doorLink: link,
+        passUrl: passPageUrl(link, p.item.length),
         length: p.item.length,
+        cost: passCost(p.item),
       });
       email = { sent: true };
     } catch (error) {
@@ -315,7 +347,7 @@ export async function executeGuestPass(p: GuestPassRequest): Promise<GuestPassRe
     createdAt: new Date().toISOString(),
   }).catch((error) => console.error("[guest-pass] could not record the pass:", error));
 
-  return { ok: true, link, guest, start, end, hash: purchase.hash, txUri: purchase.txUri, balanceAfter: purchase.balanceAfter, reportUrl: purchase.reportUrl, email };
+  return { ok: true, link, pageUrl: passPageUrl(link, p.item.length), guest, start, end, hash: purchase.hash, txUri: purchase.txUri, balanceAfter: purchase.balanceAfter, reportUrl: purchase.reportUrl, email };
 }
 
 /** The message with the link, for the buyer only (ephemeral reply or DM). */
@@ -325,8 +357,8 @@ export function linkMessage(r: Extract<GuestPassResult, { ok: true }>, item: Gue
     : "Share it with your guest (by message, not in a public channel).";
   return [
     `🎟️ **${item.label}** for **${r.guest}**, ${whenLabel(r.start, r.end, now)}.`,
-    `🚪 Door link: <${r.link}>`,
-    `-# It opens the door only in that window. Anyone with the link can open the door then, and #door shows "${r.guest}".`,
+    `🎟️ Pass to share with your guest: <${r.pageUrl}>`,
+    `-# The page has a button that opens the door, only in that window. Anyone with the link can open the door then, and #door shows "${r.guest}".`,
     emailLine,
   ].join("\n");
 }

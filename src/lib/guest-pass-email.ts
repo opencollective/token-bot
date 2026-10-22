@@ -1,14 +1,15 @@
 /**
  * The email a guest gets when a member buys them a guest pass with a guest email
- * (/guestpass, propose_guest_pass): who invited them, when, where, the door link and how
- * to use it, the house rule, and an invitation to become a member. Modelled on the email
+ * (/guestpass, propose_guest_pass): who invited them, when, where, what it costs, the door
+ * button and how to use it, the house rule, an invitation to become a member, and plain-language
+ * fine print (PASS_DISCLAIMER). Xavier asked for no token terms paragraph in this guest-facing email. Modelled on the email
  * for a room booked on behalf of someone (booking-email.ts), with the same look.
  *
  * Sent through Resend (RESEND_API_KEY) from hello@commonshub.brussels, cc the member when
  * we know their email, who is also the reply-to. The builder is pure for tests.
  */
 import { HUB } from "./booking-email.ts";
-import { COWORKING_TOKEN_TERMS } from "./token-terms.ts";
+import { PASS_DISCLAIMER } from "./guest-pass.ts";
 import { getEnv } from "./utils.ts";
 
 export interface GuestPassEmail {
@@ -19,7 +20,11 @@ export interface GuestPassEmail {
   start: Date;
   end: Date;
   doorLink: string;
+  /** The pass page on the website (same pass, with the door button). */
+  passUrl?: string;
   length: "half-day" | "day";
+  /** "Half day: 1 token (a coworking day is €25 + VAT)" (passCost). */
+  cost?: string;
   timezone?: string;
 }
 
@@ -64,16 +69,19 @@ export function buildGuestPassEmail(d: GuestPassEmail): { subject: string; html:
       <div><strong>When:</strong> ${esc(when)}</div>
       <div><strong>Where:</strong> ${esc(HUB.address)} (right in front of Brussels Central Station)</div>
       <div><strong>Invited by:</strong> ${esc(d.hostName)}${d.hostEmail ? ` (${esc(d.hostEmail)}, in cc)` : ""}</div>
+      ${d.cost ? `<div><strong>Cost:</strong> ${esc(d.cost)}, paid by ${esc(d.hostName)}</div>` : ""}
     </td></tr>
   </table>
 
   <h2 style="font-size:17px;margin:28px 0 6px">Getting in</h2>
-  <p style="margin:8px 0"><a href="${esc(d.doorLink)}" style="display:inline-block;background:#ffffff;color:#001309;border:2px solid #001309;text-decoration:none;font-weight:600;padding:9px 18px;border-radius:8px">🚪 Open the door</a></p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:14px 0 8px"><tr><td align="center">
+    <a href="${esc(d.doorLink)}" style="display:inline-block;background:#001309;color:#ffffff;text-decoration:none;font-weight:700;font-size:18px;padding:14px 30px;border-radius:10px">🚪 Open the door</a>
+  </td></tr></table>
+  ${d.passUrl ? `<p style="margin:0 0 8px;text-align:center;font-size:14px"><a href="${esc(d.passUrl)}" style="color:#b83500">Open your pass in the browser</a></p>` : ""}
   <ul style="margin:8px 0 0;padding-left:20px;font-size:15px">${doorNotes.map((n) => `<li style="margin-bottom:4px">${esc(n)}</li>`).join("")}</ul>
 
   <h2 style="font-size:17px;margin:28px 0 6px">Paid with time, not money</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.paid)}</p>
-  <p style="margin:0 0 8px;font-size:14px;color:#5d625e">${esc(COWORKING_TOKEN_TERMS)}</p>
 
   <h2 style="font-size:17px;margin:28px 0 6px">A community space</h2>
   <p style="margin:0 0 8px">${esc(paragraphs.house)}</p>
@@ -82,6 +90,7 @@ export function buildGuestPassEmail(d: GuestPassEmail): { subject: string; html:
   <p style="margin:24px 0 0">${esc(contact)}</p>
 </td></tr>
 <tr><td style="padding:24px 28px 28px;font-size:13px;color:#5d625e;border-top:1px solid #eaded9">
+  <p style="margin:0 0 10px;font-size:12px;line-height:1.5">${esc(PASS_DISCLAIMER)}</p>
   ${HUB.name} · ${esc(HUB.address)} · <a href="${HUB.website}" style="color:#5d625e">commonshub.brussels</a>
 </td></tr>
 </table></td></tr></table>
@@ -95,14 +104,15 @@ export function buildGuestPassEmail(d: GuestPassEmail): { subject: string; html:
     `When: ${when}`,
     `Where: ${HUB.address} (right in front of Brussels Central Station)`,
     `Invited by: ${d.hostName}${d.hostEmail ? ` (${d.hostEmail}, in cc)` : ""}`,
+    ...(d.cost ? [`Cost: ${d.cost}, paid by ${d.hostName}`] : []),
     "",
     "GETTING IN",
     `Open the door: ${d.doorLink}`,
+    ...(d.passUrl ? [`Your pass: ${d.passUrl}`] : []),
     ...doorNotes.map((n) => `- ${n}`),
     "",
     "PAID WITH TIME, NOT MONEY",
     paragraphs.paid,
-    COWORKING_TOKEN_TERMS,
     "",
     "A COMMUNITY SPACE",
     paragraphs.house,
@@ -111,6 +121,7 @@ export function buildGuestPassEmail(d: GuestPassEmail): { subject: string; html:
     "",
     contact,
     "",
+    PASS_DISCLAIMER,
     `${HUB.name} · ${HUB.address} · ${HUB.website}`,
   ].join("\n");
   return { subject, html, text };

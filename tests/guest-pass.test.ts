@@ -16,6 +16,9 @@ import {
   linkMessage,
   normalizeEmail,
   parseStart,
+  PASS_DISCLAIMER,
+  passCost,
+  passPageUrl,
   passWindow,
   whenLabel,
   zonedTime,
@@ -158,7 +161,10 @@ Deno.test("a pass burns the price like a coworking purchase; the guest's name an
   if (r.ok) {
     expect(r.end.getTime() - r.start.getTime()).toBe(5 * 3600000);
     const text = linkMessage(r, GUEST_PASSES["half-day"], new Date("2026-10-22T06:00:00Z"));
-    expect(text).toContain("https://door.commonshub.brussels/open?sig=x");
+    expect(text).toContain("https://commonshub.brussels/pass#sig=x&pass=half-day");
+    expect(text).not.toContain("door.commonshub.brussels/open");
+    expect(calls.email[0].passUrl).toBe("https://commonshub.brussels/pass#sig=x&pass=half-day");
+    expect(calls.email[0].cost).toBe("Half day: 1 token (a coworking day is €25 + VAT)");
     expect(text).toContain("today, 09:00–14:00");
     expect(text).toContain("emailed");
   }
@@ -187,13 +193,20 @@ Deno.test("the guest's email: who invited them, when, the door button, the cowor
     start: new Date("2026-10-23T07:00:00Z"),
     end: new Date("2026-10-23T12:00:00Z"),
     doorLink: "https://door.commonshub.brussels/open?a=1&sig=2",
+    passUrl: "https://commonshub.brussels/pass#a=1&sig=2&pass=half-day",
     length: "half-day",
+    cost: passCost(GUEST_PASSES["half-day"]),
   });
   expect(subject).toBe("Xavier invited you to the Commons Hub: Friday 23 October");
   expect(html).toContain("Hi Leo, you're invited");
   expect(html).toContain('href="https://door.commonshub.brussels/open?a=1&amp;sig=2"');
   expect(text).toContain("It works Friday 23 October, 09:00–14:00, and only then.");
-  expect(text).toContain(COWORKING_TOKEN_TERMS);
+  expect(text).not.toContain(COWORKING_TOKEN_TERMS); // Xavier: no token terms paragraph in the guest's email
+  expect(html).not.toContain(COWORKING_TOKEN_TERMS);
+  expect(text).toContain("Cost: Half day: 1 token (a coworking day is €25 + VAT), paid by Xavier");
+  expect(html).toMatch(/<td align="center">\s*<a href="https:\/\/door\.commonshub\.brussels\/open\?a=1&amp;sig=2"/); // centered button
+  expect(text).toContain("Your pass: https://commonshub.brussels/pass#a=1&sig=2&pass=half-day");
+  expect(text).toContain(PASS_DISCLAIMER);
   expect(text).toContain("(xavier@example.org, in cc)");
 });
 
@@ -205,4 +218,15 @@ Deno.test("/guestpass and propose_guest_pass are declared, with the coworking te
   expect(tool.description).toContain(COWORKING_TOKEN_TERMS);
   expect(tool.description).toContain("never returned to you");
   expect(whenLabel(new Date("2026-10-24T07:00:00Z"), new Date("2026-10-24T17:00:00Z"), new Date("2026-10-22T08:00:00Z"))).toBe("Sat 24 Oct, 09:00–19:00");
+});
+
+Deno.test("the pass page link carries the signed door-link parameters in the fragment, plus the length", () => {
+  const door = "https://door.commonshub.brussels/open?name=Leo+%28Xavier%27s+guest%29&host=Xavier&startTime=1&duration=240&booking=1&sig=0xab";
+  const page = passPageUrl(door, "day");
+  expect(page.startsWith("https://commonshub.brussels/pass#")).toBe(true);
+  const q = new URLSearchParams(page.split("#")[1]);
+  expect(q.get("name")).toBe("Leo (Xavier's guest)");
+  expect(q.get("sig")).toBe("0xab");
+  expect(q.get("pass")).toBe("day");
+  expect(passCost(GUEST_PASSES.day)).toBe("Full day: €25 (+VAT) or 2 tokens");
 });
