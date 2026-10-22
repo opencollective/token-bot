@@ -36,6 +36,7 @@ import {
   proposeTransactionCategory,
   listPurchasableItems,
   proposePurchase,
+  proposeGuestPass,
   proposeClaim,
 } from "./lib/proposals.ts";
 
@@ -665,6 +666,7 @@ async function handleRequest(req: Request): Promise<Response> {
       proposeTransactionCategory: (a) => proposeTransactionCategory(a as Parameters<typeof proposeTransactionCategory>[0]),
       listPurchasableItems: (a) => listPurchasableItems(a as { guildId: string; userId?: string }),
       proposePurchase: (a) => proposePurchase(a as Parameters<typeof proposePurchase>[0]),
+      proposeGuestPass: (a) => proposeGuestPass(a as Parameters<typeof proposeGuestPass>[0]),
       proposeClaim: (a) => proposeClaim(a as Parameters<typeof proposeClaim>[0]),
     });
   } else if (path === "/mcp") {

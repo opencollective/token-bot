@@ -49,7 +49,8 @@ import {
 import { startPrefilledBooking } from "../commands/book.ts";
 import { createClaim } from "./claims.ts";
 import { checkBalance, executePurchase, findShopItem, itemLine, itemsFinePrint, SHOP_ITEMS, shopToken, tokens } from "./shop.ts";
-import { isEuroToken, ROOM_TOKEN_TERMS } from "./token-terms.ts";
+import { COWORKING_TOKEN_TERMS, isEuroToken, ROOM_TOKEN_TERMS } from "./token-terms.ts";
+import { executeGuestPass, guestLabel, guestPassItem, linkMessage, normalizeEmail, parseStart, passWindow, whenLabel } from "./guest-pass.ts";
 import {
   countPendingFor,
   createRequest,
@@ -60,6 +61,7 @@ import {
   publicStatus,
   type CategoryParams,
   type PurchaseParams,
+  type GuestPassParams,
   type RoomBookingParams,
   type ShiftSignupParams,
   transition,
@@ -482,6 +484,44 @@ export async function proposePurchase(input: Common & { userId: string; item: st
 }
 
 /**
+ * A guest pass, like /guestpass: the member pays with their own tokens for a door link for a guest.
+ * The request message shows the guest's name but never their email or the link: on Confirm, the
+ * link goes to the buyer by DM (and privately on the click), the email to the guest.
+ */
+export async function proposeGuestPass(input: Common & {
+  userId: string;
+  length?: string;
+  start?: string;
+  guestName?: string;
+  guestEmail?: string;
+}) {
+  const guild = await getGuild(input.guildId);
+  const buyer = await getMember(guild, input.userId, "buyer");
+  if (!isMember(buyer, input.guildId)) throw new Error("Guest passes are for members.");
+  const item = guestPassItem(input.length);
+  if (!item) throw new Error(`Unknown length "${input.length}": "half-day" (5 hours) or "day" (10 hours).`);
+  const parsed = parseStart(input.start);
+  if ("error" in parsed) throw new Error(parsed.error);
+  const guestEmail = normalizeEmail(input.guestEmail);
+  if (guestEmail === null) throw new Error(`"${input.guestEmail}" is not a valid email`);
+  const guestName = input.guestName?.replace(/\s+/g, " ").trim().slice(0, 40) || undefined;
+  const token = shopToken(await loadGuildSettings(input.guildId));
+  if (!token) throw new Error("No token to pay with is configured in this server");
+  const check = await checkBalance(buyer.id, token, item);
+  if (!check.ok) throw new Error(`${check.message!.replace(`<@${buyer.id}>`, nameOf(buyer))}\n${COWORKING_TOKEN_TERMS}`);
+  await guardPending(input.guildId, buyer.id);
+
+  const start = input.start?.trim() ? parsed.start : null;
+  const { start: from, end } = passWindow(parsed.start, item);
+  const params: GuestPassParams = { length: item.length, tokenSymbol: token.symbol, price: item.price, start: start?.toISOString() ?? null, guestName, ...(guestEmail ? { guestEmail } : {}) };
+  const summary = `<@${buyer.id}> buys a **${item.label.toLowerCase()}** for **${guestLabel(nameOf(buyer), guestName)}**, ${tokens(item.price)} from their own balance (now ${tokens(check.balance)})` +
+    `\n🕘 ${start ? whenLabel(from, end) : `${item.hours} hours from the moment they confirm`}` +
+    `\n🔗 The door link goes to <@${buyer.id}> by DM${guestEmail ? `, and the guest gets it by email` : ""}.` +
+    `\n-# ${COWORKING_TOKEN_TERMS}`;
+  return await propose({ ...input, kind: "guest_pass", confirmerId: buyer.id, requesterId: buyer.id, params, summary });
+}
+
+/**
  * A token claim, like /claim: posted in the token's transactions channel, where a minter other than
  * the requester and recipients approves. When channelId is given, a short note with the link is
  * posted there too (as a reply to replyToMessageId).
@@ -529,11 +569,11 @@ export async function proposeClaim(input: Common & {
 
 // ── Creating and delivering a request ───────────────────────────────────────
 
-const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking", tx_category: "category change", purchase: "purchase", claim: "token claim" } as const;
+const KIND_LABEL = { mint: "mint", shift_signup: "shift sign-up", room_booking: "room booking", tx_category: "category change", purchase: "purchase", claim: "token claim", guest_pass: "guest pass" } as const;
 
 function buttons(id: string, kind: PendingRequest["kind"]) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}confirm:${id}`).setLabel(kind === "room_booking" ? "Confirm, then pay" : kind === "purchase" ? "Confirm and pay" : "Confirm").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}confirm:${id}`).setLabel(kind === "room_booking" ? "Confirm, then pay" : kind === "purchase" || kind === "guest_pass" ? "Confirm and pay" : "Confirm").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`${BUTTON_PREFIX}cancel:${id}`).setLabel("Cancel").setStyle(ButtonStyle.Secondary),
   );
 }
@@ -728,6 +768,8 @@ export async function handleProposalButton(interaction: ButtonInteraction): Prom
       ? await runCategory(r, interaction)
       : r.kind === "purchase"
       ? await runPurchase(r, interaction)
+      : r.kind === "guest_pass"
+      ? await runGuestPass(r, interaction)
       : await runShiftSignup(r, interaction);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -854,6 +896,46 @@ async function runPurchase(r: PendingRequest, interaction: ButtonInteraction): P
     ok: true,
     text: `✅ <@${buyer.id}> bought a **${item.label}** for today, for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}. [View transaction](<https://txinfo.xyz/${token.chain}/tx/${result.hash}>)\n-# ${item.terms}`,
     result: { item: item.id, price: item.price, unit: "tokens", txHash: result.hash, txUri: result.txUri, balanceAfter: result.balanceAfter, terms: item.terms },
+  };
+}
+
+/** Same as /guestpass: the buyer pays; the link goes to them privately, never into the request message. */
+async function runGuestPass(r: PendingRequest, interaction: ButtonInteraction): Promise<Outcome> {
+  const p = r.params as GuestPassParams;
+  const guild = await getGuild(r.guildId);
+  const buyer = await getMember(guild, interaction.user.id, "buyer");
+  const settings = await loadGuildSettings(r.guildId);
+  const token = shopToken(settings);
+  const item = guestPassItem(p.length);
+  if (!settings || !token || !item) return { ok: false, text: "❌ Guest passes are not available right now. Nothing was charged." };
+  if (token.symbol !== p.tokenSymbol || item.price !== p.price) {
+    return { ok: false, text: `❌ The price changed to ${tokens(item.price)}. Nothing was charged; ask again.` };
+  }
+  const start = p.start ? new Date(p.start) : new Date();
+  if (start.getTime() < Date.now() - 15 * 60000) return { ok: false, text: "❌ The start time has passed. Nothing was charged; ask again." };
+  const result = await executeGuestPass({
+    client: interaction.client,
+    guildId: r.guildId,
+    guildSettings: settings,
+    token,
+    item,
+    buyer: { id: buyer.id, name: nameOf(buyer), email: getUserEmail(r.guildId, buyer.id) },
+    guestName: p.guestName,
+    guestEmail: p.guestEmail,
+    start,
+    via: "elinor",
+  });
+  if (!result.ok) return { ok: false, text: `❌ ${result.error}\nNothing was charged.` };
+  // The link only ever goes to the buyer: by DM, and privately on their click.
+  const message = clip(linkMessage(result, item));
+  const dm = await buyer.send({ content: message }).then(() => true).catch(() => false);
+  await interaction.followUp({ content: message, flags: MessageFlags.Ephemeral }).catch(() => {});
+  return {
+    ok: true,
+    text: `✅ <@${buyer.id}> bought a **${item.label.toLowerCase()}** for **${result.guest}**, ${whenLabel(result.start, result.end)}, for ${tokens(item.price)}. New balance: ${tokens(result.balanceAfter)}. [View transaction](<https://txinfo.xyz/${token.chain}/tx/${result.hash}>)` +
+      `\n🔗 The door link was sent ${dm ? "by DM" : "privately"} to <@${buyer.id}>${result.email ? (result.email.sent ? "; the guest was emailed" : "; ⚠️ the email to the guest failed") : ""}.` +
+      `\n-# ${COWORKING_TOKEN_TERMS}`,
+    result: { item: item.id, price: item.price, unit: "tokens", guest: result.guest, start: result.start.toISOString(), end: result.end.toISOString(), txHash: result.hash, txUri: result.txUri, balanceAfter: result.balanceAfter, linkSentBy: dm ? "dm" : "ephemeral", ...(result.email ? { guestEmailed: result.email.sent } : {}) },
   };
 }
 

@@ -194,6 +194,49 @@
     ]
   },
   {
+    "name": "guestpass",
+    "description": "Buy a door link for a guest with your tokens (half day: 1 token, full day: 2 tokens)",
+    "options": [
+      {
+        "name": "length",
+        "description": "Half day (5 hours, default) or full day (10 hours)",
+        "required": false,
+        "type": 3,
+        "choices": [
+          {
+            "name": "Half day (5 hours) — 1 token",
+            "value": "half-day"
+          },
+          {
+            "name": "Full day (10 hours) — 2 tokens",
+            "value": "day"
+          }
+        ]
+      },
+      {
+        "name": "start",
+        "description": "When it starts, Brussels time (default now): 14:00, 2pm, tomorrow 9:00, 25/10 9:30",
+        "required": false,
+        "type": 3,
+        "max_length": 40
+      },
+      {
+        "name": "guest_name",
+        "description": "Your guest's name (shown in #door as \"Leo (your name's guest)\")",
+        "required": false,
+        "type": 3,
+        "max_length": 40
+      },
+      {
+        "name": "guest_email",
+        "description": "Your guest's email: we send them the link and how to get in",
+        "required": false,
+        "type": 3,
+        "max_length": 200
+      }
+    ]
+  },
+  {
     "name": "claim",
     "description": "Claim tokens for a contribution, for yourself or others; a minter approves",
     "options": [

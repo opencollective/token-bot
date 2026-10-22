@@ -10,7 +10,7 @@ export const REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const KEEP_DECIDED_MS = 14 * 24 * 60 * 60 * 1000;
 const FILE = "pending-requests.json";
 
-export type RequestKind = "mint" | "shift_signup" | "room_booking" | "tx_category" | "purchase" | "claim";
+export type RequestKind = "mint" | "shift_signup" | "room_booking" | "tx_category" | "purchase" | "claim" | "guest_pass";
 
 /**
  * pending: waiting for a click · confirmed: executed · cancelled: the user said no ·
@@ -56,6 +56,18 @@ export type PurchaseParams = {
   description?: string;
 };
 
+/** A guest pass (/guestpass, propose_guest_pass): the door link goes to the buyer by DM, never in the request message. */
+export type GuestPassParams = {
+  length: "half-day" | "day";
+  tokenSymbol: string;
+  price: number;
+  /** ISO; null: when they confirm. */
+  start: string | null;
+  guestName?: string;
+  /** Server-side only (this file lives in the bot's data volume); never shown in the channel. */
+  guestEmail?: string;
+};
+
 /** A token claim (/claim, propose_claim): posted in the transactions channel, any other minter approves. */
 export type ClaimParams = {
   tokenSymbol: string;
@@ -81,7 +93,7 @@ export type PendingRequest = {
   approval?: "confirmer" | "any_minter";
   /** The Discord user who asked for it (requested by). They can always cancel. */
   requesterId?: string;
-  params: MintParams | ShiftSignupParams | RoomBookingParams | CategoryParams | PurchaseParams | ClaimParams;
+  params: MintParams | ShiftSignupParams | RoomBookingParams | CategoryParams | PurchaseParams | ClaimParams | GuestPassParams;
   summary: string;
   status: RequestStatus;
   createdAt: string;
