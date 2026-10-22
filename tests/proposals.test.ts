@@ -112,7 +112,8 @@ Deno.test("validateArguments: integer bounds", () => {
 Deno.test("pending requests: ids, 24 h expiry, single transition, persisted to disk", async () => {
   _resetCache();
   expect(newRequestId()).toMatch(/^req_[a-z2-9]{12}$/);
-  const now = new Date("2026-10-07T10:00:00Z");
+  // Recent dates: decided requests older than 14 days (real time) are pruned when the file is saved.
+  const now = new Date(Date.now() - 3600000);
   const r = await createRequest({
     kind: "mint", guildId: "g-store", requestedBy: "elinor", confirmerId: "u1",
     params: { tokenSymbol: "CHT", recipientIds: ["u2"], amount: 1 }, summary: "Mint 1 CHT for <@u2>",
@@ -139,7 +140,7 @@ Deno.test("pending requests: ids, 24 h expiry, single transition, persisted to d
 
 Deno.test("pending requests: confirming after expiry fails and marks it expired", async () => {
   _resetCache();
-  const created = new Date("2026-10-07T10:00:00Z");
+  const created = new Date(Date.now() - 2 * 86400000);
   const r = await createRequest({
     kind: "shift_signup", guildId: "g-exp", requestedBy: "elinor", confirmerId: "u1",
     params: { start: "2026-10-08T15:30:00Z", end: "2026-10-08T18:30:00Z" }, summary: "Shift",

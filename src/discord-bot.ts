@@ -66,6 +66,7 @@ import {
 } from "./commands/mint-context.ts";
 import { ensureMintEmojis, handleReactionAdd, handleReactionButton } from "./lib/reactions.ts";
 import { BUY_PREFIX, handleBuyButton, handleBuyCommand } from "./commands/buy.ts";
+import { GUESTPASS_PREFIX, handleGuestPassButton, handleGuestPassCommand } from "./commands/guestpass.ts";
 import { handleClaimAutocomplete, handleClaimCommand } from "./commands/claim.ts";
 import { CLAIM_PREFIX, handleClaimButton, handleClaimRejectModal } from "./lib/claims.ts";
 import { BUTTON_PREFIX as PROPOSAL_PREFIX, handleProposalButton, startProposalExpiry } from "./lib/proposals.ts";
@@ -499,6 +500,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.commandName === "buy") {
         return handleBuyCommand(interaction, userId, guildId);
       }
+      if (interaction.commandName === "guestpass") {
+        return handleGuestPassCommand(interaction, userId, guildId);
+      }
       if (interaction.commandName === "balance") {
         return handleBalanceCommand(interaction, userId, guildId);
       }
@@ -578,6 +582,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.customId.startsWith(BUY_PREFIX)) {
         return handleBuyButton(interaction);
+      }
+      if (interaction.customId.startsWith(GUESTPASS_PREFIX)) {
+        return handleGuestPassButton(interaction);
       }
       if (interaction.customId.startsWith(CLAIM_PREFIX)) {
         return handleClaimButton(interaction);

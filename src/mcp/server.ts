@@ -11,6 +11,8 @@
  *   Confirm or Cancel, and nothing happens until they click (see src/lib/proposals.ts).
  */
 
+import { COWORKING_TOKEN_TERMS } from "../lib/token-terms.ts";
+
 type JsonRpcId = string | number | null;
 type JsonObject = Record<string, unknown>;
 
@@ -40,6 +42,7 @@ export interface McpToolExecutors {
   proposeTransactionCategory?(input: JsonObject): Promise<unknown>;
   listPurchasableItems?(input: JsonObject): Promise<unknown>;
   proposePurchase?(input: JsonObject): Promise<unknown>;
+  proposeGuestPass?(input: JsonObject): Promise<unknown>;
   proposeClaim?(input: JsonObject): Promise<unknown>;
 }
 
@@ -245,6 +248,34 @@ const TOOLS: ToolSpec[] = [
           replyToMessageId: REPLY_TO,
         },
         required: ["guildId", "userId", "item", "requestedBy"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    executor: "proposeGuestPass",
+    definition: {
+      name: "propose_guest_pass",
+      description:
+        "Propose that a member buys a guest pass with their own tokens: a door link they share with a guest. Half day (5 hours): 1 token; full day (10 hours): 2 tokens. Members only. userId must be the member asking (OpenClaw sender.id): they pay and confirm. " +
+        `A guest pass is coworking paid with tokens, so tell them the terms: "${COWORKING_TOKEN_TERMS}" ` +
+        "Optional: start (default: when they confirm; Brussels time like \"14:00\", \"tomorrow 9:00\", or ISO 8601 with timezone; at most 7 days ahead), guestName (shown in #door as \"Leo (Xavier's guest)\", default \"Xavier's guest\"), guestEmail (the guest is emailed the link and how to get in). " +
+        "Refused when their balance is too low. Creates a pending request only, posted as a reply in the channel/thread (or by DM): nothing is paid until they click Confirm. " +
+        "The door link is never posted in the channel and never returned to you: the bot DMs it to the member. Never ask for or repeat the guest's email in a public channel. Say \"tokens\", not the token's symbol. Follow up with get_request_status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          guildId: GUILD_ID,
+          userId: str("Discord user ID of the member who asked and pays (OpenClaw sender.id). They confirm."),
+          length: { type: "string", enum: ["half-day", "day"], description: "half-day (5 hours, 1 token, default) or day (10 hours, 2 tokens)." },
+          start: str("Optional. When the pass starts: Brussels time (\"14:00\", \"2pm\", \"tomorrow 9:00\", \"25/10 9:30\") or ISO 8601 with timezone. Default: when they confirm. At most 7 days ahead."),
+          guestName: str("Optional. The guest's first name, shown in #door as \"<name> (<member>'s guest)\"."),
+          guestEmail: str("Optional. The guest's email: they get the door link and instructions by email (the member in cc)."),
+          requestedBy: REQUESTED_BY,
+          channelId: CHANNEL_ID,
+          replyToMessageId: REPLY_TO,
+        },
+        required: ["guildId", "userId", "requestedBy"],
         additionalProperties: false,
       },
     },
