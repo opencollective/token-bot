@@ -39,6 +39,7 @@ import {
   proposeGuestPass,
   proposeClaim,
 } from "./lib/proposals.ts";
+import { handleWebsiteRequest } from "./lib/website-api.ts";
 
 const API_KEY = Deno.env.get("API_KEY");
 const API_PORT = parseInt(Deno.env.get("API_PORT") || "3000");
@@ -642,6 +643,9 @@ async function handleRequest(req: Request): Promise<Response> {
       uptime: Math.floor((Date.now() - startTime.getTime()) / 1000),
       startedAt: startTime.toISOString(),
     });
+  } else if (path.startsWith("/api/website/")) {
+    // The website calls these server-side only (Bearer WEBSITE_API_TOKEN): no CORS needed.
+    return await handleWebsiteRequest(req, path, discordClient);
   } else if (path === "/api/book/execute" && req.method === "POST") {
     response = await handleBookExecute(req);
   } else if (path === "/api/book/availability" && req.method === "POST") {
@@ -710,6 +714,7 @@ export function startApiServer() {
   console.log(`   GET  /api/permissions?guildId=...&userId=...`);
   console.log(`   POST /mcp  (MCP, Streamable HTTP; Bearer ELINOR_MCP_TOKEN or API_KEY)`);
   console.log(`   POST /api/transactions/report  (Bearer TX_REPORT_TOKEN)`);
+  console.log(`   POST /api/website/{options,availability,cowork,guestpass,book}  (Bearer WEBSITE_API_TOKEN)`);
   console.log(`   GET  /health`);
 
   Deno.serve({ port: API_PORT }, handleRequest);

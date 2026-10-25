@@ -143,6 +143,30 @@ export async function checkBalance(userId: string, token: Token, item: ShopItem)
   return { ok: true, balance, address: found.address };
 }
 
+/**
+ * Burn `amount` from a member's own account after checking their balance (what a room booking
+ * paid with tokens does). Nothing is burned when the balance is short; `error` says why.
+ */
+export async function burnFromMember(userId: string, token: Token, amount: number, what: string): Promise<{ ok: true; hash: string; balanceAfter: number } | { ok: false; error: string }> {
+  const found = await deps.balanceOf(userId, token);
+  if (!found) return { ok: false, error: "No token account found for you: ask a steward to set up your wallet." };
+  const balance = Number(formatUnits(found.balance, token.decimals));
+  if (found.balance < parseUnits(amount.toFixed(token.decimals), token.decimals)) {
+    return { ok: false, error: `Not enough tokens: ${what} costs ${tokens(amount)} and your balance is ${tokens(balance)}. ${CLAIM_HINT}` };
+  }
+  let hash: string | null;
+  try {
+    hash = await deps.burn(token, userId, found.address, amount);
+  } catch (error) {
+    console.error(`[shop] burn failed for ${userId} (${what}):`, error);
+    const gas = await parseInsufficientGasError(error, token.chain as SupportedChain).catch(() => null);
+    return { ok: false, error: gas ? gas.formatMessage("burn") : "The payment failed; nothing was charged. Please try again in a moment." };
+  }
+  if (!hash) return { ok: false, error: "The payment returned no transaction; nothing was charged." };
+  deps.refreshStats(token).catch(() => {});
+  return { ok: true, hash, balanceAfter: Number((balance - amount).toFixed(6)) };
+}
+
 export type PurchaseResult =
   | { ok: true; hash: string; txUri: string; balanceAfter: number; reportUrl?: string }
   | { ok: false; error: string };
@@ -155,7 +179,7 @@ export async function executePurchase(p: {
   item: ShopItem;
   buyer: { id: string; name: string };
   description?: string;
-  via?: "command" | "elinor";
+  via?: "command" | "elinor" | "website";
 }): Promise<PurchaseResult> {
   const { token, item, buyer } = p;
   const check = await checkBalance(buyer.id, token, item);
