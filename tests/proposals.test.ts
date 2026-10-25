@@ -321,6 +321,17 @@ Deno.test("propose_room_booking: coworking before 7pm is refused with the room's
   })).rejects.toThrow("The coworking space can only be booked from 7pm.");
 });
 
+Deno.test("propose_room_booking: rooms go by 30 minutes (on the hour or half hour)", async () => {
+  fakeClient();
+  await Deno.writeTextFile(`${DATA}/${GUILD}/products.json`, JSON.stringify([
+    { type: "room", unit: "hour", slug: "mushroom", name: "Mush Room", availabilities: "anytime", calendarId: "cal-mush", price: [{ token: "CHT", amount: 1 }] },
+  ]));
+  const day = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  const ask = (start: string, end: string) => proposeRoomBooking({ guildId: GUILD, userId: "2000000002", room: "mushroom", start: `${day}T${start}:00+01:00`, end: `${day}T${end}:00+01:00`, title: "Meeting", requestedBy: "elinor" });
+  await expect(ask("14:15", "15:15")).rejects.toThrow("30 minutes");
+  await expect(ask("14:00", "14:45")).rejects.toThrow("30 minutes");
+});
+
 // ── In-channel approval by any minter ───────────────────────────────────────
 
 // deno-lint-ignore no-explicit-any

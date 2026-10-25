@@ -127,5 +127,5 @@ export type BookState = {
   /** Who the booking is for, when not the person booking (and paying). */
   bookedFor?:
     | { kind: "member"; discordUserId: string; username: string; displayName: string; email?: string }
-    | { kind: "guest"; name: string; email: string };
+    | { kind: "guest"; name: string; email?: string };
 };

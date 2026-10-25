@@ -222,6 +222,8 @@ async function guestPass(client: Client, c: Ctx, b: Json): Promise<Answer & { ch
     if (start.getTime() < Date.now() - 15 * 60000) return fail("The start time has passed.");
     if (start.getTime() > Date.now() + MAX_DAYS_AHEAD * 86400000) return fail(`A pass can start at most ${MAX_DAYS_AHEAD} days ahead.`);
   }
+  const guestName = str(b, "guestName", 60);
+  if (!guestName) return fail("Tell us your guest's name.");
   const guestEmail = normalizeEmail(str(b, "guestEmail", 200));
   if (guestEmail === null) return fail("That guest email doesn't look valid.");
   const r = await deps.guestPass({
@@ -231,7 +233,7 @@ async function guestPass(client: Client, c: Ctx, b: Json): Promise<Answer & { ch
     token: c.token,
     item,
     buyer: { id: c.userId, name: c.name, email: deps.email(c.guildId, c.userId) },
-    guestName: str(b, "guestName", 60),
+    guestName,
     guestEmail,
     start,
     via: "website",

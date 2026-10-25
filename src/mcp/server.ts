@@ -196,8 +196,8 @@ const TOOLS: ToolSpec[] = [
           start: ISO("Start"),
           end: ISO("End"),
           title: str("Event name shown in the calendar."),
-          guestName: str("Optional: book for a guest; their name."),
-          guestEmail: str("Optional: the guest's email (gets the confirmation and calendar invite)."),
+          guestName: str("Optional: book for a guest; their name (required for a guest)."),
+          guestEmail: str("Optional: the guest's email (gets the confirmation, door link and calendar invite). Without it, the member gets a link to share with the guest."),
           requestedBy: REQUESTED_BY,
           channelId: CHANNEL_ID,
           replyToMessageId: REPLY_TO,
@@ -259,7 +259,7 @@ const TOOLS: ToolSpec[] = [
       description:
         "Propose that a member buys a guest pass with their own tokens: a door link they share with a guest. Half day (5 hours): 1 token; full day (10 hours): 2 tokens. Members only. userId must be the member asking (OpenClaw sender.id): they pay and confirm. " +
         `A guest pass is coworking paid with tokens, so tell them the terms: "${COWORKING_TOKEN_TERMS}" ` +
-        "Optional: start (default: when they confirm; Brussels time like \"14:00\", \"tomorrow 9:00\", or ISO 8601 with timezone; at most 7 days ahead), guestName (shown in #door as \"Leo (Xavier's guest)\", default \"Xavier's guest\"), guestEmail (the guest is emailed the link and how to get in). " +
+        "Required: guestName (shown in #door as \"Leo (Xavier's guest)\"; ask for it). Optional: start (default: when they confirm; Brussels time like \"14:00\", \"tomorrow 9:00\", or ISO 8601 with timezone; at most 7 days ahead), guestEmail (the guest is emailed the link and how to get in). " +
         "Refused when their balance is too low. Creates a pending request only, posted as a reply in the channel/thread (or by DM): nothing is paid until they click Confirm. " +
         "The door link is never posted in the channel and never returned to you: the bot DMs it to the member. Never ask for or repeat the guest's email in a public channel. Say \"tokens\", not the token's symbol. Follow up with get_request_status.",
       inputSchema: {
@@ -269,13 +269,13 @@ const TOOLS: ToolSpec[] = [
           userId: str("Discord user ID of the member who asked and pays (OpenClaw sender.id). They confirm."),
           length: { type: "string", enum: ["half-day", "day"], description: "half-day (5 hours, 1 token, default) or day (10 hours, 2 tokens)." },
           start: str("Optional. When the pass starts: Brussels time (\"14:00\", \"2pm\", \"tomorrow 9:00\", \"25/10 9:30\") or ISO 8601 with timezone. Default: when they confirm. At most 7 days ahead."),
-          guestName: str("Optional. The guest's first name, shown in #door as \"<name> (<member>'s guest)\"."),
+          guestName: str("Required. The guest's first name, shown in #door as \"<name> (<member>'s guest)\"."),
           guestEmail: str("Optional. The guest's email: they get the door link and instructions by email (the member in cc)."),
           requestedBy: REQUESTED_BY,
           channelId: CHANNEL_ID,
           replyToMessageId: REPLY_TO,
         },
-        required: ["guildId", "userId", "requestedBy"],
+        required: ["guildId", "userId", "guestName", "requestedBy"],
         additionalProperties: false,
       },
     },

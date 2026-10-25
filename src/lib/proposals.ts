@@ -75,6 +75,8 @@ export { MEMBER_ROLE_BY_GUILD };
 const MAX_APPROVER_MENTIONS = 5;
 const MAX_PENDING_PER_CONFIRMER = 10;
 const MAX_HOURS = 12;
+/** Rooms go by half hours, like /book (Xavier, Oct 2026). */
+const STEP_MINUTES = 30;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const BUTTON_PREFIX = "preq_";
 
@@ -383,13 +385,14 @@ export async function proposeRoomBooking(input: Common & {
   const tooEarly = checkBookableFrom(product, start, (await loadGuildSettings(input.guildId))?.guild?.timezone || TZ);
   if (tooEarly) throw new Error(tooEarly);
   const minutes = Math.round((end.getTime() - start.getTime()) / 60000);
-  if (minutes % 15 !== 0) throw new Error("Bookings go by 15 minutes: adjust start or end");
+  if (minutes % STEP_MINUTES !== 0 || start.getUTCMinutes() % STEP_MINUTES !== 0 || start.getUTCSeconds() !== 0) {
+    throw new Error(`Bookings go by ${STEP_MINUTES} minutes: start on the hour or half hour, for a multiple of ${STEP_MINUTES} minutes`);
+  }
 
   const guestEmail = input.guestEmail?.trim().toLowerCase();
   const guestName = input.guestName?.trim();
   if (guestEmail && !EMAIL_RE.test(guestEmail)) throw new Error(`"${input.guestEmail}" is not a valid email`);
   if (guestEmail && !guestName) throw new Error("guestName is required with guestEmail");
-  if (guestName && !guestEmail) throw new Error("guestEmail is required to book for a guest");
 
   const availability = await checkRoomAvailability({ guildId: input.guildId, room: input.room, start: input.start, end: input.end });
   if (!availability.available) {
@@ -407,10 +410,10 @@ export async function proposeRoomBooking(input: Common & {
     start: start.toISOString(),
     end: end.toISOString(),
     title: input.title.trim().slice(0, 100),
-    ...(guestEmail ? { guestName, guestEmail } : {}),
+    ...(guestName ? { guestName, ...(guestEmail ? { guestEmail } : {}) } : {}),
   };
   const summary = `Book **${product.name}** on **${whenText(start, end, tz)}** for “${params.title}”` +
-    (guestEmail ? `\n👤 For ${guestName} (${guestEmail})` : "") +
+    (guestName ? `\n👤 For ${guestName}${guestEmail ? " (we'll email them the details)" : " (you'll get a link to share with them)"}` : "") +
     `\n💰 ${prices}${product.price.some((p) => /^eur/i.test(p.token)) ? " (euro prices + VAT)" : ""}: you choose and pay in the next step` +
     (product.price.some((p) => !isEuroToken(p.token)) ? `\n-# ${ROOM_TOKEN_TERMS}` : "");
   return await propose({ ...input, kind: "room_booking", confirmerId: member.id, params, summary });
@@ -505,6 +508,7 @@ export async function proposeGuestPass(input: Common & {
   const guestEmail = normalizeEmail(input.guestEmail);
   if (guestEmail === null) throw new Error(`"${input.guestEmail}" is not a valid email`);
   const guestName = input.guestName?.replace(/\s+/g, " ").trim().slice(0, 40) || undefined;
+  if (!guestName) throw new Error("guestName is required: ask the member for their guest's name.");
   const token = shopToken(await loadGuildSettings(input.guildId));
   if (!token) throw new Error("No token to pay with is configured in this server");
   const check = await checkBalance(buyer.id, token, item);
@@ -982,7 +986,7 @@ async function confirmRoomBooking(interaction: ButtonInteraction, r: PendingRequ
     start: new Date(p.start),
     end: new Date(p.end),
     name: p.title,
-    guest: p.guestEmail && p.guestName ? { name: p.guestName, email: p.guestEmail } : undefined,
+    guest: p.guestName ? { name: p.guestName, ...(p.guestEmail ? { email: p.guestEmail } : {}) } : undefined,
     timezone: (await loadGuildSettings(r.guildId))?.guild?.timezone || TZ,
   });
   await log(r.guildId, `🤖 ➡️ <@${interaction.user.id}> confirmed Elinor's room booking request (${r.id}) and continues in /book to pay`);
