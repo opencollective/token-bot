@@ -20,7 +20,7 @@ jobs:
         run: deno test --allow-read --allow-env --allow-net --allow-write=./cache tests/tx-notifications.test.ts tests/send-token-selection.test.ts tests/book-dates.test.ts tests/book-ack.test.ts tests/booking-email.test.ts tests/door-link.test.ts tests/guest-bookings.test.ts tests/shop.test.ts tests/token-terms.test.ts tests/guest-pass.test.ts
 
       - name: Run claim and Elinor proposal tests (write to a temp data dir)
-        run: deno test --allow-read --allow-env --allow-net --allow-write tests/claims.test.ts tests/proposals.test.ts tests/discord-text.test.ts
+        run: deno test --allow-read --allow-env --allow-net --allow-write tests/claims.test.ts tests/proposals.test.ts tests/discord-text.test.ts tests/website-api.test.ts
 
       - name: Run integration tests (balance)
         run: deno test --allow-read --allow-env --allow-net --allow-write=./cache tests/balance-check.test.ts

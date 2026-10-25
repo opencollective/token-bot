@@ -231,7 +231,7 @@ export interface GuestPassRecord {
   start: string;
   end: string;
   txHash: string;
-  via: "command" | "elinor";
+  via: "command" | "elinor" | "website";
   emailed?: boolean;
   createdAt: string;
 }
@@ -256,7 +256,7 @@ export type GuestPassRequest = {
   guestName?: string;
   guestEmail?: string;
   start: Date;
-  via: "command" | "elinor";
+  via: "command" | "elinor" | "website";
 };
 
 export type GuestPassResult =
