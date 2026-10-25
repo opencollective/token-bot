@@ -1,5 +1,5 @@
 /**
- * /guestpass [length] [start] [guest_name] [guest_email]: a member buys a door link for a guest
+ * /guestpass guest_name [length] [start] [guest_email]: a member buys a door link for a guest
  * with their own tokens (src/lib/guest-pass.ts).
  *
  * Shows the price and the details with Confirm and Cancel (ephemeral: only the member sees it);
@@ -91,6 +91,10 @@ export async function handleGuestPassCommand(interaction: ChatInputCommandIntera
     return;
   }
   const guestName = interaction.options.getString("guest_name")?.trim() || undefined;
+  if (!guestName) {
+    await interaction.reply({ content: "❌ Tell us your guest's name (guest_name).", flags: MessageFlags.Ephemeral });
+    return;
+  }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const check = await checkBalance(userId, token, item);

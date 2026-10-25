@@ -198,6 +198,13 @@
     "description": "Buy a door link for a guest with your tokens (half day: 1 token, full day: 2 tokens)",
     "options": [
       {
+        "name": "guest_name",
+        "description": "Your guest's name (shown in #door as \"Leo (your name's guest)\")",
+        "required": true,
+        "type": 3,
+        "max_length": 40
+      },
+      {
         "name": "length",
         "description": "Half day (5 hours, default) or full day (10 hours)",
         "required": false,
@@ -216,13 +223,6 @@
       {
         "name": "start",
         "description": "When it starts, Brussels time (default now): 14:00, 2pm, tomorrow 9:00, 25/10 9:30",
-        "required": false,
-        "type": 3,
-        "max_length": 40
-      },
-      {
-        "name": "guest_name",
-        "description": "Your guest's name (shown in #door as \"Leo (your name's guest)\")",
         "required": false,
         "type": 3,
         "max_length": 40

@@ -326,7 +326,7 @@ These never act directly. Each one validates the request, creates a pending requ
 |---|---|---|
 | `propose_mint` (`requesterUserId`, `recipientUserIds`, `amount`, `token?`, `description?`, `confirmerUserId?`) | Only members can request. If the requester can mint the token, only they can confirm. Otherwise any minter can approve: the minter role is pinged, or up to 5 admins if there is no role, and this needs a channel. A named `confirmerUserId` must be a minter. The requester can always cancel. | Same as `/mint`, with the clicking minter as minter and the requester as "requested by" |
 | `propose_shift_signup` (`userId`, `eventId` or `start`+`end`, `email?`) | The member | Same as `/shifts`: calendar, nostr for standard slots, #shifts log, confirmation email |
-| `propose_room_booking` (`userId`, `room`, `start`, `end`, `title`, `guestName?`, `guestEmail?`) | The member | Opens `/book` prefilled at the payment step; the member picks how to pay and confirms there |
+| `propose_room_booking` (`userId`, `room`, `start`, `end`, `title`, `guestName?`, `guestEmail?`) | The member | Opens `/book` prefilled at the payment step; the member picks how to pay and confirms there. Half hours only (start on :00 or :30, a multiple of 30 minutes). A guest needs a name; without an email the member gets a pass link to share |
 | `propose_transaction_category` (`requesterUserId`, `tx`, `chain?`, `category`) | The requesting steward | Publishes the category change signed by their key, the same as the dropdown on transaction reports |
 | `propose_claim` (`requesterUserId`, `amount`, `reason`, `recipientUserIds?`, `category?`) | Not the requester: any other minter, in the transactions channel | Same as `/claim`: posts the claim in the token's transactions channel (and a link in `channelId` when given). Anyone can ask; nothing is minted until a minter approves |
 | `propose_purchase` (`userId`, `item`, `description?`) | The buyer (`userId` must be the person asking: nobody buys for someone else). Refused upfront when their balance is too low. | Same as `/buy`: burns the price from their own account, category `coworking`, Nostr annotation, transaction report |
@@ -482,3 +482,17 @@ The standard way for any bot to report a euro or token transaction in Discord, w
 ```
 
 The message has a dropdown. A steward's change publishes a kind 1111 annotation for `uri`, signed by the steward, as described in "Transaction categories". Reports are recorded in `DATA_DIR/<guild>/tx-reports.json`, keyed by message (URIs and currency) and by URI (idempotency).
+
+## Website: `/api/website/*`
+
+commonshub.brussels lets a signed-in member do what `/buy`, `/guestpass` and `/book` do, without going to Discord. The website calls these server-side with `Authorization: Bearer <WEBSITE_API_TOKEN>`; every body is JSON with `guildId` and `userId` (the member's Discord id, from their website session). The bot checks the member role again.
+
+| Endpoint | Body | What it does |
+|---|---|---|
+| `POST /api/website/options` | | Balance, `/buy`'s coworking items, guest pass prices, rooms payable with tokens (price per hour in tokens and euros), the token terms and the disclaimer |
+| `POST /api/website/availability` | `room`, `start`, `end` | Whether the room is free then, and the price in tokens |
+| `POST /api/website/cowork` | `requestId`, `item?` | Contributor coworking for today, like `/buy` (default `coworking-day`) |
+| `POST /api/website/guestpass` | `requestId`, `guestName`, `length`, `start?`, `guestEmail?` | A guest pass, like `/guestpass`: the guest is emailed (member in cc) when there is an email; the answer has the pass link |
+| `POST /api/website/book` | `requestId`, `room`, `start`, `end`, `title?`, `guestName?`, `guestEmail?` | A room paid with tokens, like `/book`. A guest needs a name; without an email the answer has a pass link (`commonshub.brussels/pass#<door link parameters>&pass=room&room=<name>`) |
+
+Rooms go by half hours (start on :00 or :30 from 8am to 10pm, a multiple of 30 minutes, at most 12 hours). Paying calls are idempotent on (guild, user, `requestId`), kept in `DATA_DIR/<guild>/website-requests.jsonl`: a retry gets the first answer and is never charged twice. Errors are `{ ok: false, error }` with a sentence to show; nothing is charged unless the answer says so.

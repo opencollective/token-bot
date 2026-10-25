@@ -131,14 +131,20 @@ Deno.test("guest pass: refused before paying (bad email, past start, too far, no
   await withEnv(async () => {
     let calls = 0;
     baseDeps({ guestPass: async () => (calls++, { ok: false, error: "Not enough tokens." }) });
-    expect((await post("guestpass", { requestId: "req-aaaaaaaa", guestEmail: "leo@" })).status).toBe(400);
-    expect((await post("guestpass", { requestId: "req-aaaaaaaa", start: new Date(Date.now() - 3600000).toISOString() })).status).toBe(400);
-    expect((await post("guestpass", { requestId: "req-aaaaaaaa", start: new Date(Date.now() + 8 * 86400000).toISOString() })).status).toBe(400);
-    expect((await post("guestpass", {})).status).toBe(400);
-    const r = await post("guestpass", { requestId: "req-aaaaaaaa" });
+    const leo = { requestId: "req-aaaaaaaa", guestName: "Leo" };
+    expect((await post("guestpass", { ...leo, guestEmail: "leo@" })).status).toBe(400);
+    expect((await post("guestpass", { ...leo, start: new Date(Date.now() - 3600000).toISOString() })).status).toBe(400);
+    expect((await post("guestpass", { ...leo, start: new Date(Date.now() + 8 * 86400000).toISOString() })).status).toBe(400);
+    expect((await post("guestpass", { guestName: "Leo" })).status).toBe(400);
+    // The guest's name is required, the email optional.
+    const noName = await post("guestpass", { requestId: "req-aaaaaaaa" });
+    expect(noName.status).toBe(400);
+    expect((await noName.json()).error).toContain("name");
+    expect(calls).toBe(0);
+    const r = await post("guestpass", leo);
     expect(r.status).toBe(402);
     expect((await r.json()).error).toContain("Nothing was charged");
-    await post("guestpass", { requestId: "req-aaaaaaaa" });
+    await post("guestpass", leo);
     expect(calls).toBe(2);
   });
 });
@@ -163,10 +169,12 @@ Deno.test("cowork: /buy's coworking day for today, via the website", async () =>
 const at = (iso: string) => new Date(iso);
 const NOW = new Date("2026-11-02T00:00:00Z");
 
-Deno.test("room rules: 15-minute steps, 8am–10pm starts, 12h at most, not in the past, bookable-from", () => {
+Deno.test("room rules: 30-minute steps, 8am–10pm starts, 12h at most, not in the past, bookable-from", () => {
   const mush = ROOMS[0], cw = ROOMS[1];
   expect(checkRoomRequest(mush, at("2026-11-02T13:00:00Z"), at("2026-11-02T15:00:00Z"), "Europe/Brussels", NOW)).toBeNull();
-  expect(checkRoomRequest(mush, at("2026-11-02T13:10:00Z"), at("2026-11-02T15:10:00Z"), "Europe/Brussels", NOW)).toContain("15 minutes");
+  expect(checkRoomRequest(mush, at("2026-11-02T13:30:00Z"), at("2026-11-02T15:00:00Z"), "Europe/Brussels", NOW)).toBeNull();
+  expect(checkRoomRequest(mush, at("2026-11-02T13:15:00Z"), at("2026-11-02T15:15:00Z"), "Europe/Brussels", NOW)).toContain("30 minutes");
+  expect(checkRoomRequest(mush, at("2026-11-02T13:00:00Z"), at("2026-11-02T13:45:00Z"), "Europe/Brussels", NOW)).toContain("30 minutes");
   expect(checkRoomRequest(mush, at("2026-11-02T05:00:00Z"), at("2026-11-02T06:00:00Z"), "Europe/Brussels", NOW)).toContain("8am");
   expect(checkRoomRequest(mush, at("2026-11-02T08:00:00Z"), at("2026-11-02T21:00:00Z"), "Europe/Brussels", NOW)).toContain("12 hours");
   expect(checkRoomRequest(mush, at("2026-11-01T13:00:00Z"), at("2026-11-01T14:00:00Z"), "Europe/Brussels", NOW)).toContain("passed");
@@ -301,6 +309,6 @@ Deno.test("/api/website/availability: price for the span, refusals with a reason
     expect(await (await post("availability", { room: "mushroom", start, end })).json()).toMatchObject({ ok: true, available: false, conflicts: [{ start, end }] });
     const odd = await (await post("availability", { room: "mushroom", start: future(12).toISOString(), end: new Date(future(12).getTime() + 10 * 60000).toISOString() })).json();
     expect(odd).toMatchObject({ ok: true, available: false });
-    expect(odd.reason).toContain("15 minutes");
+    expect(odd.reason).toContain("30 minutes");
   });
 });

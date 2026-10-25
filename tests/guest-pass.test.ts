@@ -212,11 +212,15 @@ Deno.test("the guest's email: who invited them, when, the door button, the cowor
 
 Deno.test("/guestpass and propose_guest_pass are declared, with the coworking terms for Elinor", () => {
   const cmd = (commands as { name: string; options?: { name: string; choices?: { value: string }[] }[] }[]).find((c) => c.name === "guestpass")!;
-  expect(cmd.options!.map((o) => o.name)).toEqual(["length", "start", "guest_name", "guest_email"]);
-  expect(cmd.options![0].choices!.map((c) => c.value)).toEqual(["half-day", "day"]);
+  // The guest's name is required; Discord wants required options first.
+  expect(cmd.options!.map((o) => o.name)).toEqual(["guest_name", "length", "start", "guest_email"]);
+  expect((cmd.options![0] as { required?: boolean }).required).toBe(true);
+  expect(cmd.options!.slice(1).every((o) => !(o as { required?: boolean }).required)).toBe(true);
+  expect(cmd.options![1].choices!.map((c) => c.value)).toEqual(["half-day", "day"]);
   const tool = getMcpTools({ checkUserPermissions: async () => ({}), proposeGuestPass: async () => ({}) }).find((t) => t.name === "propose_guest_pass")!;
   expect(tool.description).toContain(COWORKING_TOKEN_TERMS);
   expect(tool.description).toContain("never returned to you");
+  expect((tool.inputSchema as { required: string[] }).required).toContain("guestName");
   expect(whenLabel(new Date("2026-10-24T07:00:00Z"), new Date("2026-10-24T17:00:00Z"), new Date("2026-10-22T08:00:00Z"))).toBe("Sat 24 Oct, 09:00–19:00");
 });
 

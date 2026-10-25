@@ -25,10 +25,10 @@ import { getEnv } from "./utils.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
 export const ROOM_TZ = "Europe/Brussels";
-/** Same window as /book's start times (8am to 10pm), by 15 minutes like Elinor's bookings. */
+/** Same as /book: starts from 8am to 10pm, on the hour or half hour, for a multiple of 30 minutes. */
 export const FIRST_START = "08:00";
 export const LAST_START = "22:00";
-export const STEP_MINUTES = 15;
+export const STEP_MINUTES = 30;
 export const MAX_HOURS = 12;
 
 /** The token price per hour of a room in this token (null when it can't be paid with it). */
