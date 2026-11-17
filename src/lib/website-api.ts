@@ -27,7 +27,7 @@ import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin } from "./email-login.ts";
-import { coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, type OrgInput, quote, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
+import { coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordCardPayment, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
 type Json = Record<string, unknown>;
@@ -333,6 +333,7 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
       to,
       lines: [roomEurLine(product, start, end, tz)],
       ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
+      booking: { kind: "room", label: product.name, start: start.toISOString(), end: end.toISOString(), ...(guestName ? { guest: guestName } : {}) },
     });
   if (c.test) return await testPayBook(c, product, start, end, title, guestName, invoiceFor);
   const r = await deps.roomBooking({
@@ -416,9 +417,24 @@ async function payCowork(c: Ctx, b: Json): Promise<Answer & { charged?: boolean 
     to,
     lines: [coworkLine(item.label.replace(/^Contributor c/, "C"), coworkEur(item.id), true, today)],
     ref: `${item.label.replace(/^Contributor c/, "C")} ${today}`,
+    booking: { kind: "cowork", label: item.label.replace(/^Contributor c/, "C"), date: new Date().toLocaleDateString("en-CA", { timeZone: tz }) },
   });
   if (!made.ok) return fail(made.error, made.status);
   return { ...ok({ item: itemJson(item), invoice: made.invoice }), charged: true };
+}
+
+/** Upcoming bookings paid in euros, and whether each invoice is paid. */
+async function mine(c: Ctx): Promise<Answer> {
+  if (!c.odoo) return ok({ bookings: [] });
+  return ok({ bookings: await myBookings(c.odoo, c.guildId, c.userId) });
+}
+
+/** The website checked with Stripe that this invoice is paid by card (Checkout session). */
+async function paid(c: Ctx, b: Json): Promise<Answer> {
+  const invoiceId = Number(b.invoiceId);
+  const sessionId = str(b, "sessionId", 200);
+  if (!Number.isInteger(invoiceId) || invoiceId <= 0 || !sessionId) return fail("invoiceId and sessionId are required");
+  return (await recordCardPayment(c.guildId, c.userId, invoiceId, sessionId)) ? ok({}) : fail("Not your invoice.", 404);
 }
 
 async function cowork(client: Client, c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {
@@ -532,7 +548,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
   const endpoint = path.slice("/api/website/".length);
   // Signing in with an email address: not on behalf of a member yet (src/lib/email-login.ts).
   if (endpoint.startsWith("login/")) return reply(await handleLogin(endpoint, body));
-  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork"].includes(endpoint)) return reply(fail("Not found", 404));
+  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
@@ -542,6 +558,8 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     if (endpoint === "orgs") return reply(await orgs(c));
     if (endpoint === "org") return reply(await org(c, body));
     if (endpoint === "vat") return reply(await vat(body));
+    if (endpoint === "mine") return reply(await mine(c));
+    if (endpoint === "paid") return reply(await paid(c, body));
     const run = endpoint === "cowork"
       ? () => cowork(client!, c, body)
       : endpoint === "guestpass"

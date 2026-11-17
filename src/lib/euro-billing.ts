@@ -293,6 +293,59 @@ async function emailInvoice(odoo: OdooCall, moveId: number): Promise<boolean> {
  * Create, post and email an invoice. `to` is one of the member's organisations, or "self" (their
  * own partner, created from their Discord name and email when Odoo doesn't know them yet).
  */
+/** A room (start, end) or coworking on a day (Brussels date), as booked. */
+export type Booked = { kind: "room"; label: string; start: string; end: string; guest?: string } | { kind: "cowork"; label: string; date: string };
+
+type InvoiceRecord = { invoiceId: number; number: string; userId: string; total: number; communication?: string; booking?: Booked; at: string };
+type CardPaid = { invoiceId: number; userId: string; sessionId: string; at: string };
+const paidFile = (guildId: string) => `${getEnv("DATA_DIR") || "/data"}/${guildId}/website-card-payments.jsonl`;
+
+async function readJsonl<T>(path: string): Promise<T[]> {
+  try {
+    return (await Deno.readTextFile(path)).split("\n").filter(Boolean).map((l) => JSON.parse(l) as T);
+  } catch {
+    return [];
+  }
+}
+
+export type MyBooking = Booked & { invoice: { id: number; number: string; total: number; communication: string }; status: "paid" | "partial" | "pending" };
+
+/**
+ * A member's upcoming bookings paid in euros (rooms not over yet, coworking from today), with
+ * whether the invoice is paid: in Odoo (paid, or in payment), or by card on the website (the
+ * Stripe payment reaches Odoo with chb's hourly sync, so the card record covers the gap).
+ */
+export async function myBookings(odoo: OdooCall, guildId: string, userId: string, now = new Date()): Promise<MyBooking[]> {
+  const today = now.toLocaleDateString("en-CA", { timeZone: "Europe/Brussels" });
+  const mine = (await readJsonl<InvoiceRecord>(invoicesFile(guildId))).filter((r) =>
+    r.userId === userId && r.booking && (r.booking.kind === "room" ? new Date(r.booking.end) > now : r.booking.date >= today)
+  );
+  if (!mine.length) return [];
+  const card = new Set((await readJsonl<CardPaid>(paidFile(guildId))).filter((c) => c.userId === userId).map((c) => c.invoiceId));
+  const states = new Map(
+    ((await odoo("account.move", "read", { ids: mine.map((r) => r.invoiceId), fields: ["payment_state"] })) as { id: number; payment_state: string }[]).map((m) => [m.id, m.payment_state]),
+  );
+  return mine
+    .filter((r) => states.has(r.invoiceId) && states.get(r.invoiceId) !== "reversed")
+    .map((r) => {
+      const st = states.get(r.invoiceId);
+      const status = card.has(r.invoiceId) || st === "paid" || st === "in_payment" ? "paid" as const : st === "partial" ? "partial" as const : "pending" as const;
+      return { ...r.booking!, invoice: { id: r.invoiceId, number: r.number, total: r.total, communication: r.communication ?? r.number }, status };
+    })
+    .sort((a, b) => (a.kind === "room" ? a.start : a.date).localeCompare(b.kind === "room" ? b.start : b.date));
+}
+
+/** The website saw this invoice paid by card (Stripe Checkout): note it, if it is this member's. */
+export async function recordCardPayment(guildId: string, userId: string, invoiceId: number, sessionId: string): Promise<boolean> {
+  const own = (await readJsonl<InvoiceRecord>(invoicesFile(guildId))).some((r) => r.userId === userId && r.invoiceId === invoiceId);
+  if (!own) return false;
+  const path = paidFile(guildId);
+  if ((await readJsonl<CardPaid>(path)).some((c) => c.invoiceId === invoiceId)) return true;
+  await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+  await Deno.writeTextFile(path, JSON.stringify({ invoiceId, userId, sessionId, at: new Date().toISOString() }) + "\n", { append: true });
+  return true;
+}
+
 export async function createInvoice(odoo: OdooCall, p: {
   guildId: string;
   userId: string;
@@ -300,6 +353,8 @@ export async function createInvoice(odoo: OdooCall, p: {
   to: number | "self";
   lines: InvoiceLine[];
   ref: string;
+  /** What was booked, kept with the invoice in website-invoices.jsonl (for the member's dashboard). */
+  booking?: Booked;
 }): Promise<{ ok: true; invoice: Invoice } | { ok: false; error: string; status: number }> {
   let partnerId: number;
   if (p.to === "self") {
@@ -334,7 +389,7 @@ export async function createInvoice(odoo: OdooCall, p: {
   const emailed = await emailInvoice(odoo, moveId);
   const path = invoicesFile(p.guildId);
   await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
-  await Deno.writeTextFile(path, JSON.stringify({ invoiceId: moveId, number: m.name, userId: p.userId, total: m.amount_total, at: new Date().toISOString() }) + "\n", { append: true });
+  await Deno.writeTextFile(path, JSON.stringify({ invoiceId: moveId, number: m.name, userId: p.userId, total: m.amount_total, communication: s(m.payment_reference) || m.name, ...(p.booking ? { booking: p.booking } : {}), at: new Date().toISOString() }) + "\n", { append: true });
   return {
     ok: true,
     invoice: {

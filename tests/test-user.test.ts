@@ -45,6 +45,7 @@ function testOdoo(partners: { id: number; name: string; email: string }[] = []) 
     if (model === "account.move") {
       if (method === "create") return invoices.push(args) && [700];
       if (method === "action_post") return true;
+      if (method === "read" && (args.fields as string[]).includes("payment_state")) return (args.ids as number[]).map((id) => ({ id, payment_state: "not_paid" }));
       if (method === "read") return [{ name: "2026_RCC_T1", amount_untaxed: 42, amount_tax: 8.82, amount_total: 50.82, payment_reference: "+++000/0070/00011+++", invoice_date_due: "2026-12-01", partner_id: [9000, "Test user"] }];
     }
     if (model === "account.move.send.wizard") return method === "create" ? [1] : true;
@@ -185,5 +186,20 @@ Deno.test("an address not in TEST_LOGIN_EMAILS can't pass as a test user", async
   await withWebsite(async () => {
     const r = await handleWebsiteRequest(new Request("http://bot/api/website/options", { method: "POST", headers: { Authorization: `Bearer ${TOKEN}` }, body: JSON.stringify({ guildId: GUILD, testUser: { ...testUser, email: "someone@example.org" } }) }), "/api/website/options", {} as never);
     expect(r.status).toBe(403);
+  });
+});
+
+Deno.test("my bookings: upcoming ones with their invoice, pending until paid by card", async () => {
+  await withWebsite(async () => {
+    const start = new Date(Date.UTC(2030, 0, 8, 8, 0));
+    await post("paybook", { requestId: "req-test-0010", room: "satoshi", start: start.toISOString(), end: new Date(start.getTime() + 3600000).toISOString(), org: "self" });
+    await post("paycowork", { requestId: "req-test-0011", item: "coworking-half-day", org: "self" });
+    let m = await (await post("mine", {})).json();
+    expect(m.bookings.map((b: { kind: string; status: string }) => [b.kind, b.status])).toEqual([["cowork", "pending"], ["room", "pending"]]);
+    expect(m.bookings[1]).toMatchObject({ label: "Satoshi Room", start: start.toISOString(), invoice: { id: 700, number: "2026_RCC_T1", communication: "+++000/0070/00011+++" } });
+    expect((await post("paid", { invoiceId: 999, sessionId: "cs_test_1" })).status).toBe(404);
+    expect((await (await post("paid", { invoiceId: 700, sessionId: "cs_test_1" })).json()).ok).toBe(true);
+    m = await (await post("mine", {})).json();
+    expect(m.bookings.every((b: { status: string }) => b.status === "paid")).toBe(true); // both invoices are 700 in this fake
   });
 });
