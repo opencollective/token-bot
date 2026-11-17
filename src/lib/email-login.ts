@@ -12,7 +12,7 @@
  * website's bearer token like the other /api/website endpoints.
  */
 import { getEnv } from "./utils.ts";
-import { likeLiteral, odooConfigured, odooFromEnv, type OdooCall } from "./odoo.ts";
+import { isTestEmail, likeLiteral, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 
 export const CODE_TTL_MS = 10 * 60_000;
 export const MAX_ATTEMPTS = 5;
@@ -23,10 +23,13 @@ type Pending = { hash: string; expires: number; attempts: number };
 const pending = new Map<string, Pending>();
 const sent = new Map<string, number[]>();
 
-export type Partner = { id: number; name: string; email: string };
+/** `test`: a test user (TEST_LOGIN_EMAILS), whose partner is in the test copy of Odoo. */
+export type Partner = { id: number; name: string; email: string; test?: true };
 
 type Deps = {
   odoo(): OdooCall | null;
+  /** The test copy of Odoo, for test users (null when not configured). */
+  testOdoo(): OdooCall | null;
   send(to: string, code: string): Promise<void>;
   now(): number;
   code(): string;
@@ -58,6 +61,7 @@ async function sendCode(to: string, code: string): Promise<void> {
 
 const DEFAULT_DEPS: Deps = {
   odoo: () => (odooConfigured() ? odooFromEnv() : null),
+  testOdoo: () => (odooTestConfigured() ? odooTestFromEnv() : null),
   send: sendCode,
   now: () => Date.now(),
   code: randomCode,
@@ -87,6 +91,21 @@ export async function partnerByEmail(odoo: OdooCall, email: string): Promise<Par
   return p ? { id: p.id, name: p.name, email } : null;
 }
 
+/** Which Odoo knows this address: the test copy for test users, production otherwise. */
+const odooFor = (email: string) => (isTestEmail(email) ? deps.testOdoo() : deps.odoo());
+
+/**
+ * The partner to sign in as. A test user's partner is created in the test copy if it isn't there
+ * (each fresh copy of the database starts without it).
+ */
+async function loginPartner(odoo: OdooCall, email: string): Promise<Partner | null> {
+  const found = await partnerByEmail(odoo, email);
+  if (!isTestEmail(email)) return found;
+  if (found) return { ...found, test: true };
+  const [id] = (await odoo("res.partner", "create", { vals_list: [{ name: "Test user", email, comment: "Website test user (TEST_LOGIN_EMAILS), created by the bot." }] })) as number[];
+  return { id, name: "Test user", email, test: true };
+}
+
 async function sha256(s: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -98,7 +117,7 @@ type Result<T> = { ok: true } & T | { ok: false; error: string; status: number }
 export async function requestCode(rawEmail: unknown): Promise<Result<Record<never, never>>> {
   const email = normalizeLoginEmail(rawEmail);
   if (!email) return { ok: false, error: "That email address doesn't look valid.", status: 400 };
-  const odoo = deps.odoo();
+  const odoo = odooFor(email);
   if (!odoo) return { ok: false, error: "Signing in with an email address isn't available right now: use Discord.", status: 503 };
   const now = deps.now();
   const recent = (sent.get(email) ?? []).filter((t) => now - t < 3_600_000);
@@ -106,7 +125,7 @@ export async function requestCode(rawEmail: unknown): Promise<Result<Record<neve
   if (recent.length >= MAX_PER_HOUR) return { ok: false, error: "Too many codes for this address: try again in an hour.", status: 429 };
   sent.set(email, [...recent, now]);
 
-  const partner = await partnerByEmail(odoo, email);
+  const partner = await loginPartner(odoo, email);
   if (!partner) return { ok: true }; // nothing sent, nothing said
   const code = deps.code();
   pending.set(email, { hash: await sha256(`${email}:${code}`), expires: now + CODE_TTL_MS, attempts: 0 });
@@ -138,8 +157,8 @@ export async function verifyCode(rawEmail: unknown, rawCode: unknown): Promise<R
   for (let i = 0; i < Math.min(hash.length, p.hash.length); i++) diff |= hash.charCodeAt(i) ^ p.hash.charCodeAt(i);
   if (diff !== 0) return wrong;
   pending.delete(email);
-  const odoo = deps.odoo();
-  const partner = odoo ? await partnerByEmail(odoo, email) : null;
+  const odoo = odooFor(email);
+  const partner = odoo ? await loginPartner(odoo, email) : null;
   if (!partner) return wrong; // removed from Odoo meanwhile
   return { ok: true, partner };
 }

@@ -5,7 +5,12 @@
  * account and does what the commands do (reports, emails, door links).
  *
  * Auth: Bearer WEBSITE_API_TOKEN (the website, which checked the Discord session and the member
- * role). The bot checks again that the user is a member of the guild. Every paying call carries a
+ * role). The bot checks again that the user is a member of the guild.
+ *
+ * Test users (TEST_LOGIN_EMAILS, signed in on the website with an email code) come as
+ * `testUser: {email, partnerId, name}` instead of a Discord userId. They can only pay in euros;
+ * their invoices go to the test copy of Odoo, and a room is checked against the real calendar but
+ * not booked in it (no event, no Discord post, no email): a test writes nothing real. Every paying call carries a
  * `requestId`: a retry returns the first answer and never charges twice.
  */
 import { Client, GuildMember } from "discord.js";
@@ -20,7 +25,7 @@ import { txUrlFor } from "./mint.ts";
 import { isGuildMember } from "../commands/guestpass.ts";
 import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
-import { odooConfigured, odooFromEnv, type OdooCall } from "./odoo.ts";
+import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin } from "./email-login.ts";
 import { coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, type OrgInput, quote, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
@@ -104,6 +109,8 @@ type Deps = {
   email(guildId: string, userId: string): string | undefined;
   /** Odoo, for paying in euros (null when not configured). */
   odoo(): OdooCall | null;
+  /** The test copy of Odoo, for test users (null when not configured). */
+  testOdoo(): OdooCall | null;
   vies: typeof lookupVat;
 };
 
@@ -133,6 +140,7 @@ const DEFAULT_DEPS: Deps = {
   dm: (member, content) => member.send({ content }),
   email: getUserEmail,
   odoo: () => (odooConfigured() ? odooFromEnv() : null),
+  testOdoo: () => (odooTestConfigured() ? odooTestFromEnv() : null),
   vies: lookupVat,
 };
 let deps: Deps = DEFAULT_DEPS;
@@ -141,9 +149,25 @@ export function _setWebsiteDeps(next?: Partial<Deps>) {
   deps = next ? { ...DEFAULT_DEPS, ...next } : DEFAULT_DEPS;
 }
 
-type Ctx = { guildId: string; userId: string; member: GuildMember; name: string; settings: GuildSettings; token: Token };
+/** member is null for a test user (test: true), whose odoo is the test copy. */
+type Ctx = { guildId: string; userId: string; member: GuildMember | null; name: string; email?: string; settings: GuildSettings; token: Token; odoo: OdooCall | null; test: boolean };
+
+async function testContext(body: Json): Promise<Ctx | Answer> {
+  const guildId = typeof body.guildId === "string" ? body.guildId : "";
+  const t = (body.testUser ?? {}) as Json;
+  const email = typeof t.email === "string" ? t.email.trim().toLowerCase() : "";
+  const partnerId = Number(t.partnerId);
+  if (!/^\d{5,25}$/.test(guildId) || !Number.isInteger(partnerId) || partnerId <= 0) return fail("guildId and testUser are required");
+  if (!isTestEmail(email)) return fail("Not a test user.", 403);
+  const settings = await deps.settings(guildId);
+  const token = shopToken(settings);
+  if (!settings || !token) return fail("Booking is not available right now.", 503);
+  const name = (typeof t.name === "string" && t.name.trim().slice(0, 80)) || "Test user";
+  return { guildId, userId: `test-${partnerId}`, member: null, name, email, settings, token, odoo: deps.testOdoo(), test: true };
+}
 
 async function context(client: Client | null, body: Json): Promise<Ctx | Answer> {
+  if (body.testUser !== undefined) return await testContext(body);
   const guildId = typeof body.guildId === "string" ? body.guildId : "";
   const userId = typeof body.userId === "string" ? body.userId : "";
   if (!/^\d{5,25}$/.test(guildId) || !/^\d{5,25}$/.test(userId)) return fail("guildId and userId are required");
@@ -155,7 +179,7 @@ async function context(client: Client | null, body: Json): Promise<Ctx | Answer>
   const token = shopToken(settings);
   if (!settings || !token) return fail("Paying with tokens is not available right now.", 503);
   const name = member.displayName || member.user.globalName || member.user.username;
-  return { guildId, userId, member, name, settings, token };
+  return { guildId, userId, member, name, email: deps.email(guildId, userId), settings, token, odoo: deps.odoo(), test: false };
 }
 
 const isAnswer = (x: Ctx | Answer): x is Answer => "status" in x && "body" in x;
@@ -165,7 +189,7 @@ const itemJson = (i: ShopItem) => ({ id: i.id, label: i.label, price: i.price, t
 // ── Endpoints ───────────────────────────────────────────────────────────────
 
 async function options(c: Ctx): Promise<Answer> {
-  const balance = await deps.balance(c.userId, c.token).catch(() => null);
+  const balance = c.test ? null : await deps.balance(c.userId, c.token).catch(() => null);
   const products = await deps.products(c.guildId);
   const rooms = products
     .filter((p) => p.type === "room" && p.calendarId && tokenPricePerHour(p, c.token) !== null)
@@ -187,9 +211,11 @@ async function options(c: Ctx): Promise<Answer> {
     rooms,
     terms: { cowork: COWORKING_TOKEN_TERMS, room: ROOM_TOKEN_TERMS },
     disclaimer: PASS_DISCLAIMER,
+    // A test user: euros only, into the test copy of Odoo; the website takes cards with Stripe's sandbox.
+    ...(c.test ? { test: true } : {}),
     // Paying in euros, by card or invoice: members get MEMBER_DISCOUNT % off, then VAT.
     eur: {
-      available: !!deps.odoo(),
+      available: !!c.odoo,
       memberDiscount: MEMBER_DISCOUNT,
       vatRate: VAT_RATE,
       cowork: Object.fromEntries(SHOP_ITEMS.map((i) => [i.id, quote([coworkLine(i.label, coworkEur(i.id), true, "today")])])),
@@ -231,16 +257,15 @@ async function availability(c: Ctx, b: Json): Promise<Answer> {
 
 // ── Paying in euros ─────────────────────────────────────────────────────────
 
-function needOdoo(): OdooCall | Answer {
-  return deps.odoo() ?? fail("Paying in euros is not available right now: pay with tokens or ask in Discord.", 503);
+function needOdoo(c: Ctx): OdooCall | Answer {
+  return c.odoo ?? fail("Paying in euros is not available right now: pay with tokens or ask in Discord.", 503);
 }
 const isOdoo = (x: OdooCall | Answer): x is OdooCall => typeof x === "function";
 
 async function orgs(c: Ctx): Promise<Answer> {
-  const odoo = needOdoo();
+  const odoo = needOdoo(c);
   if (!isOdoo(odoo)) return odoo;
-  const email = deps.email(c.guildId, c.userId);
-  return ok({ orgs: await listOrgs(odoo, c.guildId, c.userId, email), me: { name: c.name, email: email ?? null } });
+  return ok({ orgs: await listOrgs(odoo, c.guildId, c.userId, c.email), me: { name: c.name, email: c.email ?? null } });
 }
 
 const addr = (b: Json, prefix: string) => ({
@@ -251,7 +276,7 @@ const addr = (b: Json, prefix: string) => ({
 });
 
 async function org(c: Ctx, b: Json): Promise<Answer> {
-  const odoo = needOdoo();
+  const odoo = needOdoo(c);
   if (!isOdoo(odoo)) return odoo;
   const id = Number(str(b, "id", 12));
   const input: OrgInput = {
@@ -262,7 +287,7 @@ async function org(c: Ctx, b: Json): Promise<Answer> {
     address: addr(b, ""),
     billing: str(b, "billing", 5) === "yes" ? addr(b, "billing") : null,
   };
-  const r = await saveOrg(odoo, c.guildId, c.userId, deps.email(c.guildId, c.userId), input);
+  const r = await saveOrg(odoo, c.guildId, c.userId, c.email, input);
   return r.ok ? ok({ org: r.org }) : fail(r.error, r.status);
 }
 
@@ -285,7 +310,7 @@ const invoiceTo = (b: Json): number | "self" | null => {
 };
 
 async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {
-  const odoo = needOdoo();
+  const odoo = needOdoo(c);
   if (!isOdoo(odoo)) return odoo;
   const to = invoiceTo(b);
   if (!to) return fail("Choose who we invoice.");
@@ -300,27 +325,30 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
   const tz = c.settings.guild?.timezone || "Europe/Brussels";
   const title = str(b, "title", 100) ?? (guestName ? `${guestName} (guest of ${c.name})` : "Room booking");
   let invoice: Invoice | null = null;
+  const invoiceFor = () =>
+    createInvoice(odoo, {
+      guildId: c.guildId,
+      userId: c.userId,
+      member: { name: c.name, email: c.email },
+      to,
+      lines: [roomEurLine(product, start, end, tz)],
+      ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
+    });
+  if (c.test) return await testPayBook(c, product, start, end, title, guestName, invoiceFor);
   const r = await deps.roomBooking({
     client,
     guildId: c.guildId,
     guildSettings: c.settings,
     token: c.token,
     product,
-    booker: { id: c.userId, name: c.name, username: c.member.user.username, email: deps.email(c.guildId, c.userId) },
+    booker: { id: c.userId, name: c.name, username: c.member!.user.username, email: c.email },
     start,
     end,
     title,
     ...(guestName ? { guest: { name: guestName, ...(guestEmail ? { email: guestEmail } : {}) } } : {}),
     via: "website",
     invoice: async () => {
-      const made = await createInvoice(odoo, {
-        guildId: c.guildId,
-        userId: c.userId,
-        member: { name: c.name, email: deps.email(c.guildId, c.userId) },
-        to,
-        lines: [roomEurLine(product, start, end, tz)],
-        ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
-      });
+      const made = await invoiceFor();
       if (!made.ok) return made;
       invoice = made.invoice;
       return { ok: true, number: made.invoice.number, total: made.invoice.total };
@@ -342,8 +370,38 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
   };
 }
 
+/**
+ * A test user's room in euros: the same checks as a real booking against the real calendar, and
+ * the invoice in the test copy of Odoo, but nothing booked (no event, no Discord post, no email).
+ */
+async function testPayBook(c: Ctx, product: Product, start: Date, end: Date, title: string, guestName: string | undefined, invoiceFor: () => ReturnType<typeof createInvoice>): Promise<Answer & { charged?: boolean }> {
+  const tz = c.settings.guild?.timezone || "Europe/Brussels";
+  if (isNaN(end.getTime() - start.getTime()) || end <= start) return fail("Choose a valid time.");
+  const reason = checkRoomRequest(product, start, end, tz);
+  if (reason) return fail(reason);
+  const conflicts = await deps.conflicts(product.calendarId!, start, end).catch(() => null);
+  if (conflicts === null) return fail("We couldn't check the room's calendar right now.", 503);
+  if (conflicts.length) return fail(`${product.name} is not free then.`, 409);
+  const made = await invoiceFor();
+  if (!made.ok) return fail(made.error, made.status);
+  return {
+    ...ok({
+      room: { slug: product.slug, name: product.name },
+      start: start.toISOString(),
+      end: end.toISOString(),
+      title,
+      eventId: null,
+      invoice: made.invoice,
+      emailed: guestName ? undefined : false,
+      ...(guestName ? { guest: { name: guestName, emailed: null } } : {}),
+      test: true,
+    }),
+    charged: true,
+  };
+}
+
 async function payCowork(c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {
-  const odoo = needOdoo();
+  const odoo = needOdoo(c);
   if (!isOdoo(odoo)) return odoo;
   const to = invoiceTo(b);
   if (!to) return fail("Choose who we invoice.");
@@ -354,7 +412,7 @@ async function payCowork(c: Ctx, b: Json): Promise<Answer & { charged?: boolean 
   const made = await createInvoice(odoo, {
     guildId: c.guildId,
     userId: c.userId,
-    member: { name: c.name, email: deps.email(c.guildId, c.userId) },
+    member: { name: c.name, email: c.email },
     to,
     lines: [coworkLine(item.label.replace(/^Contributor c/, "C"), coworkEur(item.id), true, today)],
     ref: `${item.label.replace(/^Contributor c/, "C")} ${today}`,
@@ -391,7 +449,7 @@ async function guestPass(client: Client, c: Ctx, b: Json): Promise<Answer & { ch
     guildSettings: c.settings,
     token: c.token,
     item,
-    buyer: { id: c.userId, name: c.name, email: deps.email(c.guildId, c.userId) },
+    buyer: { id: c.userId, name: c.name, email: c.email },
     guestName,
     guestEmail,
     start,
@@ -399,7 +457,7 @@ async function guestPass(client: Client, c: Ctx, b: Json): Promise<Answer & { ch
   });
   if (!r.ok) return fail(`${r.error.replace(/<@\d+>/g, "you")}${/Nothing was charged/.test(r.error) ? "" : " Nothing was charged."}`, 402);
   // Like /guestpass: a copy of the link by DM, so they keep it.
-  await deps.dm(c.member, clip(linkMessage(r, item))).catch(() => {});
+  await deps.dm(c.member!, clip(linkMessage(r, item))).catch(() => {});
   return {
     ...ok({
       guest: r.guest,
@@ -431,7 +489,7 @@ async function book(client: Client, c: Ctx, b: Json): Promise<Answer & { charged
     guildSettings: c.settings,
     token: c.token,
     product,
-    booker: { id: c.userId, name: c.name, username: c.member.user.username, email: deps.email(c.guildId, c.userId) },
+    booker: { id: c.userId, name: c.name, username: c.member!.user.username, email: c.email },
     start,
     end,
     title: str(b, "title", 100) ?? (guestName ? `${guestName} (guest of ${c.name})` : "Room booking"),
@@ -478,6 +536,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
+    if (c.test && ["cowork", "guestpass", "book"].includes(endpoint)) return reply(fail("You're signed in as a test user: pay in euros.", 403));
     if (endpoint === "options") return reply(await options(c));
     if (endpoint === "availability") return reply(await availability(c, body));
     if (endpoint === "orgs") return reply(await orgs(c));
