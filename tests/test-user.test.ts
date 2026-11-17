@@ -238,3 +238,12 @@ Deno.test("cancel a room: a credit note by the terms, set against the invoice, t
     expect((await post("cancelbooking", { invoiceId: 12345 })).status).toBe(404);
   });
 });
+
+Deno.test("invoice-orgs: the member → organisations map, for chb", async () => {
+  await withWebsite(async () => {
+    await Deno.mkdir(`${Deno.env.get("DATA_DIR")}/${GUILD}`, { recursive: true });
+    await Deno.writeTextFile(`${Deno.env.get("DATA_DIR")}/${GUILD}/invoice-orgs.json`, JSON.stringify({ "689614876515237925": [5315] }));
+    const r = await handleWebsiteRequest(new Request("http://bot/api/website/invoice-orgs", { method: "POST", headers: { Authorization: `Bearer ${TOKEN}` }, body: JSON.stringify({ guildId: GUILD }) }), "/api/website/invoice-orgs", null);
+    expect(await r.json()).toEqual({ ok: true, orgs: { "689614876515237925": [5315] } });
+  });
+});

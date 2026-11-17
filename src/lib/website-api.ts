@@ -577,6 +577,16 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
   const endpoint = path.slice("/api/website/".length);
   // Signing in with an email address: not on behalf of a member yet (src/lib/email-login.ts).
   if (endpoint.startsWith("login/")) return reply(await handleLogin(endpoint, body));
+  // Which organisations each member invoices through the website ({discordId: [Odoo partner ids]}), for chb's recaps.
+  if (endpoint === "invoice-orgs") {
+    const guildId = typeof body.guildId === "string" && /^\d{5,25}$/.test(body.guildId) ? body.guildId : "";
+    if (!guildId) return reply(fail("guildId is required"));
+    try {
+      return reply(ok({ orgs: JSON.parse(await Deno.readTextFile(`${getEnv("DATA_DIR") || "/data"}/${guildId}/invoice-orgs.json`)) }));
+    } catch {
+      return reply(ok({ orgs: {} }));
+    }
+  }
   if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
