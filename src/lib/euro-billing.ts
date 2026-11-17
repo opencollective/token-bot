@@ -334,31 +334,146 @@ async function readJsonl<T>(path: string): Promise<T[]> {
   }
 }
 
-export type MyBooking = Booked & { invoice: { id: number; number: string; total: number; communication: string }; status: "paid" | "partial" | "pending" };
+// ── Cancellation (Commons Hub terms, section 3: shop.commonshub.brussels/terms, linked on every invoice) ──
+//
+// Full refund up to 30 days before, 50% between 30 and 7 days, none within 7 days. A refund is a
+// credit note on the invoice (reconciled with it when it is still unpaid); when the invoice was
+// already paid, stewards are told to pay the refund back (the bot never moves money).
+
+export const CANCELLATION_POLICY = "Full refund up to 30 days before, 50% between 30 and 7 days before, no refund within 7 days (Commons Hub terms, section 3).";
+
+/** The share refunded when cancelling now, by the Commons Hub terms. */
+export function refundPercent(start: Date, now = new Date()): 0 | 50 | 100 {
+  const days = (start.getTime() - now.getTime()) / 86_400_000;
+  return days >= 30 ? 100 : days >= 7 ? 50 : 0;
+}
+
+type BookingEvent = { invoiceId: number; calendarId: string; eventId: string };
+type Cancellation = { invoiceId: number; userId: string; refundPercent: number; creditNote?: { id: number; number: string; total: number }; refundDue?: number; at: string };
+const eventsFile = (guildId: string) => `${getEnv("DATA_DIR") || "/data"}/${guildId}/website-booking-events.jsonl`;
+const cancelsFile = (guildId: string) => `${getEnv("DATA_DIR") || "/data"}/${guildId}/website-cancellations.jsonl`;
+
+async function appendJsonl(path: string, row: unknown) {
+  await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+  await Deno.writeTextFile(path, JSON.stringify(row) + "\n", { append: true });
+}
+
+/** The calendar event of a room booked in euros (made after its invoice), for cancelling it later. */
+export async function recordBookingEvent(guildId: string, invoiceId: number, calendarId: string, eventId: string) {
+  await appendJsonl(eventsFile(guildId), { invoiceId, calendarId, eventId });
+}
+
+export type MyBooking = Booked & {
+  /** due: what is left to pay on it (after payments and credit notes). */
+  invoice: { id: number; number: string; total: number; communication: string; pdfUrl: string | null; due: number };
+  status: "paid" | "partial" | "pending" | "cancelled";
+  /** A room not started yet: what cancelling now refunds. */
+  cancel?: { refundPercent: number; refund: number };
+  /** Cancelled: the credit note, if any. */
+  creditNote?: { number: string; total: number; pdfUrl: string | null };
+};
+
+type MoveRead = { id: number; name: string; payment_state: string; access_token: string | false; amount_total: number; amount_residual: number };
+
+/** The invoice PDF as the customer portal serves it (the link Odoo emails them). */
+const pdfUrl = (base: string, m: Pick<MoveRead, "id" | "access_token"> | undefined) =>
+  base && m && m.access_token ? `${base.replace(/\/$/, "")}/my/invoices/${m.id}?access_token=${m.access_token}&report_type=pdf&download=true` : null;
 
 /**
- * A member's upcoming bookings paid in euros (rooms not over yet, coworking from today), with
- * whether the invoice is paid: in Odoo (paid, or in payment), or by card on the website (the
- * Stripe payment reaches Odoo with chb's hourly sync, so the card record covers the gap).
+ * A member's bookings paid in euros, with their invoice (and its PDF) and whether it is paid: in
+ * Odoo (paid, or in payment), or by card on the website (the Stripe payment reaches Odoo with
+ * chb's hourly sync, so the card record covers the gap). Upcoming: rooms not over yet and
+ * coworking from today, soonest first. Past: over within the last year, latest first.
  */
-export async function myBookings(odoo: OdooCall, guildId: string, userId: string, now = new Date()): Promise<MyBooking[]> {
+export async function myBookings(odoo: OdooCall, guildId: string, userId: string, { now = new Date(), past = false, odooUrl = "" } = {}): Promise<MyBooking[]> {
   const today = now.toLocaleDateString("en-CA", { timeZone: "Europe/Brussels" });
+  const yearAgo = new Date(now.getTime() - 365 * 86_400_000);
+  const upcoming = (b: Booked) => (b.kind === "room" ? new Date(b.end) > now : b.date >= today);
+  const recent = (b: Booked) => (b.kind === "room" ? new Date(b.end) > yearAgo : b.date >= yearAgo.toISOString().slice(0, 10));
+  const cancels = new Map((await readJsonl<Cancellation>(cancelsFile(guildId))).filter((c) => c.userId === userId).map((c) => [c.invoiceId, c]));
   const mine = (await readJsonl<InvoiceRecord>(invoicesFile(guildId))).filter((r) =>
-    r.userId === userId && r.booking && (r.booking.kind === "room" ? new Date(r.booking.end) > now : r.booking.date >= today)
+    r.userId === userId && r.booking && (past ? (!upcoming(r.booking) || cancels.has(r.invoiceId)) && recent(r.booking) : upcoming(r.booking) && !cancels.has(r.invoiceId))
   );
   if (!mine.length) return [];
   const card = new Set((await readJsonl<CardPaid>(paidFile(guildId))).filter((c) => c.userId === userId).map((c) => c.invoiceId));
-  const states = new Map(
-    ((await odoo("account.move", "read", { ids: mine.map((r) => r.invoiceId), fields: ["payment_state"] })) as { id: number; payment_state: string }[]).map((m) => [m.id, m.payment_state]),
-  );
+  const ids = [...mine.map((r) => r.invoiceId), ...mine.flatMap((r) => (cancels.get(r.invoiceId)?.creditNote ? [cancels.get(r.invoiceId)!.creditNote!.id] : []))];
+  const moves = new Map(((await odoo("account.move", "read", { ids, fields: ["name", "payment_state", "access_token", "amount_total", "amount_residual"] })) as MoveRead[]).map((m) => [m.id, m]));
+  const startOf = (b: Booked) => (b.kind === "room" ? b.start : b.date);
   return mine
-    .filter((r) => states.has(r.invoiceId) && states.get(r.invoiceId) !== "reversed")
-    .map((r) => {
-      const st = states.get(r.invoiceId);
-      const status = card.has(r.invoiceId) || st === "paid" || st === "in_payment" ? "paid" as const : st === "partial" ? "partial" as const : "pending" as const;
-      return { ...r.booking!, invoice: { id: r.invoiceId, number: r.number, total: r.total, communication: r.communication ?? r.number }, status };
+    .filter((r) => moves.has(r.invoiceId))
+    .map((r): MyBooking => {
+      const m = moves.get(r.invoiceId)!;
+      const c = cancels.get(r.invoiceId);
+      const st = m.payment_state;
+      const status = c ? "cancelled" as const : card.has(r.invoiceId) || st === "paid" || st === "in_payment" || st === "reversed" ? "paid" as const : st === "partial" ? "partial" as const : "pending" as const;
+      const b = r.booking!;
+      const refund = b.kind === "room" && !c && new Date(b.start) > now ? refundPercent(new Date(b.start), now) : null;
+      return {
+        ...b,
+        invoice: { id: r.invoiceId, number: r.number, total: r.total, communication: r.communication ?? r.number, pdfUrl: pdfUrl(odooUrl, m), due: status === "paid" ? 0 : Math.max(0, m.amount_residual ?? 0) },
+        status,
+        ...(refund !== null ? { cancel: { refundPercent: refund, refund: Math.round(r.total * refund) / 100 } } : {}),
+        ...(c?.creditNote ? { creditNote: { number: c.creditNote.number, total: c.creditNote.total, pdfUrl: pdfUrl(odooUrl, moves.get(c.creditNote.id)) } } : {}),
+      };
     })
-    .sort((a, b) => (a.kind === "room" ? a.start : a.date).localeCompare(b.kind === "room" ? b.start : b.date));
+    .sort((a, b) => (past ? startOf(b).localeCompare(startOf(a)) : startOf(a).localeCompare(startOf(b))));
+}
+
+/**
+ * Cancel a member's room booked in euros, before it starts: free the calendar (not for a test
+ * user's, which was never booked), and refund by the terms with a credit note. Returns what the
+ * member is told; `notify` is called when a paid invoice needs a refund paid back.
+ */
+export async function cancelBooking(
+  odoo: OdooCall,
+  p: { guildId: string; userId: string; invoiceId: number; now?: Date; deleteEvent?: (calendarId: string, eventId: string) => Promise<void>; notify?: (text: string) => Promise<void> },
+): Promise<{ ok: true; refundPercent: number; creditNote: { number: string; total: number } | null; refundDue: number } | { ok: false; error: string; status: number }> {
+  const now = p.now ?? new Date();
+  const r = (await readJsonl<InvoiceRecord>(invoicesFile(p.guildId))).find((x) => x.userId === p.userId && x.invoiceId === p.invoiceId);
+  if (!r || r.booking?.kind !== "room") return { ok: false, error: "That booking isn't yours, or it can't be cancelled here.", status: 404 };
+  if ((await readJsonl<Cancellation>(cancelsFile(p.guildId))).some((c) => c.invoiceId === p.invoiceId)) return { ok: false, error: "This booking is already cancelled.", status: 409 };
+  const start = new Date(r.booking.start);
+  if (start <= now) return { ok: false, error: "This booking has already started.", status: 409 };
+  const percent = refundPercent(start, now);
+
+  const ev = (await readJsonl<BookingEvent>(eventsFile(p.guildId))).find((e) => e.invoiceId === p.invoiceId);
+  if (ev && p.deleteEvent) await p.deleteEvent(ev.calendarId, ev.eventId);
+
+  const [inv] = (await odoo("account.move", "read", { ids: [p.invoiceId], fields: ["name", "partner_id", "journal_id", "payment_state", "amount_total"] })) as { name: string; partner_id: [number, string]; journal_id: [number, string]; payment_state: string; amount_total: number }[];
+  let creditNote: { id: number; number: string; total: number } | null = null;
+  if (percent > 0) {
+    const lines = (await odoo("account.move.line", "search_read", {
+      domain: [["move_id", "=", p.invoiceId], ["display_type", "=", "product"]],
+      fields: ["name", "quantity", "price_unit", "discount", "account_id", "tax_ids"],
+    })) as { name: string; quantity: number; price_unit: number; discount: number; account_id: [number, string]; tax_ids: number[] }[];
+    const [refundId] = (await odoo("account.move", "create", {
+      vals_list: [{
+        move_type: "out_refund",
+        journal_id: inv.journal_id[0],
+        partner_id: inv.partner_id[0],
+        reversed_entry_id: p.invoiceId,
+        ref: `Cancellation of ${inv.name}${percent < 100 ? ` (${percent}% refund, Commons Hub terms)` : ""}`,
+        invoice_line_ids: lines.map((l) => [0, 0, { name: `${l.name} (cancelled${percent < 100 ? `, ${percent}% refunded` : ""})`, quantity: l.quantity, price_unit: Math.round(l.price_unit * percent) / 100, discount: l.discount, account_id: l.account_id[0], tax_ids: [[6, 0, l.tax_ids]] }]),
+      }],
+    })) as number[];
+    await odoo("account.move", "action_post", { ids: [refundId] });
+    const [cn] = (await odoo("account.move", "read", { ids: [refundId], fields: ["name", "amount_total"] })) as { name: string; amount_total: number }[];
+    creditNote = { id: refundId, number: cn.name, total: cn.amount_total };
+    // Still unpaid: the credit note settles (part of) the invoice.
+    if (!["paid", "in_payment"].includes(inv.payment_state)) {
+      const [line] = (await odoo("account.move.line", "search_read", { domain: [["move_id", "=", refundId], ["account_id.account_type", "=", "asset_receivable"], ["reconciled", "=", false]], fields: ["id"], limit: 1 })) as { id: number }[];
+      if (line) await odoo("account.move", "js_assign_outstanding_line", { ids: [p.invoiceId], line_id: line.id }).catch((e) => console.error("[euro-billing] could not reconcile the credit note:", e));
+    }
+    await emailInvoice(odoo, refundId);
+  }
+  const card = (await readJsonl<CardPaid>(paidFile(p.guildId))).some((c) => c.invoiceId === p.invoiceId);
+  const wasPaid = card || ["paid", "in_payment"].includes(inv.payment_state);
+  const refundDue = wasPaid && creditNote ? creditNote.total : 0;
+  await appendJsonl(cancelsFile(p.guildId), { invoiceId: p.invoiceId, userId: p.userId, refundPercent: percent, ...(creditNote ? { creditNote } : {}), ...(refundDue ? { refundDue } : {}), at: now.toISOString() });
+  if (refundDue && p.notify) {
+    await p.notify(`Booking cancelled on the website: ${r.booking.label}, ${r.booking.start}. Invoice ${inv.name} was paid${card ? " by card (Stripe)" : ""}; credit note ${creditNote!.number}: please refund €${refundDue.toFixed(2)} to the member.`).catch((e) => console.error("[euro-billing] could not notify stewards:", e));
+  }
+  return { ok: true, refundPercent: percent, creditNote: creditNote ? { number: creditNote.number, total: creditNote.total } : null, refundDue };
 }
 
 /** The website saw this invoice paid by card (Stripe Checkout): note it, if it is this member's. */

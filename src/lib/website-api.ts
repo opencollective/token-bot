@@ -27,7 +27,7 @@ import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin } from "./email-login.ts";
-import { coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordCardPayment, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
+import { CANCELLATION_POLICY, cancelBooking, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
 type Json = Record<string, unknown>;
@@ -112,7 +112,22 @@ type Deps = {
   /** The test copy of Odoo, for test users (null when not configured). */
   testOdoo(): OdooCall | null;
   vies: typeof lookupVat;
+  /** Free a room's calendar slot when a booking is cancelled. */
+  deleteEvent(calendarId: string, eventId: string): Promise<void>;
+  /** Tell the stewards something needs doing (a refund to pay back). */
+  notifyStewards(text: string): Promise<void>;
 };
+
+async function emailStewards(text: string) {
+  const apiKey = getEnv("RESEND_API_KEY");
+  if (!apiKey) throw new Error("RESEND_API_KEY not set");
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: "Commons Hub Brussels <hello@commonshub.brussels>", to: [getEnv("STEWARDS_EMAIL") || "hello@commonshub.brussels"], subject: "Refund to pay: booking cancelled on the website", text }),
+  });
+  if (!res.ok) throw new Error(`Resend answered ${res.status}`);
+}
 
 const DEFAULT_DEPS: Deps = {
   member: async (client, guildId, userId) => {
@@ -142,6 +157,8 @@ const DEFAULT_DEPS: Deps = {
   odoo: () => (odooConfigured() ? odooFromEnv() : null),
   testOdoo: () => (odooTestConfigured() ? odooTestFromEnv() : null),
   vies: lookupVat,
+  deleteEvent: (calendarId, eventId) => new GoogleCalendarClient().deleteEvent(calendarId, eventId),
+  notifyStewards: emailStewards,
 };
 let deps: Deps = DEFAULT_DEPS;
 /** For tests. */
@@ -150,7 +167,7 @@ export function _setWebsiteDeps(next?: Partial<Deps>) {
 }
 
 /** member is null for a test user (test: true), whose odoo is the test copy. */
-type Ctx = { guildId: string; userId: string; member: GuildMember | null; name: string; email?: string; settings: GuildSettings; token: Token; odoo: OdooCall | null; test: boolean };
+type Ctx = { guildId: string; userId: string; member: GuildMember | null; name: string; email?: string; settings: GuildSettings; token: Token; odoo: OdooCall | null; test: boolean; odooUrl: string };
 
 async function testContext(body: Json): Promise<Ctx | Answer> {
   const guildId = typeof body.guildId === "string" ? body.guildId : "";
@@ -163,7 +180,7 @@ async function testContext(body: Json): Promise<Ctx | Answer> {
   const token = shopToken(settings);
   if (!settings || !token) return fail("Booking is not available right now.", 503);
   const name = (typeof t.name === "string" && t.name.trim().slice(0, 80)) || "Test user";
-  return { guildId, userId: `test-${partnerId}`, member: null, name, email, settings, token, odoo: deps.testOdoo(), test: true };
+  return { guildId, userId: `test-${partnerId}`, member: null, name, email, settings, token, odoo: deps.testOdoo(), test: true, odooUrl: getEnv("ODOO_TEST_URL") || "" };
 }
 
 async function context(client: Client | null, body: Json): Promise<Ctx | Answer> {
@@ -179,7 +196,7 @@ async function context(client: Client | null, body: Json): Promise<Ctx | Answer>
   const token = shopToken(settings);
   if (!settings || !token) return fail("Paying with tokens is not available right now.", 503);
   const name = member.displayName || member.user.globalName || member.user.username;
-  return { guildId, userId, member, name, email: deps.email(guildId, userId), settings, token, odoo: deps.odoo(), test: false };
+  return { guildId, userId, member, name, email: deps.email(guildId, userId), settings, token, odoo: deps.odoo(), test: false, odooUrl: getEnv("ODOO_URL") || "" };
 }
 
 const isAnswer = (x: Ctx | Answer): x is Answer => "status" in x && "body" in x;
@@ -357,6 +374,7 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
     },
   });
   if (!r.ok) return { ...fail(r.error, r.status), ...(invoice ? { charged: true } : {}) };
+  if (invoice && r.eventId) await recordBookingEvent(c.guildId, (invoice as Invoice).id, product.calendarId!, r.eventId).catch((e) => console.error("[website-api] could not record the booking's event:", e));
   return {
     ...ok({
       room: { slug: product.slug, name: product.name },
@@ -425,9 +443,19 @@ async function payCowork(c: Ctx, b: Json): Promise<Answer & { charged?: boolean 
 }
 
 /** Upcoming bookings paid in euros, and whether each invoice is paid. */
-async function mine(c: Ctx): Promise<Answer> {
-  if (!c.odoo) return ok({ bookings: [] });
-  return ok({ bookings: await myBookings(c.odoo, c.guildId, c.userId) });
+async function mine(c: Ctx, b: Json): Promise<Answer> {
+  if (!c.odoo) return ok({ bookings: [], policy: CANCELLATION_POLICY });
+  return ok({ bookings: await myBookings(c.odoo, c.guildId, c.userId, { past: b.past === true || b.past === "yes", odooUrl: c.odooUrl }), policy: CANCELLATION_POLICY });
+}
+
+/** Cancel one of the member's rooms paid in euros (refund by the terms, as a credit note). */
+async function cancelRoom(c: Ctx, b: Json): Promise<Answer> {
+  const odoo = needOdoo(c);
+  if (!isOdoo(odoo)) return odoo;
+  const invoiceId = Number(b.invoiceId);
+  if (!Number.isInteger(invoiceId) || invoiceId <= 0) return fail("invoiceId is required");
+  const r = await cancelBooking(odoo, { guildId: c.guildId, userId: c.userId, invoiceId, ...(c.test ? {} : { deleteEvent: deps.deleteEvent }), notify: c.test ? undefined : deps.notifyStewards });
+  return r.ok ? ok({ refundPercent: r.refundPercent, creditNote: r.creditNote, refundDue: r.refundDue }) : fail(r.error, r.status);
 }
 
 /** The website checked with Stripe that this invoice is paid by card (Checkout session). */
@@ -549,7 +577,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
   const endpoint = path.slice("/api/website/".length);
   // Signing in with an email address: not on behalf of a member yet (src/lib/email-login.ts).
   if (endpoint.startsWith("login/")) return reply(await handleLogin(endpoint, body));
-  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid"].includes(endpoint)) return reply(fail("Not found", 404));
+  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
@@ -559,7 +587,8 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     if (endpoint === "orgs") return reply(await orgs(c));
     if (endpoint === "org") return reply(await org(c, body));
     if (endpoint === "vat") return reply(await vat(body));
-    if (endpoint === "mine") return reply(await mine(c));
+    if (endpoint === "mine") return reply(await mine(c, body));
+    if (endpoint === "cancelbooking") return reply(await cancelRoom(c, body));
     if (endpoint === "paid") return reply(await paid(c, body));
     const run = endpoint === "cowork"
       ? () => cowork(client!, c, body)

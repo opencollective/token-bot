@@ -5,6 +5,7 @@
  */
 import { expect } from "@std/expect/expect";
 import { _setLoginDeps, requestCode, verifyCode } from "../src/lib/email-login.ts";
+import { refundPercent } from "../src/lib/euro-billing.ts";
 import { _resetNeutralizedCheck, isTestEmail, odooTestFromEnv, type OdooCall } from "../src/lib/odoo.ts";
 import { _setWebsiteDeps, handleWebsiteRequest } from "../src/lib/website-api.ts";
 import { _setRoomBookingDeps } from "../src/lib/room-booking.ts";
@@ -23,6 +24,7 @@ function env(vars: Record<string, string>) {
 function testOdoo(partners: { id: number; name: string; email: string }[] = []) {
   const created: Record<string, unknown>[] = [];
   const invoices: unknown[] = [];
+  const refunds: unknown[] = [];
   let next = 9000;
   const odoo: OdooCall = async (model, method, args = {}) => {
     if (model === "res.partner" && method === "search_read") {
@@ -43,15 +45,23 @@ function testOdoo(partners: { id: number; name: string; email: string }[] = []) 
     if (model === "res.country") return [{ id: 21 }];
     if (model === "account.account") return [{ id: 555 }];
     if (model === "account.move") {
+      if (method === "create" && (args.vals_list as Record<string, unknown>[])[0].move_type === "out_refund") return refunds.push(args) && [701];
       if (method === "create") return invoices.push(args) && [700];
       if (method === "action_post") return true;
-      if (method === "read" && (args.fields as string[]).includes("payment_state")) return (args.ids as number[]).map((id) => ({ id, payment_state: "not_paid" }));
+      if (method === "read" && (args.fields as string[]).includes("partner_id") && (args.fields as string[]).includes("journal_id")) return [{ name: "2026_RCC_T1", partner_id: [9000, "Test user"], journal_id: [11, "RCC"], payment_state: "not_paid", amount_total: 50.82 }];
+      if (method === "read" && (args.fields as string[]).includes("payment_state")) return (args.ids as number[]).map((id) => ({ id, name: id === 701 ? "2026_RCC_CN1" : "2026_RCC_T1", payment_state: "not_paid", access_token: "tok", amount_total: 50.82, amount_residual: 50.82 }));
+      if (method === "read" && (args.ids as number[])[0] === 701) return [{ name: "2026_RCC_CN1", amount_total: 50.82 }];
+      if (method === "js_assign_outstanding_line") return true;
       if (method === "read") return [{ name: "2026_RCC_T1", amount_untaxed: 42, amount_tax: 8.82, amount_total: 50.82, payment_reference: "+++000/0070/00011+++", invoice_date_due: "2026-12-01", partner_id: [9000, "Test user"] }];
+    }
+    if (model === "account.move.line" && method === "search_read") {
+      const d = args.domain as unknown[][];
+      return d.some((x) => x[0] === "display_type") ? [{ name: "Satoshi Room, Tue 8 Jan 2030 09:00–10:00", quantity: 1, price_unit: 60, discount: 30, account_id: [555, "700003"], tax_ids: [163] }] : [{ id: 8001 }];
     }
     if (model === "account.move.send.wizard") return method === "create" ? [1] : true;
     throw new Error(`unexpected ${model}.${method}`);
   };
-  return { odoo, created, invoices };
+  return { odoo, created, invoices, refunds };
 }
 
 Deno.test("only listed addresses are test users", () => {
@@ -201,5 +211,30 @@ Deno.test("my bookings: upcoming ones with their invoice, pending until paid by 
     expect((await (await post("paid", { invoiceId: 700, sessionId: "cs_test_1" })).json()).ok).toBe(true);
     m = await (await post("mine", {})).json();
     expect(m.bookings.every((b: { status: string }) => b.status === "paid")).toBe(true); // both invoices are 700 in this fake
+  });
+});
+
+Deno.test("refunds by the Commons Hub terms: full from 30 days, half from 7, none after", () => {
+  const now = new Date("2026-11-01T10:00:00Z");
+  const at = (days: number) => new Date(now.getTime() + days * 86_400_000);
+  expect([refundPercent(at(31), now), refundPercent(at(30), now), refundPercent(at(29), now), refundPercent(at(7), now), refundPercent(at(6.9), now)]).toEqual([100, 100, 50, 50, 0]);
+});
+
+Deno.test("cancel a room: a credit note by the terms, set against the invoice, then it's in the past bookings", async () => {
+  await withWebsite(async (t) => {
+    const start = new Date(Date.UTC(2030, 0, 8, 8, 0));
+    await post("paybook", { requestId: "req-test-0020", room: "satoshi", start: start.toISOString(), end: new Date(start.getTime() + 3600000).toISOString(), org: "self" });
+    let m = await (await post("mine", {})).json();
+    expect(m.bookings[0]).toMatchObject({ cancel: { refundPercent: 100, refund: 50.82 }, invoice: { pdfUrl: null } });
+    expect(m.policy).toMatch(/30 days/);
+    const r = await (await post("cancelbooking", { invoiceId: 700 })).json();
+    expect(r).toMatchObject({ ok: true, refundPercent: 100, creditNote: { number: "2026_RCC_CN1" }, refundDue: 0 });
+    expect(t.refunds.length).toBe(1);
+    expect((await post("cancelbooking", { invoiceId: 700 })).status).toBe(409);
+    m = await (await post("mine", {})).json();
+    expect(m.bookings).toEqual([]);
+    const past = await (await post("mine", { past: true })).json();
+    expect(past.bookings[0]).toMatchObject({ status: "cancelled", creditNote: { number: "2026_RCC_CN1" } });
+    expect((await post("cancelbooking", { invoiceId: 12345 })).status).toBe(404);
   });
 });

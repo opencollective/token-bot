@@ -138,7 +138,7 @@ Deno.test("VIES: valid numbers fill in name and address", async () => {
     return new Response(JSON.stringify({ isValid: true, name: "ACME SRL", address: "RUE B 2\n1050 IXELLES" }));
   }) as typeof fetch;
   expect(await lookupVat("BE 0123.456.789", fetcher)).toEqual({ valid: true, name: "ACME SRL", address: { street: "RUE B 2", zip: "1050", city: "IXELLES", country: "BE" } });
-  expect(await lookupVat("nope")).toEqual({ valid: false });
+  expect(await lookupVat("nope", (async () => new Response(JSON.stringify({ isValid: false }))) as unknown as typeof fetch)).toEqual({ valid: false });
 });
 
 // ── Website endpoints ───────────────────────────────────────────────────────
