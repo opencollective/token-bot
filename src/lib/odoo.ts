@@ -9,6 +9,9 @@ import { getEnv } from "./utils.ts";
 
 export type OdooCall = (model: string, method: string, args?: Record<string, unknown>) => Promise<unknown>;
 
+/** `=ilike` in Odoo is SQL ILIKE: % and _ in a value (an email address) must not act as wildcards. */
+export const likeLiteral = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 export function odooConfigured(): boolean {
   return !!(getEnv("ODOO_URL") && getEnv("ODOO_DB") && getEnv("ODOO_API_KEY"));
 }

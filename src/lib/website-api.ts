@@ -21,6 +21,7 @@ import { isGuildMember } from "../commands/guestpass.ts";
 import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { odooConfigured, odooFromEnv, type OdooCall } from "./odoo.ts";
+import { handleLogin } from "./email-login.ts";
 import { coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, type OrgInput, quote, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
@@ -471,6 +472,8 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     return reply(fail("Invalid JSON body"));
   }
   const endpoint = path.slice("/api/website/".length);
+  // Signing in with an email address: not on behalf of a member yet (src/lib/email-login.ts).
+  if (endpoint.startsWith("login/")) return reply(await handleLogin(endpoint, body));
   if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);

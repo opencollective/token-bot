@@ -17,7 +17,7 @@
  * it with the invoice by its number, which the website puts on the Stripe Checkout.
  */
 import { getEnv } from "./utils.ts";
-import type { OdooCall } from "./odoo.ts";
+import { likeLiteral, type OdooCall } from "./odoo.ts";
 
 export const MEMBER_DISCOUNT = 30;
 export const VAT_RATE = 21;
@@ -115,11 +115,11 @@ const addressOf = (p: Partner): Address => ({ street: s(p.street), zip: s(p.zip)
 export async function selfPartner(odoo: OdooCall, email: string | undefined): Promise<Partner | null> {
   if (!email) return null;
   const found = (await odoo("res.partner", "search_read", {
-    domain: [["email", "=ilike", email], ["is_company", "=", false]],
+    domain: [["email", "=ilike", likeLiteral(email.trim())], ["is_company", "=", false]],
     fields: PARTNER_FIELDS,
-    limit: 1,
+    limit: 5,
   })) as Partner[];
-  return found[0] ?? null;
+  return found.find((p) => s(p.email).trim().toLowerCase() === email.trim().toLowerCase()) ?? null;
 }
 
 async function billingChild(odoo: OdooCall, parentId: number): Promise<Partner | null> {
