@@ -304,7 +304,7 @@ Deno.test("/api/website/availability: price for the span, refusals with a reason
   await withEnv(async () => {
     baseDeps({ conflicts: async () => [] });
     const start = future(12).toISOString(), end = future(14).toISOString();
-    expect(await (await post("availability", { room: "mushroom", start, end })).json()).toEqual({ ok: true, available: true, price: 2 });
+    expect(await (await post("availability", { room: "mushroom", start, end })).json()).toMatchObject({ ok: true, available: true, price: 2, eur: { untaxed: 56, vat: 11.76, total: 67.76 } });
     baseDeps({ conflicts: async () => [{ start, end }] });
     expect(await (await post("availability", { room: "mushroom", start, end })).json()).toMatchObject({ ok: true, available: false, conflicts: [{ start, end }] });
     const odd = await (await post("availability", { room: "mushroom", start: future(12).toISOString(), end: new Date(future(12).getTime() + 10 * 60000).toISOString() })).json();

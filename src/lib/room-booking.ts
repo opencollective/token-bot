@@ -76,6 +76,11 @@ export type RoomBookingRequest = {
   guest?: { name: string; email?: string };
   eventUrl?: string;
   via: "website";
+  /**
+   * Paid in euros: makes the invoice instead of taking tokens, once the room is known to be free
+   * (nothing is booked when it fails).
+   */
+  invoice?: () => Promise<{ ok: true; number: string; total: number } | { ok: false; error: string; status: number }>;
 };
 
 export type RoomBookingResult =
@@ -174,8 +179,8 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
   const invalid = checkRoomRequest(product, start, end, tz);
   if (invalid) return { ok: false, error: invalid, status: 400 };
   const perHour = tokenPricePerHour(product, token);
-  if (perHour === null) return { ok: false, error: `${product.name} can't be paid with tokens.`, status: 400 };
-  const price = roomPrice(perHour, start, end);
+  if (perHour === null && !p.invoice) return { ok: false, error: `${product.name} can't be paid with tokens.`, status: 400 };
+  let price = p.invoice ? 0 : roomPrice(perHour!, start, end);
   const title = p.title.replace(/[\r\n]+/g, " ").trim().slice(0, 100) || "Room booking";
   const guest = p.guest?.name.trim() ? { name: p.guest.name.replace(/[\r\n<>@]+/g, " ").trim().slice(0, 60), email: p.guest.email } : undefined;
 
@@ -198,16 +203,30 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
     if (!guestDoor) return { ok: false, error: "Door links can't be made right now (the door key is not configured). Nothing was charged; tell a steward.", status: 503 };
   }
 
-  const paid = await deps.burn(p.booker.id, token, price, `${product.name} for ${hm(start, tz)}–${hm(end, tz)}`);
-  if (!paid.ok) return { ok: false, error: paid.error, status: 402 };
-  const txUrl = txUrlFor(token, paid.hash);
+  // Paid: tokens burnt, or (in euros) the invoice made. `hash` is the invoice number then.
+  let paid: { ok: true; hash: string; balanceAfter: number };
+  let amount: string;
+  if (p.invoice) {
+    const invoice = await p.invoice();
+    if (!invoice.ok) return { ok: false, error: invoice.error, status: invoice.status };
+    paid = { ok: true, hash: invoice.number, balanceAfter: NaN };
+    price = invoice.total;
+    amount = `€${invoice.total.toFixed(2)} (invoice ${invoice.number})`;
+  } else {
+    const burnt = await deps.burn(p.booker.id, token, price, `${product.name} for ${hm(start, tz)}–${hm(end, tz)}`);
+    if (!burnt.ok) return { ok: false, error: burnt.error, status: 402 };
+    paid = burnt;
+    amount = `${price.toFixed(2)} ${token.symbol}`;
+  }
+  const eur = !!p.invoice;
+  const txUrl = eur ? "" : txUrlFor(token, paid.hash);
   const calendarUrl = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(product.calendarId)}&ctz=${encodeURIComponent(tz)}`;
   const forWhom = guest ? ` for ${guest.name} (guest)` : "";
-  const line = `🗓️ <@${p.booker.id}> booked ${product.name}${forWhom} on ${dayLabel(start, tz)} from ${hm(start, tz)} till ${hm(end, tz)} for ${price.toFixed(2)} ${token.symbol} on the website [[calendar](<${calendarUrl}>)] [[tx](<${txUrl}>)]`;
+  const line = `🗓️ <@${p.booker.id}> booked ${product.name}${forWhom} on ${dayLabel(start, tz)} from ${hm(start, tz)} till ${hm(end, tz)} for ${amount} on the website [[calendar](<${calendarUrl}>)]${eur ? "" : ` [[tx](<${txUrl}>)]`}`;
 
   let reportUrl = "";
   const channelId = p.guildSettings.channels?.transactions;
-  if (channelId && p.client) {
+  if (channelId && p.client && !eur) {
     try {
       reportUrl = (await deps.report({ client: p.client, channelId, content: line, uris: [txUriFor(token.chain, paid.hash)], currency: token.symbol, category: "rental" })).url;
     } catch (error) {
@@ -216,11 +235,11 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
   }
 
   const now = new Date();
-  const description = `Booked by ${p.booker.name} (@${p.booker.username})${guest ? ` on behalf of ${guest.name} (guest)` : ""} on the website on ${dayLabel(now, tz)} at ${hm(now, tz)} for ${price.toFixed(2)} ${token.symbol}\n` +
-    `${calendarPaidLine(price, token.symbol)}${calendarTermsLine(token.symbol)}` +
+  const description = `Booked by ${p.booker.name} (@${p.booker.username})${guest ? ` on behalf of ${guest.name} (guest)` : ""} on the website on ${dayLabel(now, tz)} at ${hm(now, tz)} for ${amount}\n` +
+    (eur ? `Paid in euros: invoice ${paid.hash}, €${price.toFixed(2)} incl. VAT.\n` : `${calendarPaidLine(price, token.symbol)}${calendarTermsLine(token.symbol)}`) +
     (reportUrl ? `\n${reportUrl}` : "") +
     (p.eventUrl ? `\nEvent URL: ${p.eventUrl}` : "") +
-    `\n\nPlease reach out to @${p.booker.username} on Discord for questions about this booking.\n\nTo cancel, ${p.booker.name} needs to run the /cancel command in Discord.\n\nUser ID: ${p.booker.id}\nBooking TX: ${paid.hash}\nBooking Chain: ${token.chain}`;
+    `\n\nPlease reach out to @${p.booker.username} on Discord for questions about this booking.\n\nTo cancel, ${p.booker.name} needs to run the /cancel command in Discord.\n\nUser ID: ${p.booker.id}\n${eur ? `Invoice: ${paid.hash}` : `Booking TX: ${paid.hash}\nBooking Chain: ${token.chain}`}`;
   const event: Record<string, unknown> = {
     summary: title,
     description,
@@ -239,18 +258,20 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
     return {
       ok: false,
       status: 502,
-      error: `${conflict ? `Someone booked ${product.name} at that time just before you` : "The booking could not be saved in the calendar"}, after your payment of ${price.toFixed(2)} tokens went through. A steward will refund you: ask in Discord with this transaction.`,
+      error: eur
+        ? `${conflict ? `Someone booked ${product.name} at that time just before you` : "The booking could not be saved in the calendar"}, after invoice ${paid.hash} was made. Don't pay it: a steward will cancel it (ask in Discord).`
+        : `${conflict ? `Someone booked ${product.name} at that time just before you` : "The booking could not be saved in the calendar"}, after your payment of ${price.toFixed(2)} tokens went through. A steward will refund you: ask in Discord with this transaction.`,
       paid: { hash: paid.hash, txUrl },
     };
   }
   deps.invalidate();
-  await deps.annotate({ chain: token.chain, txHash: paid.hash, roomName: product.name, roomSlug: product.slug, durationMinutes: Math.round((end.getTime() - start.getTime()) / 60000) });
+  if (!eur) await deps.annotate({ chain: token.chain, txHash: paid.hash, roomName: product.name, roomSlug: product.slug, durationMinutes: Math.round((end.getTime() - start.getTime()) / 60000) });
   if (product.channelId && p.client) await deps.roomMessage(p.client, product.channelId, line).catch((error) => console.error("[room-booking] room channel:", error));
 
   // Emails: the guest (booker in cc), or the booker's own record. Same email as /book.
-  const uid = created.eventId ? `${created.eventId}@commonshub.brussels` : `${paid.hash}-0@commonshub.brussels`;
+  const uid = created.eventId ? `${created.eventId}@commonshub.brussels` : `${paid.hash.replace(/[^\w-]/g, "-")}-0@commonshub.brussels`;
   const occurrences = [{ start, end }];
-  const common = { uids: [uid], rates: ratesFromPrices(product.price, product.capacity), eventName: title, roomName: product.name, occurrences, priceTotal: price, tokenSymbol: token.symbol, eventUrl: p.eventUrl, txUrl, bookingId: paid.hash };
+  const common = { uids: [uid], rates: ratesFromPrices(product.price, product.capacity), eventName: title, roomName: product.name, occurrences, priceTotal: price, tokenSymbol: eur ? "EUR" : token.symbol, ...(eur ? { paidText: `€${price.toFixed(2)} incl. VAT, invoice ${paid.hash}` } : {}), eventUrl: p.eventUrl, txUrl: txUrl || undefined, bookingId: paid.hash };
   let emailed: boolean | null = null;
   if (guest?.email) {
     const door = await doorFor(guest.name);
@@ -268,7 +289,7 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
         guestName: guest.name, guestEmail: guest.email,
         bookerId: p.booker.id, bookerName: p.booker.name, bookerEmail: p.booker.email,
         eventName: title, start: start.toISOString(), end: end.toISOString(), eventUrl: p.eventUrl,
-        tokenSymbol: token.symbol, priceTotal: price, status: "active",
+        tokenSymbol: eur ? "EUR" : token.symbol, priceTotal: price, status: "active",
       }).catch((error) => console.error("[room-booking] could not record the guest booking:", error));
     }
   } else if (!guest && p.booker.email) {

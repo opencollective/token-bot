@@ -258,6 +258,8 @@ export interface BookingEmailDetails {
   occurrences: { start: Date; end: Date }[];
   priceTotal: number;
   tokenSymbol: string;
+  /** Overrides the "Paid:" line (a booking paid by invoice: "€50.82 incl. VAT, invoice …"). */
+  paidText?: string;
   eventUrl?: string;
   txUrl?: string;
   bookingId: string;
@@ -303,7 +305,7 @@ export function buildBookingEmail(d: BookingEmailDetails, costs: MonthlyCosts): 
     ? `If you have any question about this booking, please contact ${d.bookerName} (${d.bookerEmail}), who booked it for you and is in cc of this email: just reply to this email.`
     : `If you have any question about this booking, please contact ${d.bookerName}, who booked it for you.`;
   const price = `${Number(d.priceTotal.toFixed(2))} ${d.tokenSymbol}`;
-  const paid = paidLine(d.priceTotal, d.tokenSymbol);
+  const paid = d.paidText ?? paidLine(d.priceTotal, d.tokenSymbol);
   const paidWithTime = !/^eur/i.test(d.tokenSymbol);
   // Paying with tokens is not the same service as paying in euros: said where the payment is, else under the token rates.
   const ratesShown = !!d.rates && kind !== "cancelled";
