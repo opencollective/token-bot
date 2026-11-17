@@ -20,6 +20,8 @@ import { txUrlFor } from "./mint.ts";
 import { isGuildMember } from "../commands/guestpass.ts";
 import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
+import { odooConfigured, odooFromEnv, type OdooCall } from "./odoo.ts";
+import { coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, type OrgInput, quote, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
 type Json = Record<string, unknown>;
@@ -99,6 +101,9 @@ type Deps = {
   conflicts(calendarId: string, start: Date, end: Date): Promise<{ start: string; end: string }[]>;
   dm(member: GuildMember, content: string): Promise<unknown>;
   email(guildId: string, userId: string): string | undefined;
+  /** Odoo, for paying in euros (null when not configured). */
+  odoo(): OdooCall | null;
+  vies: typeof lookupVat;
 };
 
 const DEFAULT_DEPS: Deps = {
@@ -126,6 +131,8 @@ const DEFAULT_DEPS: Deps = {
   },
   dm: (member, content) => member.send({ content }),
   email: getUserEmail,
+  odoo: () => (odooConfigured() ? odooFromEnv() : null),
+  vies: lookupVat,
 };
 let deps: Deps = DEFAULT_DEPS;
 /** For tests. */
@@ -179,8 +186,22 @@ async function options(c: Ctx): Promise<Answer> {
     rooms,
     terms: { cowork: COWORKING_TOKEN_TERMS, room: ROOM_TOKEN_TERMS },
     disclaimer: PASS_DISCLAIMER,
+    // Paying in euros, by card or invoice: members get MEMBER_DISCOUNT % off, then VAT.
+    eur: {
+      available: !!deps.odoo(),
+      memberDiscount: MEMBER_DISCOUNT,
+      vatRate: VAT_RATE,
+      cowork: Object.fromEntries(SHOP_ITEMS.map((i) => [i.id, quote([coworkLine(i.label, coworkEur(i.id), true, "today")])])),
+    },
   });
 }
+
+/** The euro price of a coworking item, before VAT and discount. */
+const coworkEur = (id: string) => (id === "coworking-half-day" ? COWORKING_EUR["half-day"] : COWORKING_EUR["day"]);
+const fmtDay = (d: Date, tz: string) => d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: tz });
+const fmtHm = (d: Date, tz: string) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: tz });
+const roomEurLine = (product: Product, start: Date, end: Date, tz: string) =>
+  roomLine(product.name, eurPricePerHour(product) ?? 0, (end.getTime() - start.getTime()) / 3600000, true, `${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`);
 
 async function findRoom(c: Ctx, slug: unknown): Promise<Product | null> {
   // Only rooms that can be paid with tokens, as listed in options.
@@ -194,14 +215,151 @@ async function availability(c: Ctx, b: Json): Promise<Answer> {
   const perHour = tokenPricePerHour(product, c.token)!;
   const tz = c.settings.guild?.timezone || "Europe/Brussels";
   const reason = checkRoomRequest(product, start, end, tz);
-  if (reason) return ok({ available: false, reason, price: isNaN(end.getTime() - start.getTime()) || end <= start ? 0 : roomPrice(perHour, start, end) });
+  const valid = !isNaN(end.getTime() - start.getTime()) && end > start;
+  const eur = valid && eurPricePerHour(product) !== null ? { eur: quote([roomEurLine(product, start, end, tz)]) } : {};
+  if (reason) return ok({ available: false, reason, price: valid ? roomPrice(perHour, start, end) : 0, ...eur });
   const conflicts = await deps.conflicts(product.calendarId!, start, end).catch(() => null);
   if (conflicts === null) return fail("We couldn't check the room's calendar right now.", 503);
   return ok({
     available: conflicts.length === 0,
     ...(conflicts.length ? { reason: `${product.name} is not free then.`, conflicts } : {}),
     price: roomPrice(perHour, start, end),
+    ...eur,
   });
+}
+
+// ── Paying in euros ─────────────────────────────────────────────────────────
+
+function needOdoo(): OdooCall | Answer {
+  return deps.odoo() ?? fail("Paying in euros is not available right now: pay with tokens or ask in Discord.", 503);
+}
+const isOdoo = (x: OdooCall | Answer): x is OdooCall => typeof x === "function";
+
+async function orgs(c: Ctx): Promise<Answer> {
+  const odoo = needOdoo();
+  if (!isOdoo(odoo)) return odoo;
+  const email = deps.email(c.guildId, c.userId);
+  return ok({ orgs: await listOrgs(odoo, c.guildId, c.userId, email), me: { name: c.name, email: email ?? null } });
+}
+
+const addr = (b: Json, prefix: string) => ({
+  street: str(b, `${prefix}street`, 120) ?? "",
+  zip: str(b, `${prefix}zip`, 12) ?? "",
+  city: str(b, `${prefix}city`, 80) ?? "",
+  country: (str(b, `${prefix}country`, 2) ?? "BE").toUpperCase(),
+});
+
+async function org(c: Ctx, b: Json): Promise<Answer> {
+  const odoo = needOdoo();
+  if (!isOdoo(odoo)) return odoo;
+  const id = Number(str(b, "id", 12));
+  const input: OrgInput = {
+    ...(id ? { id } : {}),
+    name: str(b, "name", 120) ?? "",
+    vat: str(b, "vat", 20),
+    email: str(b, "email", 200) ?? "",
+    address: addr(b, ""),
+    billing: str(b, "billing", 5) === "yes" ? addr(b, "billing") : null,
+  };
+  const r = await saveOrg(odoo, c.guildId, c.userId, deps.email(c.guildId, c.userId), input);
+  return r.ok ? ok({ org: r.org }) : fail(r.error, r.status);
+}
+
+async function vat(b: Json): Promise<Answer> {
+  const number = str(b, "vat", 20);
+  if (!number) return fail("Give a VAT number.");
+  try {
+    return ok({ result: await deps.vies(number) });
+  } catch (error) {
+    console.error("[website-api] VIES:", error);
+    return fail("The EU VAT check (VIES) is not answering right now: fill in the details yourself.", 503);
+  }
+}
+
+const invoiceTo = (b: Json): number | "self" | null => {
+  const v = str(b, "org", 12);
+  if (v === "self") return "self";
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {
+  const odoo = needOdoo();
+  if (!isOdoo(odoo)) return odoo;
+  const to = invoiceTo(b);
+  if (!to) return fail("Choose who we invoice.");
+  const product = await findRoom(c, b.room);
+  if (!product) return fail("Unknown room.", 404);
+  if (eurPricePerHour(product) === null) return fail(`${product.name} can't be paid in euros here.`);
+  const guestName = str(b, "guestName", 60);
+  const guestEmail = normalizeEmail(str(b, "guestEmail", 200));
+  if (guestEmail === null) return fail("That guest email doesn't look valid.");
+  if (guestEmail && !guestName) return fail("Tell us your guest's name.");
+  const start = new Date(String(b.start ?? "")), end = new Date(String(b.end ?? ""));
+  const tz = c.settings.guild?.timezone || "Europe/Brussels";
+  const title = str(b, "title", 100) ?? (guestName ? `${guestName} (guest of ${c.name})` : "Room booking");
+  let invoice: Invoice | null = null;
+  const r = await deps.roomBooking({
+    client,
+    guildId: c.guildId,
+    guildSettings: c.settings,
+    token: c.token,
+    product,
+    booker: { id: c.userId, name: c.name, username: c.member.user.username, email: deps.email(c.guildId, c.userId) },
+    start,
+    end,
+    title,
+    ...(guestName ? { guest: { name: guestName, ...(guestEmail ? { email: guestEmail } : {}) } } : {}),
+    via: "website",
+    invoice: async () => {
+      const made = await createInvoice(odoo, {
+        guildId: c.guildId,
+        userId: c.userId,
+        member: { name: c.name, email: deps.email(c.guildId, c.userId) },
+        to,
+        lines: [roomEurLine(product, start, end, tz)],
+        ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
+      });
+      if (!made.ok) return made;
+      invoice = made.invoice;
+      return { ok: true, number: made.invoice.number, total: made.invoice.total };
+    },
+  });
+  if (!r.ok) return { ...fail(r.error, r.status), ...(invoice ? { charged: true } : {}) };
+  return {
+    ...ok({
+      room: { slug: product.slug, name: product.name },
+      start: start.toISOString(),
+      end: end.toISOString(),
+      title,
+      eventId: r.eventId ?? null,
+      invoice,
+      emailed: guestName ? undefined : r.emailed,
+      ...(guestName ? { guest: { name: guestName, emailed: guestEmail ? r.emailed : null, ...(r.passUrl ? { passUrl: r.passUrl } : {}) } } : {}),
+    }),
+    charged: true,
+  };
+}
+
+async function payCowork(c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {
+  const odoo = needOdoo();
+  if (!isOdoo(odoo)) return odoo;
+  const to = invoiceTo(b);
+  if (!to) return fail("Choose who we invoice.");
+  const item = findShopItem(str(b, "item", 40) ?? "coworking-day");
+  if (!item) return fail("Unknown item.");
+  const tz = c.settings.guild?.timezone || "Europe/Brussels";
+  const today = fmtDay(new Date(), tz);
+  const made = await createInvoice(odoo, {
+    guildId: c.guildId,
+    userId: c.userId,
+    member: { name: c.name, email: deps.email(c.guildId, c.userId) },
+    to,
+    lines: [coworkLine(item.label.replace(/^Contributor c/, "C"), coworkEur(item.id), true, today)],
+    ref: `${item.label.replace(/^Contributor c/, "C")} ${today}`,
+  });
+  if (!made.ok) return fail(made.error, made.status);
+  return { ...ok({ item: itemJson(item), invoice: made.invoice }), charged: true };
 }
 
 async function cowork(client: Client, c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {
@@ -313,13 +471,24 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     return reply(fail("Invalid JSON body"));
   }
   const endpoint = path.slice("/api/website/".length);
-  if (!["options", "availability", "cowork", "guestpass", "book"].includes(endpoint)) return reply(fail("Not found", 404));
+  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
     if (endpoint === "options") return reply(await options(c));
     if (endpoint === "availability") return reply(await availability(c, body));
-    const run = endpoint === "cowork" ? () => cowork(client!, c, body) : endpoint === "guestpass" ? () => guestPass(client!, c, body) : () => book(client!, c, body);
+    if (endpoint === "orgs") return reply(await orgs(c));
+    if (endpoint === "org") return reply(await org(c, body));
+    if (endpoint === "vat") return reply(await vat(body));
+    const run = endpoint === "cowork"
+      ? () => cowork(client!, c, body)
+      : endpoint === "guestpass"
+      ? () => guestPass(client!, c, body)
+      : endpoint === "paybook"
+      ? () => payBook(client!, c, body)
+      : endpoint === "paycowork"
+      ? () => payCowork(c, body)
+      : () => book(client!, c, body);
     return reply(await once(c.guildId, c.userId, body.requestId, run));
   } catch (error) {
     console.error(`[website-api] ${endpoint} failed:`, error);
