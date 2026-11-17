@@ -102,7 +102,7 @@ async function loginPartner(odoo: OdooCall, email: string): Promise<Partner | nu
   const found = await partnerByEmail(odoo, email);
   if (!isTestEmail(email)) return found;
   if (found) return { ...found, test: true };
-  const [id] = (await odoo("res.partner", "create", { vals_list: [{ name: "Test user", email, comment: "Website test user (TEST_LOGIN_EMAILS), created by the bot." }] })) as number[];
+  const [id] = (await odoo("res.partner", "create", { vals_list: [{ name: "Test user", email, lang: "en_GB", comment: "Website test user (TEST_LOGIN_EMAILS), created by the bot." }] })) as number[];
   return { id, name: "Test user", email, test: true };
 }
 

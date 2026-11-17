@@ -61,7 +61,17 @@ export type Org = {
   billing: (Address & { id: number }) | null;
   /** The member themselves, no company. */
   self?: boolean;
+  /** The language Odoo writes to them in (invoice emails): en_GB, fr_BE or nl_BE. */
+  lang: Lang;
+  /** Saved as new but already in Odoo (same VAT number): linked, its details kept as they were. */
+  existing?: boolean;
 };
+
+export const LANGS = ["en_GB", "fr_BE", "nl_BE"] as const;
+export type Lang = typeof LANGS[number];
+/** English unless the member picks French or Dutch (Odoo's own default here is Dutch). */
+export const DEFAULT_LANG: Lang = "en_GB";
+const asLang = (v: unknown): Lang | null => (LANGS as readonly string[]).includes(String(v)) ? v as Lang : null;
 export type OrgInput = {
   id?: number;
   name: string;
@@ -69,6 +79,7 @@ export type OrgInput = {
   email: string;
   address: Address;
   billing?: Address | null;
+  lang?: string;
 };
 
 const orgsFile = (guildId: string) => `${getEnv("DATA_DIR") || "/data"}/${guildId}/invoice-orgs.json`;
@@ -106,8 +117,9 @@ type Partner = {
   country_code?: string | false;
   type?: string;
   parent_id?: [number, string] | false;
+  lang?: string | false;
 };
-const PARTNER_FIELDS = ["id", "name", "vat", "email", "street", "zip", "city", "country_id", "country_code", "type", "parent_id"];
+const PARTNER_FIELDS = ["id", "name", "vat", "email", "street", "zip", "city", "country_id", "country_code", "type", "parent_id", "lang"];
 const s = (v: string | false | undefined | null) => (typeof v === "string" ? v : "");
 const addressOf = (p: Partner): Address => ({ street: s(p.street), zip: s(p.zip), city: s(p.city), country: s(p.country_code) || "BE" });
 
@@ -140,6 +152,7 @@ async function toOrg(odoo: OdooCall, p: Partner, self = false): Promise<Org> {
     email: s(p.email) || null,
     address: addressOf(p),
     billing: b ? { id: b.id, ...addressOf(b) } : null,
+    lang: asLang(p.lang) ?? DEFAULT_LANG,
     ...(self ? { self: true } : {}),
   };
 }
@@ -192,14 +205,25 @@ export async function saveOrg(odoo: OdooCall, guildId: string, userId: string, e
     city: input.address.city.trim(),
     country_id: await countryId(odoo, input.address.country || "BE"),
     vat: cleanVat(input.vat) || false,
+    ...(asLang(input.lang) ? { lang: asLang(input.lang) } : input.id ? {} : { lang: DEFAULT_LANG }),
   };
   let id = input.id;
   if (id) {
     await odoo("res.partner", "write", { ids: [id], vals });
   } else {
+    // A company already in our books (same VAT number): link it rather than make a duplicate, and keep its details.
+    const vatNumber = cleanVat(input.vat);
+    const same = vatNumber
+      ? ((await odoo("res.partner", "search_read", { domain: [["vat", "=ilike", likeLiteral(vatNumber)], ["is_company", "=", true], ["active", "=", true]], fields: PARTNER_FIELDS, order: "id asc", limit: 1 })) as Partner[])[0]
+      : undefined;
+    if (same) {
+      await addOrgId(guildId, userId, same.id);
+      return { ok: true, org: { ...(await toOrg(odoo, same)), existing: true } };
+    }
     id = ((await odoo("res.partner", "create", { vals_list: [{ ...vals, is_company: true }] })) as number[])[0];
     await addOrgId(guildId, userId, id);
   }
+  const lang = asLang(input.lang);
 
   const existing = await billingChild(odoo, id);
   if (input.billing) {
@@ -209,8 +233,10 @@ export async function saveOrg(odoo: OdooCall, guildId: string, userId: string, e
       city: input.billing.city.trim(),
       country_id: await countryId(odoo, input.billing.country || input.address.country || "BE"),
     };
-    if (existing) await odoo("res.partner", "write", { ids: [existing.id], vals: b });
-    else await odoo("res.partner", "create", { vals_list: [{ ...b, parent_id: id, type: "invoice", name: "Billing address", email: input.email.trim() }] });
+    // Invoices go to this contact: its email and language are the organisation's.
+    const contact = { ...b, email: input.email.trim(), ...(lang ? { lang } : {}) };
+    if (existing) await odoo("res.partner", "write", { ids: [existing.id], vals: contact });
+    else await odoo("res.partner", "create", { vals_list: [{ ...contact, parent_id: id, type: "invoice", name: "Billing address", lang: lang ?? DEFAULT_LANG }] });
   } else if (existing) {
     await odoo("res.partner", "write", { ids: [existing.id], vals: { active: false } });
   }
@@ -293,6 +319,59 @@ async function emailInvoice(odoo: OdooCall, moveId: number): Promise<boolean> {
  * Create, post and email an invoice. `to` is one of the member's organisations, or "self" (their
  * own partner, created from their Discord name and email when Odoo doesn't know them yet).
  */
+/** A room (start, end) or coworking on a day (Brussels date), as booked. */
+export type Booked = { kind: "room"; label: string; start: string; end: string; guest?: string } | { kind: "cowork"; label: string; date: string };
+
+type InvoiceRecord = { invoiceId: number; number: string; userId: string; total: number; communication?: string; booking?: Booked; at: string };
+type CardPaid = { invoiceId: number; userId: string; sessionId: string; at: string };
+const paidFile = (guildId: string) => `${getEnv("DATA_DIR") || "/data"}/${guildId}/website-card-payments.jsonl`;
+
+async function readJsonl<T>(path: string): Promise<T[]> {
+  try {
+    return (await Deno.readTextFile(path)).split("\n").filter(Boolean).map((l) => JSON.parse(l) as T);
+  } catch {
+    return [];
+  }
+}
+
+export type MyBooking = Booked & { invoice: { id: number; number: string; total: number; communication: string }; status: "paid" | "partial" | "pending" };
+
+/**
+ * A member's upcoming bookings paid in euros (rooms not over yet, coworking from today), with
+ * whether the invoice is paid: in Odoo (paid, or in payment), or by card on the website (the
+ * Stripe payment reaches Odoo with chb's hourly sync, so the card record covers the gap).
+ */
+export async function myBookings(odoo: OdooCall, guildId: string, userId: string, now = new Date()): Promise<MyBooking[]> {
+  const today = now.toLocaleDateString("en-CA", { timeZone: "Europe/Brussels" });
+  const mine = (await readJsonl<InvoiceRecord>(invoicesFile(guildId))).filter((r) =>
+    r.userId === userId && r.booking && (r.booking.kind === "room" ? new Date(r.booking.end) > now : r.booking.date >= today)
+  );
+  if (!mine.length) return [];
+  const card = new Set((await readJsonl<CardPaid>(paidFile(guildId))).filter((c) => c.userId === userId).map((c) => c.invoiceId));
+  const states = new Map(
+    ((await odoo("account.move", "read", { ids: mine.map((r) => r.invoiceId), fields: ["payment_state"] })) as { id: number; payment_state: string }[]).map((m) => [m.id, m.payment_state]),
+  );
+  return mine
+    .filter((r) => states.has(r.invoiceId) && states.get(r.invoiceId) !== "reversed")
+    .map((r) => {
+      const st = states.get(r.invoiceId);
+      const status = card.has(r.invoiceId) || st === "paid" || st === "in_payment" ? "paid" as const : st === "partial" ? "partial" as const : "pending" as const;
+      return { ...r.booking!, invoice: { id: r.invoiceId, number: r.number, total: r.total, communication: r.communication ?? r.number }, status };
+    })
+    .sort((a, b) => (a.kind === "room" ? a.start : a.date).localeCompare(b.kind === "room" ? b.start : b.date));
+}
+
+/** The website saw this invoice paid by card (Stripe Checkout): note it, if it is this member's. */
+export async function recordCardPayment(guildId: string, userId: string, invoiceId: number, sessionId: string): Promise<boolean> {
+  const own = (await readJsonl<InvoiceRecord>(invoicesFile(guildId))).some((r) => r.userId === userId && r.invoiceId === invoiceId);
+  if (!own) return false;
+  const path = paidFile(guildId);
+  if ((await readJsonl<CardPaid>(path)).some((c) => c.invoiceId === invoiceId)) return true;
+  await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+  await Deno.writeTextFile(path, JSON.stringify({ invoiceId, userId, sessionId, at: new Date().toISOString() }) + "\n", { append: true });
+  return true;
+}
+
 export async function createInvoice(odoo: OdooCall, p: {
   guildId: string;
   userId: string;
@@ -300,12 +379,14 @@ export async function createInvoice(odoo: OdooCall, p: {
   to: number | "self";
   lines: InvoiceLine[];
   ref: string;
+  /** What was booked, kept with the invoice in website-invoices.jsonl (for the member's dashboard). */
+  booking?: Booked;
 }): Promise<{ ok: true; invoice: Invoice } | { ok: false; error: string; status: number }> {
   let partnerId: number;
   if (p.to === "self") {
     const me = await selfPartner(odoo, p.member.email);
     if (me) partnerId = me.id;
-    else if (p.member.email) partnerId = ((await odoo("res.partner", "create", { vals_list: [{ name: p.member.name, email: p.member.email }] })) as number[])[0];
+    else if (p.member.email) partnerId = ((await odoo("res.partner", "create", { vals_list: [{ name: p.member.name, email: p.member.email, lang: DEFAULT_LANG }] })) as number[])[0];
     else return { ok: false, error: "We don't have your email address: add an organisation to invoice instead.", status: 400 };
   } else {
     const mine = await userOrgIds(p.guildId, p.userId);
@@ -334,7 +415,7 @@ export async function createInvoice(odoo: OdooCall, p: {
   const emailed = await emailInvoice(odoo, moveId);
   const path = invoicesFile(p.guildId);
   await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
-  await Deno.writeTextFile(path, JSON.stringify({ invoiceId: moveId, number: m.name, userId: p.userId, total: m.amount_total, at: new Date().toISOString() }) + "\n", { append: true });
+  await Deno.writeTextFile(path, JSON.stringify({ invoiceId: moveId, number: m.name, userId: p.userId, total: m.amount_total, communication: s(m.payment_reference) || m.name, ...(p.booking ? { booking: p.booking } : {}), at: new Date().toISOString() }) + "\n", { append: true });
   return {
     ok: true,
     invoice: {
