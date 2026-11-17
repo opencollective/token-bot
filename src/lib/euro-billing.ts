@@ -61,7 +61,17 @@ export type Org = {
   billing: (Address & { id: number }) | null;
   /** The member themselves, no company. */
   self?: boolean;
+  /** The language Odoo writes to them in (invoice emails): en_GB, fr_BE or nl_BE. */
+  lang: Lang;
+  /** Saved as new but already in Odoo (same VAT number): linked, its details kept as they were. */
+  existing?: boolean;
 };
+
+export const LANGS = ["en_GB", "fr_BE", "nl_BE"] as const;
+export type Lang = typeof LANGS[number];
+/** English unless the member picks French or Dutch (Odoo's own default here is Dutch). */
+export const DEFAULT_LANG: Lang = "en_GB";
+const asLang = (v: unknown): Lang | null => (LANGS as readonly string[]).includes(String(v)) ? v as Lang : null;
 export type OrgInput = {
   id?: number;
   name: string;
@@ -69,6 +79,7 @@ export type OrgInput = {
   email: string;
   address: Address;
   billing?: Address | null;
+  lang?: string;
 };
 
 const orgsFile = (guildId: string) => `${getEnv("DATA_DIR") || "/data"}/${guildId}/invoice-orgs.json`;
@@ -106,8 +117,9 @@ type Partner = {
   country_code?: string | false;
   type?: string;
   parent_id?: [number, string] | false;
+  lang?: string | false;
 };
-const PARTNER_FIELDS = ["id", "name", "vat", "email", "street", "zip", "city", "country_id", "country_code", "type", "parent_id"];
+const PARTNER_FIELDS = ["id", "name", "vat", "email", "street", "zip", "city", "country_id", "country_code", "type", "parent_id", "lang"];
 const s = (v: string | false | undefined | null) => (typeof v === "string" ? v : "");
 const addressOf = (p: Partner): Address => ({ street: s(p.street), zip: s(p.zip), city: s(p.city), country: s(p.country_code) || "BE" });
 
@@ -140,6 +152,7 @@ async function toOrg(odoo: OdooCall, p: Partner, self = false): Promise<Org> {
     email: s(p.email) || null,
     address: addressOf(p),
     billing: b ? { id: b.id, ...addressOf(b) } : null,
+    lang: asLang(p.lang) ?? DEFAULT_LANG,
     ...(self ? { self: true } : {}),
   };
 }
@@ -192,14 +205,25 @@ export async function saveOrg(odoo: OdooCall, guildId: string, userId: string, e
     city: input.address.city.trim(),
     country_id: await countryId(odoo, input.address.country || "BE"),
     vat: cleanVat(input.vat) || false,
+    ...(asLang(input.lang) ? { lang: asLang(input.lang) } : input.id ? {} : { lang: DEFAULT_LANG }),
   };
   let id = input.id;
   if (id) {
     await odoo("res.partner", "write", { ids: [id], vals });
   } else {
+    // A company already in our books (same VAT number): link it rather than make a duplicate, and keep its details.
+    const vatNumber = cleanVat(input.vat);
+    const same = vatNumber
+      ? ((await odoo("res.partner", "search_read", { domain: [["vat", "=ilike", likeLiteral(vatNumber)], ["is_company", "=", true], ["active", "=", true]], fields: PARTNER_FIELDS, order: "id asc", limit: 1 })) as Partner[])[0]
+      : undefined;
+    if (same) {
+      await addOrgId(guildId, userId, same.id);
+      return { ok: true, org: { ...(await toOrg(odoo, same)), existing: true } };
+    }
     id = ((await odoo("res.partner", "create", { vals_list: [{ ...vals, is_company: true }] })) as number[])[0];
     await addOrgId(guildId, userId, id);
   }
+  const lang = asLang(input.lang);
 
   const existing = await billingChild(odoo, id);
   if (input.billing) {
@@ -209,8 +233,10 @@ export async function saveOrg(odoo: OdooCall, guildId: string, userId: string, e
       city: input.billing.city.trim(),
       country_id: await countryId(odoo, input.billing.country || input.address.country || "BE"),
     };
-    if (existing) await odoo("res.partner", "write", { ids: [existing.id], vals: b });
-    else await odoo("res.partner", "create", { vals_list: [{ ...b, parent_id: id, type: "invoice", name: "Billing address", email: input.email.trim() }] });
+    // Invoices go to this contact: its email and language are the organisation's.
+    const contact = { ...b, email: input.email.trim(), ...(lang ? { lang } : {}) };
+    if (existing) await odoo("res.partner", "write", { ids: [existing.id], vals: contact });
+    else await odoo("res.partner", "create", { vals_list: [{ ...contact, parent_id: id, type: "invoice", name: "Billing address", lang: lang ?? DEFAULT_LANG }] });
   } else if (existing) {
     await odoo("res.partner", "write", { ids: [existing.id], vals: { active: false } });
   }
@@ -360,7 +386,7 @@ export async function createInvoice(odoo: OdooCall, p: {
   if (p.to === "self") {
     const me = await selfPartner(odoo, p.member.email);
     if (me) partnerId = me.id;
-    else if (p.member.email) partnerId = ((await odoo("res.partner", "create", { vals_list: [{ name: p.member.name, email: p.member.email }] })) as number[])[0];
+    else if (p.member.email) partnerId = ((await odoo("res.partner", "create", { vals_list: [{ name: p.member.name, email: p.member.email, lang: DEFAULT_LANG }] })) as number[])[0];
     else return { ok: false, error: "We don't have your email address: add an organisation to invoice instead.", status: 400 };
   } else {
     const mine = await userOrgIds(p.guildId, p.userId);

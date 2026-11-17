@@ -286,6 +286,7 @@ async function org(c: Ctx, b: Json): Promise<Answer> {
     email: str(b, "email", 200) ?? "",
     address: addr(b, ""),
     billing: str(b, "billing", 5) === "yes" ? addr(b, "billing") : null,
+    lang: str(b, "lang", 5),
   };
   const r = await saveOrg(odoo, c.guildId, c.userId, c.email, input);
   return r.ok ? ok({ org: r.org }) : fail(r.error, r.status);

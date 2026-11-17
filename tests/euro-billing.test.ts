@@ -216,3 +216,31 @@ Deno.test("coworking in euros, and euro payments off without Odoo", async () => 
     expect(res.status).toBe(503);
   });
 });
+
+Deno.test("invoices speak English unless the organisation picks French or Dutch; the billing contact follows", async () => {
+  await withDataDir(async () => {
+    const { odoo, partners } = fakeOdoo();
+    const saved = await saveOrg(odoo, GUILD, USER, "xavier@example.org", { ...ACME, billing: { street: "PO Box 12", zip: "1040", city: "Etterbeek", country: "BE" } });
+    if (!saved.ok) throw new Error(saved.error);
+    expect(saved.org.lang).toBe("en_GB");
+    const child = () => Object.values(partners).find((p) => p.type === "invoice" && p.active !== false)!;
+    expect(child()).toMatchObject({ lang: "en_GB", email: "billing@acme.example" });
+    const fr = await saveOrg(odoo, GUILD, USER, "xavier@example.org", { ...ACME, id: saved.org.id, email: "compta@acme.example", lang: "fr_BE", billing: { street: "PO Box 12", zip: "1040", city: "Etterbeek", country: "BE" } });
+    expect(fr.ok && fr.org.lang).toBe("fr_BE");
+    expect(child()).toMatchObject({ lang: "fr_BE", email: "compta@acme.example" });
+    // Not one of the three: left as it was.
+    const odd = await saveOrg(odoo, GUILD, USER, "xavier@example.org", { ...ACME, id: saved.org.id, lang: "de_DE" });
+    expect(odd.ok && odd.org.lang).toBe("fr_BE");
+  });
+});
+
+Deno.test("a company already in Odoo (same VAT number) is linked, not duplicated, and its details kept", async () => {
+  await withDataDir(async () => {
+    const { odoo, partners, calls } = fakeOdoo();
+    partners[47] = { id: 47, name: "Acme SRL (in our books)", email: "ap@acme.example", is_company: true, vat: "BE0123456789", street: "Rue C 3", zip: "1000", city: "Brussels", country_code: "BE", type: "contact", parent_id: false, active: true, lang: "nl_BE" };
+    const saved = await saveOrg(odoo, GUILD, USER, "xavier@example.org", { ...ACME, name: "ACME" });
+    expect(saved.ok && saved.org).toMatchObject({ id: 47, name: "Acme SRL (in our books)", existing: true, lang: "nl_BE" });
+    expect(calls.some((c) => c.model === "res.partner" && (c.method === "create" || c.method === "write"))).toBe(false);
+    expect((await listOrgs(odoo, GUILD, USER, "xavier@example.org")).map((o) => o.id)).toContain(47);
+  });
+});
