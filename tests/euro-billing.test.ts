@@ -33,6 +33,7 @@ function fakeOdoo() {
   const odoo: OdooCall = async (model, method, args = {}) => {
     calls.push({ model, method, args });
     if (model === "res.partner") {
+      if (method === "message_post") return 1;
       if (method === "search_read") return Object.values(partners).filter((p) => p.active !== false && match(p, args.domain as unknown[][])).slice(0, 1);
       if (method === "read") return (args.ids as number[]).map((id) => partners[id]).filter(Boolean);
       if (method === "create") {
@@ -47,6 +48,7 @@ function fakeOdoo() {
         return true;
       }
     }
+    if (model === "res.partner" && method === "message_post") return 1;
     if (model === "res.country") return [{ id: 21 }];
     if (model === "account.account") return [{ id: 555 }];
     if (model === "account.move") {
@@ -260,7 +262,7 @@ Deno.test("the company Odoo has a member as a contact of is one of their organis
   });
 });
 
-Deno.test("emailUser: someone known to Odoo by email sees their organisations and bookings, nothing else", async () => {
+Deno.test("emailUser: someone known to Odoo by email sees their organisations and bookings, pays in euros only", async () => {
   const { odoo, partners } = fakeOdoo();
   partners[127] = { id: 127, name: "RCR ASBL", email: "admin@rcr.example", is_company: true, vat: false, street: "Rue D 4", zip: "1000", city: "Brussels", country_code: "BE", type: "contact", parent_id: false, active: true };
   partners[1276] = { id: 1276, name: "Barbara", email: "barbara@donut.example", is_company: false, vat: false, street: false, zip: false, city: false, country_code: false, type: "contact", parent_id: [127, "RCR ASBL"], active: true };
@@ -270,7 +272,95 @@ Deno.test("emailUser: someone known to Odoo by email sees their organisations an
     expect(r.orgs.map((o: { id: number; contact?: boolean }) => [o.id, !!o.contact])).toEqual([[127, true], [1276, false]]);
     expect(r.me).toEqual({ name: "Barbara", email: "barbara@donut.example" });
     expect((await (await as("mine", "barbara@donut.example")).json()).ok).toBe(true);
-    expect((await as("paybook", "barbara@donut.example")).status).toBe(403);
+    expect((await as("book", "barbara@donut.example")).status).toBe(403);
     expect((await as("orgs", "nobody@donut.example")).status).toBe(404);
+  });
+});
+
+// ── Room credits ────────────────────────────────────────────────────────────
+
+import { coversRoom, split, usedHours, weekOf } from "../src/lib/room-credits.ts";
+
+Deno.test("room credits: the week, what's covered, what's counted", () => {
+  // Sunday 23:30 in Brussels is still last week; Monday 00:30 starts the next.
+  expect(weekOf(new Date("2026-11-22T22:30:00Z")).label).toBe("2026-11-16");
+  expect(weekOf(new Date("2026-11-22T23:30:00Z")).label).toBe("2026-11-23");
+  expect(weekOf(new Date("2026-11-25T10:00:00Z")).start.toISOString()).toBe("2026-11-22T23:00:00.000Z");
+  expect(split(3, 2, 2)).toEqual({ covered: 1, overflow: 1, leftAfter: 0 });
+  expect(split(3, 0, 1.5)).toEqual({ covered: 1.5, overflow: 0, leftAfter: 1.5 });
+  expect(split(3, 4, 1)).toEqual({ covered: 0, overflow: 1, leftAfter: 0 });
+  expect(usedHours([{ description: "x\nRoom credits: 2 h (organisation 127)\ny" }, { description: "Room credits: 1 h (organisation 99)" }, {}], 127)).toBe(2);
+  const c = { companyId: 127, companyName: "RCR", perWeek: 3, rooms: ["mushroom", "satoshiroom", "phonebooth"], from: null, until: null };
+  expect(coversRoom(c, { slug: "satoshiroom", name: "Satoshi Room" })).toBe(true);
+  expect(coversRoom(c, { slug: "ostromroom", name: "Ostrom Room" })).toBe(false);
+  expect(coversRoom({ ...c, rooms: ["Satoshi"] }, { slug: "satoshiroom", name: "Satoshi Room" })).toBe(true);
+});
+
+Deno.test("room credits: a contact of the organisation books with its credits, the rest is invoiced, cancelling gives the hours back", async () => {
+  const { odoo, calls, partners } = fakeOdoo();
+  partners[127] = { id: 127, name: "RCR ASBL", email: "admin@rcr.example", is_company: true, vat: false, street: "Rue D 4", zip: "1000", city: "Brussels", country_code: "BE", type: "contact", parent_id: false, active: true, x_room_credit_hours: 3, x_room_credit_rooms: "satoshiroom", x_room_credit_from: false, x_room_credit_until: false };
+  partners[7].parent_id = [127, "RCR ASBL"];
+  await withWebsite(odoo, async (events) => {
+    const calendar: { description?: string }[] = [];
+    const deleted: string[] = [];
+    _setWebsiteDeps({ conflicts: async () => [], member: async () => member as never, settings: async () => settings, products: async () => ROOMS, balance: async () => 7, email: () => "xavier@example.org", dm: async () => {}, odoo: () => odoo, events: async () => calendar, deleteEvent: async (_c, id) => void deleted.push(id) });
+    const start = new Date(Date.UTC(2030, 0, 8, 8, 0));
+    const at = (h: number) => new Date(start.getTime() + h * 3600000).toISOString();
+
+    // 2 h, all covered: no invoice, the calendar says so.
+    const r = await (await post("paybook", { requestId: "req-cred-0001", room: "satoshi", start: at(0), end: at(2), org: "127" })).json();
+    expect(r).toMatchObject({ ok: true, invoice: null, credits: { hours: 2, left: 1, perWeek: 3, organisation: "RCR ASBL" } });
+    expect(calls.some((c) => c.model === "account.move" && c.method === "create")).toBe(false);
+    const desc = String(events[0].description);
+    expect(desc).toContain("Paid with room credits: 2 h of RCR ASBL's 3 h per week. 1 h left this week.");
+    expect(desc).toContain("Room credits: 2 h (organisation 127)");
+    const note = calls.find((c) => c.method === "message_post")!;
+    expect(note.args).toMatchObject({ ids: [127] });
+    expect(String(note.args.body)).toMatch(/2 h of room credits, 1 h left this week of 3 h/);
+    calendar.push({ description: desc });
+
+    // 2 h more that week: 1 h covered, 1 h invoiced.
+    const r2 = await (await post("paybook", { requestId: "req-cred-0002", room: "satoshi", start: at(3), end: at(5), org: "127" })).json();
+    expect(r2).toMatchObject({ ok: true, credits: { hours: 1, left: 0 }, invoice: { number: "2026_RCC_0105" } });
+    const move = calls.find((c) => c.model === "account.move" && c.method === "create")!;
+    const line = ((move.args.vals_list as Record<string, unknown>[])[0].invoice_line_ids as unknown[][])[0][2] as Record<string, unknown>;
+    expect(line).toMatchObject({ quantity: 1, price_unit: 60 });
+    expect(String(line.name)).toContain("beyond room credits");
+
+    // On the dashboard, and cancelled before it starts: the event goes.
+    const mine = await (await post("mine", {})).json();
+    const credited = mine.bookings.find((b: { status: string }) => b.status === "credits");
+    expect(credited).toMatchObject({ invoice: null, credits: { hours: 2, organisation: "RCR ASBL" }, cancel: { refundPercent: 100 } });
+    const c = await (await post("cancelbooking", { eventId: credited.eventId })).json();
+    expect(c).toMatchObject({ ok: true, credits: 2 });
+    expect(deleted).toEqual([credited.eventId]);
+    expect((await (await post("cancelbooking", { eventId: credited.eventId })).json()).ok).toBe(false);
+  });
+});
+
+Deno.test("room credits: not for someone who only added the organisation themselves, nor another room", async () => {
+  const { odoo, calls, partners } = fakeOdoo();
+  partners[127] = { id: 127, name: "RCR ASBL", email: "admin@rcr.example", is_company: true, vat: "BE0999999999", street: "Rue D 4", zip: "1000", city: "Brussels", country_code: "BE", type: "contact", parent_id: false, active: true, x_room_credit_hours: 3, x_room_credit_rooms: "mushroom" };
+  partners[7].parent_id = [127, "RCR ASBL"];
+  await withWebsite(odoo, async () => {
+    const start = new Date(Date.UTC(2030, 0, 8, 8, 0));
+    const r = await (await post("paybook", { requestId: "req-cred-0003", room: "satoshi", start: start.toISOString(), end: new Date(start.getTime() + 3600000).toISOString(), org: "127" })).json();
+    expect(r.credits).toBeUndefined();
+    expect(r.invoice.number).toBe("2026_RCC_0105");
+    expect(calls.some((c) => c.method === "message_post")).toBe(false);
+  });
+});
+
+Deno.test("room credits: the availability check says what they'd cover", async () => {
+  const { odoo, partners } = fakeOdoo();
+  partners[127] = { id: 127, name: "RCR ASBL", email: "a@rcr.example", is_company: true, vat: false, street: "Rue D 4", zip: "1000", city: "Brussels", country_code: "BE", type: "contact", parent_id: false, active: true, x_room_credit_hours: 3, x_room_credit_rooms: false };
+  partners[7].parent_id = [127, "RCR ASBL"];
+  await withWebsite(odoo, async () => {
+    _setWebsiteDeps({ conflicts: async () => [], member: async () => member as never, settings: async () => settings, products: async () => ROOMS, balance: async () => 7, email: () => "xavier@example.org", dm: async () => {}, odoo: () => odoo, events: async () => [{ description: "Room credits: 2 h (organisation 127)" }] });
+    const start = new Date(Date.UTC(2030, 0, 8, 8, 0));
+    const a = await (await post("availability", { room: "satoshi", start: start.toISOString(), end: new Date(start.getTime() + 2 * 3600000).toISOString(), org: "127" })).json();
+    expect(a.credits).toMatchObject({ organisation: "RCR ASBL", perWeek: 3, left: 1, covered: 1, overflow: 1, eur: { untaxed: 42 } });
+    const none = await (await post("availability", { room: "satoshi", start: start.toISOString(), end: new Date(start.getTime() + 3600000).toISOString() })).json();
+    expect(none.credits).toBeUndefined();
   });
 });

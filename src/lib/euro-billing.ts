@@ -160,7 +160,7 @@ async function toOrg(odoo: OdooCall, p: Partner, self = false): Promise<Org> {
 }
 
 /** The company the member's own partner is a contact of in Odoo, if any. */
-const companyIdOf = (me: Partner | null): number | null => (me && Array.isArray(me.parent_id) && me.parent_id[0] !== me.id ? me.parent_id[0] : null);
+export const companyIdOf = (me: Pick<Partner, "id" | "parent_id"> | null): number | null => (me && Array.isArray(me.parent_id) && me.parent_id[0] !== me.id ? me.parent_id[0] : null);
 
 /**
  * The organisations this member can invoice: the ones they added, the company Odoo has them as a

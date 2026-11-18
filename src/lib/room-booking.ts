@@ -81,6 +81,11 @@ export type RoomBookingRequest = {
    * (nothing is booked when it fails).
    */
   invoice?: () => Promise<{ ok: true; number: string; total: number } | { ok: false; error: string; status: number }>;
+  /**
+   * Paid (in part) with an organisation's room credits (lib/room-credits.ts): `hours` of them, the
+   * line people read and the mark the bot counts them by. With `invoice` too, it covers the rest.
+   */
+  credits?: { hours: number; line: string; mark: string };
 };
 
 export type RoomBookingResult =
@@ -179,8 +184,8 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
   const invalid = checkRoomRequest(product, start, end, tz);
   if (invalid) return { ok: false, error: invalid, status: 400 };
   const perHour = tokenPricePerHour(product, token);
-  if (perHour === null && !p.invoice) return { ok: false, error: `${product.name} can't be paid with tokens.`, status: 400 };
-  let price = p.invoice ? 0 : roomPrice(perHour!, start, end);
+  if (perHour === null && !p.invoice && !p.credits) return { ok: false, error: `${product.name} can't be paid with tokens.`, status: 400 };
+  let price = p.invoice || p.credits ? 0 : roomPrice(perHour!, start, end);
   const title = p.title.replace(/[\r\n]+/g, " ").trim().slice(0, 100) || "Room booking";
   const guest = p.guest?.name.trim() ? { name: p.guest.name.replace(/[\r\n<>@]+/g, " ").trim().slice(0, 60), email: p.guest.email } : undefined;
 
@@ -206,23 +211,30 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
   // Paid: tokens burnt, or (in euros) the invoice made. `hash` is the invoice number then.
   let paid: { ok: true; hash: string; balanceAfter: number };
   let amount: string;
+  const creditsText = p.credits ? `${Math.round(p.credits.hours * 100) / 100} h of room credits` : "";
   if (p.invoice) {
     const invoice = await p.invoice();
     if (!invoice.ok) return { ok: false, error: invoice.error, status: invoice.status };
     paid = { ok: true, hash: invoice.number, balanceAfter: NaN };
     price = invoice.total;
-    amount = `€${invoice.total.toFixed(2)} (invoice ${invoice.number})`;
+    amount = `${creditsText ? `${creditsText} and ` : ""}€${invoice.total.toFixed(2)} (invoice ${invoice.number})`;
+  } else if (p.credits) {
+    paid = { ok: true, hash: `credits-${crypto.randomUUID().slice(0, 8)}`, balanceAfter: NaN };
+    amount = creditsText;
   } else {
     const burnt = await deps.burn(p.booker.id, token, price, `${product.name} for ${hm(start, tz)}–${hm(end, tz)}`);
     if (!burnt.ok) return { ok: false, error: burnt.error, status: 402 };
     paid = burnt;
     amount = `${price.toFixed(2)} ${token.symbol}`;
   }
-  const eur = !!p.invoice;
+  const eur = !!p.invoice || !!p.credits;
+  const invoiced = !!p.invoice;
   const txUrl = eur ? "" : txUrlFor(token, paid.hash);
   const calendarUrl = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(product.calendarId)}&ctz=${encodeURIComponent(tz)}`;
   const forWhom = guest ? ` for ${guest.name} (guest)` : "";
-  const line = `🗓️ <@${p.booker.id}> booked ${product.name}${forWhom} on ${dayLabel(start, tz)} from ${hm(start, tz)} till ${hm(end, tz)} for ${amount} on the website [[calendar](<${calendarUrl}>)]${eur ? "" : ` [[tx](<${txUrl}>)]`}`;
+  // Someone signed in on the website with an email address has no Discord account to mention.
+  const onDiscord = /^\d{5,25}$/.test(p.booker.id);
+  const line = `🗓️ ${onDiscord ? `<@${p.booker.id}>` : p.booker.name} booked ${product.name}${forWhom} on ${dayLabel(start, tz)} from ${hm(start, tz)} till ${hm(end, tz)} for ${amount} on the website [[calendar](<${calendarUrl}>)]${eur ? "" : ` [[tx](<${txUrl}>)]`}`;
 
   let reportUrl = "";
   const channelId = p.guildSettings.channels?.transactions;
@@ -235,11 +247,15 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
   }
 
   const now = new Date();
-  const description = `Booked by ${p.booker.name} (@${p.booker.username})${guest ? ` on behalf of ${guest.name} (guest)` : ""} on the website on ${dayLabel(now, tz)} at ${hm(now, tz)} for ${amount}\n` +
-    (eur ? `Paid in euros: invoice ${paid.hash}, €${price.toFixed(2)} incl. VAT.\n` : `${calendarPaidLine(price, token.symbol)}${calendarTermsLine(token.symbol)}`) +
+  const description = `Booked by ${p.booker.name}${onDiscord ? ` (@${p.booker.username})` : ""}${guest ? ` on behalf of ${guest.name} (guest)` : ""} on the website on ${dayLabel(now, tz)} at ${hm(now, tz)} for ${amount}\n` +
+    (p.credits ? `${p.credits.line}\n${p.credits.mark}\n` : "") +
+    (invoiced ? `Paid in euros: invoice ${paid.hash}, €${price.toFixed(2)} incl. VAT.\n` : eur ? "" : `${calendarPaidLine(price, token.symbol)}${calendarTermsLine(token.symbol)}`) +
     (reportUrl ? `\n${reportUrl}` : "") +
     (p.eventUrl ? `\nEvent URL: ${p.eventUrl}` : "") +
-    `\n\nPlease reach out to @${p.booker.username} on Discord for questions about this booking.\n\nTo cancel, ${p.booker.name} needs to run the /cancel command in Discord.\n\nUser ID: ${p.booker.id}\n${eur ? `Invoice: ${paid.hash}` : `Booking TX: ${paid.hash}\nBooking Chain: ${token.chain}`}`;
+    (onDiscord
+      ? `\n\nPlease reach out to @${p.booker.username} on Discord for questions about this booking.\n\nTo cancel, ${p.booker.name} needs to run the /cancel command in Discord.\n\nUser ID: ${p.booker.id}\n`
+      : `\n\nBooked on the website by ${p.booker.name}, who can cancel it from their dashboard.\n\nUser ID: ${p.booker.id}\n`) +
+    `${invoiced ? `Invoice: ${paid.hash}` : eur ? `Booking: ${paid.hash}` : `Booking TX: ${paid.hash}\nBooking Chain: ${token.chain}`}`;
   const event: Record<string, unknown> = {
     summary: title,
     description,
@@ -258,7 +274,9 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
     return {
       ok: false,
       status: 502,
-      error: eur
+      error: eur && !invoiced
+        ? `${conflict ? `Someone booked ${product.name} at that time just before you` : "The booking could not be saved in the calendar"}. Nothing was charged and no credits were used; please try again.`
+        : eur
         ? `${conflict ? `Someone booked ${product.name} at that time just before you` : "The booking could not be saved in the calendar"}, after invoice ${paid.hash} was made. Don't pay it: a steward will cancel it (ask in Discord).`
         : `${conflict ? `Someone booked ${product.name} at that time just before you` : "The booking could not be saved in the calendar"}, after your payment of ${price.toFixed(2)} tokens went through. A steward will refund you: ask in Discord with this transaction.`,
       paid: { hash: paid.hash, txUrl },
@@ -271,7 +289,7 @@ export async function executeRoomBooking(p: RoomBookingRequest): Promise<RoomBoo
   // Emails: the guest (booker in cc), or the booker's own record. Same email as /book.
   const uid = created.eventId ? `${created.eventId}@commonshub.brussels` : `${paid.hash.replace(/[^\w-]/g, "-")}-0@commonshub.brussels`;
   const occurrences = [{ start, end }];
-  const common = { uids: [uid], rates: ratesFromPrices(product.price, product.capacity), eventName: title, roomName: product.name, occurrences, priceTotal: price, tokenSymbol: eur ? "EUR" : token.symbol, ...(eur ? { paidText: `€${price.toFixed(2)} incl. VAT, invoice ${paid.hash}` } : {}), eventUrl: p.eventUrl, txUrl: txUrl || undefined, bookingId: paid.hash };
+  const common = { uids: [uid], rates: ratesFromPrices(product.price, product.capacity), eventName: title, roomName: product.name, occurrences, priceTotal: price, tokenSymbol: eur ? "EUR" : token.symbol, ...(eur ? { paidText: invoiced ? `${creditsText ? `${creditsText} and ` : ""}€${price.toFixed(2)} incl. VAT, invoice ${paid.hash}` : creditsText } : {}), eventUrl: p.eventUrl, txUrl: txUrl || undefined, bookingId: paid.hash };
   let emailed: boolean | null = null;
   if (guest?.email) {
     const door = await doorFor(guest.name);
