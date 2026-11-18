@@ -244,3 +244,33 @@ Deno.test("a company already in Odoo (same VAT number) is linked, not duplicated
     expect((await listOrgs(odoo, GUILD, USER, "xavier@example.org")).map((o) => o.id)).toContain(47);
   });
 });
+
+Deno.test("the company Odoo has a member as a contact of is one of their organisations, to invoice but not to edit", async () => {
+  await withDataDir(async () => {
+    const { odoo, partners } = fakeOdoo();
+    partners[127] = { id: 127, name: "RCR ASBL", email: "admin@rcr.example", is_company: true, vat: "BE0999999999", street: "Rue D 4", zip: "1000", city: "Brussels", country_code: "BE", type: "contact", parent_id: false, active: true };
+    partners[7].parent_id = [127, "RCR ASBL"];
+    const orgs = await listOrgs(odoo, GUILD, USER, "xavier@example.org");
+    expect(orgs.map((o) => [o.id, !!o.contact, !!o.self])).toEqual([[127, true, false], [7, false, true]]);
+    expect(await saveOrg(odoo, GUILD, USER, "xavier@example.org", { ...ACME, id: 127 })).toMatchObject({ ok: false, status: 403 });
+    const r = await createInvoice(odoo, { guildId: GUILD, userId: USER, member: { name: "Xavier", email: "xavier@example.org" }, to: 127, lines: [roomLine("Satoshi Room", 60, 1, true, "x")], ref: "x" });
+    expect(r.ok).toBe(true);
+    // Someone else can't invoice it.
+    expect(await createInvoice(odoo, { guildId: GUILD, userId: "999999999999", member: { name: "Other", email: "other@example.org" }, to: 127, lines: [], ref: "x" })).toMatchObject({ ok: false, status: 403 });
+  });
+});
+
+Deno.test("emailUser: someone known to Odoo by email sees their organisations and bookings, nothing else", async () => {
+  const { odoo, partners } = fakeOdoo();
+  partners[127] = { id: 127, name: "RCR ASBL", email: "admin@rcr.example", is_company: true, vat: false, street: "Rue D 4", zip: "1000", city: "Brussels", country_code: "BE", type: "contact", parent_id: false, active: true };
+  partners[1276] = { id: 1276, name: "Barbara", email: "barbara@donut.example", is_company: false, vat: false, street: false, zip: false, city: false, country_code: false, type: "contact", parent_id: [127, "RCR ASBL"], active: true };
+  await withWebsite(odoo, async () => {
+    const as = (endpoint: string, email: string) => post(endpoint, { userId: undefined, emailUser: { email } });
+    const r = await (await as("orgs", "Barbara@donut.example")).json();
+    expect(r.orgs.map((o: { id: number; contact?: boolean }) => [o.id, !!o.contact])).toEqual([[127, true], [1276, false]]);
+    expect(r.me).toEqual({ name: "Barbara", email: "barbara@donut.example" });
+    expect((await (await as("mine", "barbara@donut.example")).json()).ok).toBe(true);
+    expect((await as("paybook", "barbara@donut.example")).status).toBe(403);
+    expect((await as("orgs", "nobody@donut.example")).status).toBe(404);
+  });
+});
