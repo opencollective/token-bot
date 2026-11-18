@@ -27,7 +27,8 @@ import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin, partnerByEmail } from "./email-login.ts";
-import { CANCELLATION_POLICY, cancelBooking, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
+import { activeOn, cancelCreditBooking, type Credits, creditLine, creditMark, creditsOf, coversRoom, logOnCompany, myCreditBookings, recordCreditBooking, split, usedHours, weekOf, withCreditLock } from "./room-credits.ts";
+import { CANCELLATION_POLICY, cancelBooking, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
 type Json = Record<string, unknown>;
@@ -105,6 +106,8 @@ type Deps = {
   guestPass: typeof executeGuestPass;
   roomBooking: typeof executeRoomBooking;
   conflicts(calendarId: string, start: Date, end: Date): Promise<{ start: string; end: string }[]>;
+  /** The calendar's events in [start, end), with their descriptions (to count room credits). */
+  events(calendarId: string, start: Date, end: Date): Promise<{ description?: string | null }[]>;
   dm(member: GuildMember, content: string): Promise<unknown>;
   email(guildId: string, userId: string): string | undefined;
   /** Odoo, for paying in euros (null when not configured). */
@@ -152,6 +155,7 @@ const DEFAULT_DEPS: Deps = {
       .filter((e) => e.start?.dateTime && e.end?.dateTime && new Date(e.start.dateTime) < end && new Date(e.end.dateTime) > start)
       .map((e) => ({ start: e.start!.dateTime!, end: e.end!.dateTime! }));
   },
+  events: async (calendarId, start, end) => (await new GoogleCalendarClient().listEvents(calendarId, start, end)) as { description?: string | null }[],
   dm: (member, content) => member.send({ content }),
   email: getUserEmail,
   odoo: () => (odooConfigured() ? odooFromEnv() : null),
@@ -185,7 +189,7 @@ async function testContext(body: Json): Promise<Ctx | Answer> {
 
 /**
  * Someone signed in on the website with an email code (no Discord), or an admin looking at their
- * dashboard: the Odoo partner with that address, in production. Read-only for now (orgs, mine).
+ * dashboard: the Odoo partner with that address, in production. Euros (and room credits) only.
  */
 async function emailContext(body: Json): Promise<Ctx | Answer> {
   const guildId = typeof body.guildId === "string" ? body.guildId : "";
@@ -227,7 +231,7 @@ const itemJson = (i: ShopItem) => ({ id: i.id, label: i.label, price: i.price, t
 // ── Endpoints ───────────────────────────────────────────────────────────────
 
 async function options(c: Ctx): Promise<Answer> {
-  const balance = c.test ? null : await deps.balance(c.userId, c.token).catch(() => null);
+  const balance = c.test || !c.member ? null : await deps.balance(c.userId, c.token).catch(() => null);
   const products = await deps.products(c.guildId);
   const rooms = products
     .filter((p) => p.type === "room" && p.calendarId && tokenPricePerHour(p, c.token) !== null)
@@ -243,6 +247,8 @@ async function options(c: Ctx): Promise<Answer> {
   return ok({
     balance: balance ?? 0,
     hasWallet: balance !== null,
+    // No Discord (a test user, or someone signed in with an email address): euros only.
+    eurOnly: !c.member,
     tokenSymbol: c.token.symbol,
     cowork: { item: itemJson(findShopItem("coworking-day")!), items: SHOP_ITEMS.map(itemJson), note: FOR_TODAY },
     guestPass: { "half-day": pass("half-day"), "day": pass("day"), maxDaysAhead: MAX_DAYS_AHEAD },
@@ -285,7 +291,19 @@ async function availability(c: Ctx, b: Json): Promise<Answer> {
   if (reason) return ok({ available: false, reason, price: valid ? roomPrice(perHour, start, end) : 0, ...eur });
   const conflicts = await deps.conflicts(product.calendarId!, start, end).catch(() => null);
   if (conflicts === null) return fail("We couldn't check the room's calendar right now.", 503);
+  // Booking for an organisation with room credits: what they'd cover (counted again when booking).
+  let credits: Json | undefined;
+  const to = invoiceTo(b);
+  if (typeof to === "number" && c.odoo && !c.test && valid) {
+    const cr = await creditsFor(c, c.odoo, to, product, start).catch(() => null);
+    const used = cr ? await creditsUsed(c, cr, start).catch(() => null) : null;
+    if (cr && used !== null) {
+      const s = split(cr.perWeek, used, (end.getTime() - start.getTime()) / 3600000);
+      credits = { organisation: cr.companyName, perWeek: cr.perWeek, left: Math.max(0, cr.perWeek - used), ...s, ...(s.overflow > 0 ? { eur: quote([roomLine(product.name, eurPricePerHour(product) ?? 0, s.overflow, true, "beyond room credits")]) } : {}) };
+    }
+  }
   return ok({
+    ...(credits ? { credits } : {}),
     available: conflicts.length === 0,
     ...(conflicts.length ? { reason: `${product.name} is not free then.`, conflicts } : {}),
     price: roomPrice(perHour, start, end),
@@ -363,6 +381,61 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
   const start = new Date(String(b.start ?? "")), end = new Date(String(b.end ?? ""));
   const tz = c.settings.guild?.timezone || "Europe/Brussels";
   const title = str(b, "title", 100) ?? (guestName ? `${guestName} (guest of ${c.name})` : "Room booking");
+  if (isNaN(end.getTime() - start.getTime()) || end <= start) return fail("Choose a valid time.");
+  if (c.test) {
+    const invoiceFor = () =>
+      createInvoice(odoo, {
+        guildId: c.guildId,
+        userId: c.userId,
+        member: { name: c.name, email: c.email },
+        to,
+        lines: [roomEurLine(product, start, end, tz)],
+        ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
+        booking: { kind: "room", label: product.name, start: start.toISOString(), end: end.toISOString(), ...(guestName ? { guest: guestName } : {}) },
+      });
+    return await testPayBook(c, product, start, end, title, guestName, invoiceFor);
+  }
+  // Their organisation's room credits, when it has some for this room that week (lib/room-credits.ts).
+  const credits = typeof to === "number" ? await creditsFor(c, odoo, to, product, start) : null;
+  if (!credits) return await payBookWith(client, c, odoo, to, product, start, end, title, guestName, guestEmail, null);
+  return await withCreditLock(credits.companyId, async () => {
+    const hours = (end.getTime() - start.getTime()) / 3600000;
+    const used = await creditsUsed(c, credits, start).catch(() => null);
+    if (used === null) return fail("We couldn't check your organisation's room credits right now. Nothing was booked; please try again.", 503);
+    const s = split(credits.perWeek, used, hours);
+    if (s.covered <= 0) return await payBookWith(client, c, odoo, to, product, start, end, title, guestName, guestEmail, null);
+    const r = await payBookWith(client, c, odoo, to, product, start, end, title, guestName, guestEmail, { credits, ...s });
+    if (r.body.ok) {
+      const when = `${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`;
+      const inv = r.body.invoice as Invoice | null | undefined;
+      await logOnCompany(odoo, credits.companyId, `${c.name} booked ${product.name}, ${when}${guestName ? ` (for ${guestName})` : ""}: ${s.covered} h of room credits, ${s.leftAfter} h left this week of ${credits.perWeek} h.${inv ? ` ${s.overflow} h beyond the credits invoiced: ${inv.number}.` : ""}`)
+        .catch((e) => console.error("[website-api] could not log the credits on the company:", e));
+    }
+    return r;
+  });
+}
+
+/** The organisation's credits, when the member is its contact in Odoo and they cover this room on that day. */
+async function creditsFor(c: Ctx, odoo: OdooCall, to: number, product: Product, start: Date): Promise<Credits | null> {
+  const me = await selfPartner(odoo, c.email).catch(() => null);
+  if (companyIdOf(me) !== to) return null;
+  const cr = await creditsOf(odoo, to);
+  return cr && coversRoom(cr, product) && activeOn(cr, start.toLocaleDateString("en-CA", { timeZone: "Europe/Brussels" })) ? cr : null;
+}
+
+/** Hours of the credits already booked in the week of `at`, from the rooms' calendars. */
+async function creditsUsed(c: Ctx, credits: Credits, at: Date): Promise<number> {
+  const week = weekOf(at);
+  const rooms = (await deps.products(c.guildId)).filter((p) => p.type === "room" && p.calendarId && coversRoom(credits, p));
+  const events = (await Promise.all(rooms.map((p) => deps.events(p.calendarId!, week.start, week.end)))).flat();
+  return usedHours(events, credits.companyId);
+}
+
+type CreditUse = { credits: Credits; covered: number; overflow: number; leftAfter: number };
+
+async function payBookWith(client: Client, c: Ctx, odoo: OdooCall, to: number | "self", product: Product, start: Date, end: Date, title: string, guestName: string | undefined, guestEmail: string | undefined, use: CreditUse | null): Promise<Answer & { charged?: boolean }> {
+  const tz = c.settings.guild?.timezone || "Europe/Brussels";
+  const when = `${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`;
   let invoice: Invoice | null = null;
   const invoiceFor = () =>
     createInvoice(odoo, {
@@ -370,32 +443,36 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
       userId: c.userId,
       member: { name: c.name, email: c.email },
       to,
-      lines: [roomEurLine(product, start, end, tz)],
+      lines: [use ? roomLine(product.name, eurPricePerHour(product) ?? 0, use.overflow, true, `${when} (beyond room credits)`) : roomEurLine(product, start, end, tz)],
       ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
       booking: { kind: "room", label: product.name, start: start.toISOString(), end: end.toISOString(), ...(guestName ? { guest: guestName } : {}) },
     });
-  if (c.test) return await testPayBook(c, product, start, end, title, guestName, invoiceFor);
   const r = await deps.roomBooking({
     client,
     guildId: c.guildId,
     guildSettings: c.settings,
     token: c.token,
     product,
-    booker: { id: c.userId, name: c.name, username: c.member!.user.username, email: c.email },
+    booker: { id: c.userId, name: c.name, username: c.member?.user.username ?? c.name, email: c.email },
     start,
     end,
     title,
     ...(guestName ? { guest: { name: guestName, ...(guestEmail ? { email: guestEmail } : {}) } } : {}),
     via: "website",
-    invoice: async () => {
+    ...(use ? { credits: { hours: use.covered, line: creditLine(use.credits, use.covered, use.leftAfter), mark: creditMark(use.credits.companyId, use.covered) } } : {}),
+    ...(use && use.overflow <= 0 ? {} : { invoice: async () => {
       const made = await invoiceFor();
       if (!made.ok) return made;
       invoice = made.invoice;
       return { ok: true, number: made.invoice.number, total: made.invoice.total };
-    },
+    } }),
   });
   if (!r.ok) return { ...fail(r.error, r.status), ...(invoice ? { charged: true } : {}) };
   if (invoice && r.eventId) await recordBookingEvent(c.guildId, (invoice as Invoice).id, product.calendarId!, r.eventId).catch((e) => console.error("[website-api] could not record the booking's event:", e));
+  if (use && !invoice && r.eventId) {
+    await recordCreditBooking(c.guildId, { userId: c.userId, companyId: use.credits.companyId, companyName: use.credits.companyName, hours: use.covered, label: product.name, start: start.toISOString(), end: end.toISOString(), calendarId: product.calendarId!, eventId: r.eventId, ...(guestName ? { guest: guestName } : {}) })
+      .catch((e) => console.error("[website-api] could not record the credit booking:", e));
+  }
   return {
     ...ok({
       room: { slug: product.slug, name: product.name },
@@ -404,6 +481,7 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
       title,
       eventId: r.eventId ?? null,
       invoice,
+      ...(use ? { credits: { hours: use.covered, left: use.leftAfter, perWeek: use.credits.perWeek, organisation: use.credits.companyName } } : {}),
       emailed: guestName ? undefined : r.emailed,
       ...(guestName ? { guest: { name: guestName, emailed: guestEmail ? r.emailed : null, ...(r.passUrl ? { passUrl: r.passUrl } : {}) } } : {}),
     }),
@@ -466,13 +544,25 @@ async function payCowork(c: Ctx, b: Json): Promise<Answer & { charged?: boolean 
 /** Upcoming bookings paid in euros, and whether each invoice is paid. */
 async function mine(c: Ctx, b: Json): Promise<Answer> {
   if (!c.odoo) return ok({ bookings: [], policy: CANCELLATION_POLICY });
-  return ok({ bookings: await myBookings(c.odoo, c.guildId, c.userId, { past: b.past === true || b.past === "yes", odooUrl: c.odooUrl }), policy: CANCELLATION_POLICY });
+  const past = b.past === true || b.past === "yes";
+  const [invoiced, credited] = await Promise.all([myBookings(c.odoo, c.guildId, c.userId, { past, odooUrl: c.odooUrl }), myCreditBookings(c.guildId, c.userId, { past })]);
+  const at = (x: { kind: string; start?: string; date?: string }) => (x.kind === "room" ? x.start! : x.date!);
+  const bookings = [...invoiced, ...credited].sort((x, y) => (past ? at(y).localeCompare(at(x)) : at(x).localeCompare(at(y))));
+  return ok({ bookings, policy: CANCELLATION_POLICY });
 }
 
 /** Cancel one of the member's rooms paid in euros (refund by the terms, as a credit note). */
 async function cancelRoom(c: Ctx, b: Json): Promise<Answer> {
   const odoo = needOdoo(c);
   if (!isOdoo(odoo)) return odoo;
+  const eventId = str(b, "eventId", 200);
+  if (eventId && b.invoiceId === undefined) {
+    // Paid with room credits: free the room, the hours come back to the organisation.
+    const r = await cancelCreditBooking(c.guildId, c.userId, eventId, { deleteEvent: deps.deleteEvent });
+    if (!r.ok) return fail(r.error, r.status);
+    await logOnCompany(odoo, r.booking.companyId, `${c.name} cancelled ${r.booking.label}, ${new Date(r.booking.start).toLocaleString("en-GB", { timeZone: "Europe/Brussels", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}: ${r.booking.hours} h of room credits back.`).catch(() => {});
+    return ok({ refundPercent: 100, creditNote: null, refundDue: 0, credits: r.booking.hours });
+  }
   const invoiceId = Number(b.invoiceId);
   if (!Number.isInteger(invoiceId) || invoiceId <= 0) return fail("invoiceId is required");
   const r = await cancelBooking(odoo, { guildId: c.guildId, userId: c.userId, invoiceId, ...(c.test ? {} : { deleteEvent: deps.deleteEvent }), notify: c.test ? undefined : deps.notifyStewards });
@@ -612,7 +702,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
-    if (body.emailUser !== undefined && !["orgs", "mine"].includes(endpoint)) return reply(fail("Signed in with an email address: not available yet.", 403));
+    if (body.emailUser !== undefined && ["cowork", "guestpass", "book"].includes(endpoint)) return reply(fail("Signed in with an email address: pay in euros.", 403));
     if (c.test && ["cowork", "guestpass", "book"].includes(endpoint)) return reply(fail("You're signed in as a test user: pay in euros.", 403));
     if (endpoint === "options") return reply(await options(c));
     if (endpoint === "availability") return reply(await availability(c, body));

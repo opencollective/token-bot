@@ -519,3 +519,15 @@ commonshub.brussels lets a signed-in member do what `/buy`, `/guestpass` and `/b
 **Test users.** Addresses in `TEST_LOGIN_EMAILS` (comma separated) sign in with an email code against a test copy of Odoo (`ODOO_TEST_URL`, `ODOO_TEST_DB`, and `ODOO_TEST_API_KEY` or else `ODOO_API_KEY`: a duplicate keeps the same users and keys). Their partner is created in the copy if it isn't there, and `login/verify` answers `partner.test: true`. The website then sends `testUser: {email, partnerId, name}` instead of `userId`; the bot checks the address is listed. A test user pays only in euros (`cowork`, `guestpass` and `book` answer 403; `options.test` is true): invoices go to the test copy, and `paybook` checks the room against the real calendar but books nothing (no event, no Discord post, no email; `eventId: null`, `test: true`). Every call to the test copy first checks Odoo's `database.is_neutralized` flag (what a duplicate gets: no outgoing mail, no crons) and refuses a database that isn't, or one that is the production database.
 
 Rooms go by half hours (start on :00 or :30 from 8am to 10pm, a multiple of 30 minutes, at most 12 hours). Paying calls are idempotent on (guild, user, `requestId`), kept in `DATA_DIR/<guild>/website-requests.jsonl`: a retry gets the first answer and is never charged twice. Errors are `{ ok: false, error }` with a sentence to show; nothing is charged unless the answer says so.
+
+## Room credits (organisations)
+
+An organisation can have free room hours per week, set on its company in Odoo (tab "Room credits": `x_room_credit_hours`, `x_room_credit_rooms`, `x_room_credit_from`, `x_room_credit_until`). Its contacts in Odoo (partners whose parent is the company) use them when they book one of those rooms with `org: <company id>` (`paybook`); `availability` with `org` previews them (`credits: {organisation, perWeek, left, covered, overflow, eur?}`).
+
+- Hours used are counted from the rooms' calendars (the line `Room credits: N h (organisation ID)` in the event description), Monday to Sunday in Brussels: nothing carries over, a cancelled booking gives its hours back.
+- Fully covered: no invoice; the event says "Paid with room credits: N h of X's H h per week. L h left this week."; a note goes on the company in Odoo. Beyond the credits, only the extra hours are invoiced.
+- `mine` lists credit-only bookings with `invoice: null`, `status: "credits"`, `eventId`; `cancelbooking` with `eventId` cancels them.
+
+## emailUser
+
+`emailUser: {email}` instead of `userId`: the production Odoo partner with that address (signed in on the website with an email code). Euros only (`cowork`, `guestpass`, `book` refused); `options.eurOnly` is true.
