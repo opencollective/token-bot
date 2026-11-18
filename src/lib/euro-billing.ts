@@ -65,6 +65,8 @@ export type Org = {
   lang: Lang;
   /** Saved as new but already in Odoo (same VAT number): linked, its details kept as they were. */
   existing?: boolean;
+  /** The company the member is a contact of in Odoo (their partner's parent): theirs to invoice, not to edit here. */
+  contact?: boolean;
 };
 
 export const LANGS = ["en_GB", "fr_BE", "nl_BE"] as const;
@@ -157,15 +159,23 @@ async function toOrg(odoo: OdooCall, p: Partner, self = false): Promise<Org> {
   };
 }
 
-/** The organisations this member can invoice, and themselves (when Odoo knows them). */
+/** The company the member's own partner is a contact of in Odoo, if any. */
+const companyIdOf = (me: Partner | null): number | null => (me && Array.isArray(me.parent_id) && me.parent_id[0] !== me.id ? me.parent_id[0] : null);
+
+/**
+ * The organisations this member can invoice: the ones they added, the company Odoo has them as a
+ * contact of, and themselves (when Odoo knows them).
+ */
 export async function listOrgs(odoo: OdooCall, guildId: string, userId: string, email: string | undefined): Promise<Org[]> {
   const ids = await userOrgIds(guildId, userId);
-  const partners = ids.length
-    ? ((await odoo("res.partner", "read", { ids, fields: PARTNER_FIELDS })) as Partner[])
-    : [];
-  const orgs = await Promise.all(partners.map((p) => toOrg(odoo, p)));
   const me = await selfPartner(odoo, email);
-  if (me && !ids.includes(me.id)) orgs.push(await toOrg(odoo, me, true));
+  const company = companyIdOf(me);
+  const all = [...ids, ...(company && !ids.includes(company) ? [company] : [])];
+  const partners = all.length
+    ? ((await odoo("res.partner", "read", { ids: all, fields: PARTNER_FIELDS })) as Partner[])
+    : [];
+  const orgs = await Promise.all(partners.map(async (p) => ({ ...(await toOrg(odoo, p)), ...(p.id === company && !ids.includes(p.id) ? { contact: true } : {}) })));
+  if (me && !all.includes(me.id)) orgs.push(await toOrg(odoo, me, true));
   return orgs;
 }
 
@@ -506,7 +516,7 @@ export async function createInvoice(odoo: OdooCall, p: {
   } else {
     const mine = await userOrgIds(p.guildId, p.userId);
     const me = await selfPartner(odoo, p.member.email);
-    if (!mine.includes(p.to) && p.to !== me?.id) return { ok: false, error: "Choose one of your organisations.", status: 403 };
+    if (!mine.includes(p.to) && p.to !== me?.id && p.to !== companyIdOf(me)) return { ok: false, error: "Choose one of your organisations.", status: 403 };
     partnerId = p.to;
   }
   const billing = await billingChild(odoo, partnerId);

@@ -26,7 +26,7 @@ import { isGuildMember } from "../commands/guestpass.ts";
 import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
-import { handleLogin } from "./email-login.ts";
+import { handleLogin, partnerByEmail } from "./email-login.ts";
 import { CANCELLATION_POLICY, cancelBooking, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
@@ -183,8 +183,29 @@ async function testContext(body: Json): Promise<Ctx | Answer> {
   return { guildId, userId: `test-${partnerId}`, member: null, name, email, settings, token, odoo: deps.testOdoo(), test: true, odooUrl: getEnv("ODOO_TEST_URL") || "" };
 }
 
+/**
+ * Someone signed in on the website with an email code (no Discord), or an admin looking at their
+ * dashboard: the Odoo partner with that address, in production. Read-only for now (orgs, mine).
+ */
+async function emailContext(body: Json): Promise<Ctx | Answer> {
+  const guildId = typeof body.guildId === "string" ? body.guildId : "";
+  const e = (body.emailUser ?? {}) as Json;
+  const email = typeof e.email === "string" ? e.email.trim().toLowerCase() : "";
+  if (!/^\d{5,25}$/.test(guildId) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail("guildId and emailUser.email are required");
+  if (isTestEmail(email)) return fail("Test users sign in as testUser.", 403);
+  const odoo = deps.odoo();
+  if (!odoo) return fail("Not available right now.", 503);
+  const partner = await partnerByEmail(odoo, email);
+  if (!partner) return fail("No contact with that email address.", 404);
+  const settings = await deps.settings(guildId);
+  const token = shopToken(settings);
+  if (!settings || !token) return fail("Not available right now.", 503);
+  return { guildId, userId: `partner-${partner.id}`, member: null, name: partner.name, email, settings, token, odoo, test: false, odooUrl: getEnv("ODOO_URL") || "" };
+}
+
 async function context(client: Client | null, body: Json): Promise<Ctx | Answer> {
   if (body.testUser !== undefined) return await testContext(body);
+  if (body.emailUser !== undefined) return await emailContext(body);
   const guildId = typeof body.guildId === "string" ? body.guildId : "";
   const userId = typeof body.userId === "string" ? body.userId : "";
   if (!/^\d{5,25}$/.test(guildId) || !/^\d{5,25}$/.test(userId)) return fail("guildId and userId are required");
@@ -591,6 +612,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
+    if (body.emailUser !== undefined && !["orgs", "mine"].includes(endpoint)) return reply(fail("Signed in with an email address: not available yet.", 403));
     if (c.test && ["cowork", "guestpass", "book"].includes(endpoint)) return reply(fail("You're signed in as a test user: pay in euros.", 403));
     if (endpoint === "options") return reply(await options(c));
     if (endpoint === "availability") return reply(await availability(c, body));
