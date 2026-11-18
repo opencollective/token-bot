@@ -260,9 +260,9 @@ async function options(c: Ctx): Promise<Answer> {
     // Paying in euros, by card or invoice: members get MEMBER_DISCOUNT % off, then VAT.
     eur: {
       available: !!c.odoo,
-      memberDiscount: MEMBER_DISCOUNT,
+      memberDiscount: memberPrice(c) ? MEMBER_DISCOUNT : 0,
       vatRate: VAT_RATE,
-      cowork: Object.fromEntries(SHOP_ITEMS.map((i) => [i.id, quote([coworkLine(i.label, coworkEur(i.id), true, "today")])])),
+      cowork: Object.fromEntries(SHOP_ITEMS.map((i) => [i.id, quote([coworkLine(i.label, coworkEur(i.id), memberPrice(c), "today")])])),
     },
   });
 }
@@ -271,8 +271,10 @@ async function options(c: Ctx): Promise<Answer> {
 const coworkEur = (id: string) => (id === "coworking-half-day" ? COWORKING_EUR["half-day"] : COWORKING_EUR["day"]);
 const fmtDay = (d: Date, tz: string) => d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: tz });
 const fmtHm = (d: Date, tz: string) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: tz });
-const roomEurLine = (product: Product, start: Date, end: Date, tz: string) =>
-  roomLine(product.name, eurPricePerHour(product) ?? 0, (end.getTime() - start.getTime()) / 3600000, true, `${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`);
+/** Members (and test users, who stand for one) get the member price; someone signed in by email doesn't. */
+const memberPrice = (c: Ctx) => !!c.member || c.test;
+const roomEurLine = (c: Ctx, product: Product, start: Date, end: Date, tz: string) =>
+  roomLine(product.name, eurPricePerHour(product) ?? 0, (end.getTime() - start.getTime()) / 3600000, memberPrice(c), `${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`);
 
 async function findRoom(c: Ctx, slug: unknown): Promise<Product | null> {
   // Only rooms that can be paid with tokens, as listed in options.
@@ -287,7 +289,7 @@ async function availability(c: Ctx, b: Json): Promise<Answer> {
   const tz = c.settings.guild?.timezone || "Europe/Brussels";
   const reason = checkRoomRequest(product, start, end, tz);
   const valid = !isNaN(end.getTime() - start.getTime()) && end > start;
-  const eur = valid && eurPricePerHour(product) !== null ? { eur: quote([roomEurLine(product, start, end, tz)]) } : {};
+  const eur = valid && eurPricePerHour(product) !== null ? { eur: quote([roomEurLine(c, product, start, end, tz)]) } : {};
   if (reason) return ok({ available: false, reason, price: valid ? roomPrice(perHour, start, end) : 0, ...eur });
   const conflicts = await deps.conflicts(product.calendarId!, start, end).catch(() => null);
   if (conflicts === null) return fail("We couldn't check the room's calendar right now.", 503);
@@ -299,7 +301,7 @@ async function availability(c: Ctx, b: Json): Promise<Answer> {
     const used = cr ? await creditsUsed(c, cr, start).catch(() => null) : null;
     if (cr && used !== null) {
       const s = split(cr.perWeek, used, (end.getTime() - start.getTime()) / 3600000);
-      credits = { organisation: cr.companyName, perWeek: cr.perWeek, left: Math.max(0, cr.perWeek - used), ...s, ...(s.overflow > 0 ? { eur: quote([roomLine(product.name, eurPricePerHour(product) ?? 0, s.overflow, true, "beyond room credits")]) } : {}) };
+      credits = { organisation: cr.companyName, perWeek: cr.perWeek, left: Math.max(0, cr.perWeek - used), ...s, ...(s.overflow > 0 ? { eur: quote([roomLine(product.name, eurPricePerHour(product) ?? 0, s.overflow, memberPrice(c), "beyond room credits")]) } : {}) };
     }
   }
   return ok({
@@ -389,7 +391,7 @@ async function payBook(client: Client, c: Ctx, b: Json): Promise<Answer & { char
         userId: c.userId,
         member: { name: c.name, email: c.email },
         to,
-        lines: [roomEurLine(product, start, end, tz)],
+        lines: [roomEurLine(c, product, start, end, tz)],
         ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
         booking: { kind: "room", label: product.name, start: start.toISOString(), end: end.toISOString(), ...(guestName ? { guest: guestName } : {}) },
       });
@@ -443,7 +445,7 @@ async function payBookWith(client: Client, c: Ctx, odoo: OdooCall, to: number | 
       userId: c.userId,
       member: { name: c.name, email: c.email },
       to,
-      lines: [use ? roomLine(product.name, eurPricePerHour(product) ?? 0, use.overflow, true, `${when} (beyond room credits)`) : roomEurLine(product, start, end, tz)],
+      lines: [use ? roomLine(product.name, eurPricePerHour(product) ?? 0, use.overflow, memberPrice(c), `${when} (beyond room credits)`) : roomEurLine(c, product, start, end, tz)],
       ref: `${product.name} ${fmtDay(start, tz)} ${fmtHm(start, tz)}–${fmtHm(end, tz)}`,
       booking: { kind: "room", label: product.name, start: start.toISOString(), end: end.toISOString(), ...(guestName ? { guest: guestName } : {}) },
     });
@@ -533,7 +535,7 @@ async function payCowork(c: Ctx, b: Json): Promise<Answer & { charged?: boolean 
     userId: c.userId,
     member: { name: c.name, email: c.email },
     to,
-    lines: [coworkLine(item.label.replace(/^Contributor c/, "C"), coworkEur(item.id), true, today)],
+    lines: [coworkLine(item.label.replace(/^Contributor c/, "C"), coworkEur(item.id), memberPrice(c), today)],
     ref: `${item.label.replace(/^Contributor c/, "C")} ${today}`,
     booking: { kind: "cowork", label: item.label.replace(/^Contributor c/, "C"), date: new Date().toLocaleDateString("en-CA", { timeZone: tz }) },
   });

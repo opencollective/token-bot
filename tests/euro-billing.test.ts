@@ -364,3 +364,16 @@ Deno.test("room credits: the availability check says what they'd cover", async (
     expect(none.credits).toBeUndefined();
   });
 });
+
+Deno.test("emailUser: not a member, so no member price", async () => {
+  const { odoo, partners } = fakeOdoo();
+  partners[1276] = { id: 1276, name: "Barbara", email: "barbara@donut.example", is_company: false, vat: false, street: false, zip: false, city: false, country_code: false, type: "contact", parent_id: false, active: true };
+  await withWebsite(odoo, async () => {
+    const as = (endpoint: string, body: Record<string, unknown>) => post(endpoint, { userId: undefined, emailUser: { email: "barbara@donut.example" }, ...body });
+    const o = await (await as("options", {})).json();
+    expect(o).toMatchObject({ eurOnly: true, eur: { memberDiscount: 0 } });
+    const start = new Date(Date.UTC(2030, 0, 8, 8, 0));
+    const a = await (await as("availability", { room: "satoshi", start: start.toISOString(), end: new Date(start.getTime() + 3600000).toISOString() })).json();
+    expect(a.eur).toMatchObject({ untaxed: 60, total: 72.6 });
+  });
+});
