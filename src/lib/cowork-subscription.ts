@@ -9,9 +9,9 @@
  * contact (any subscription with a coworking product, also the ones made by hand).
  */
 
-import type { OdooCall } from "./odoo.ts";
+import { likeLiteral, type OdooCall } from "./odoo.ts";
 import { getEnv } from "./utils.ts";
-import { billingChild, finishInvoice, type Invoice, invoicePartner, saleTax, salesJournal, selfPartner } from "./euro-billing.ts";
+import { billingChild, finishInvoice, type Invoice, invoicePartner, saleTax, salesJournal } from "./euro-billing.ts";
 
 export const COWORK_MONTHLY_EUR = 100;
 const productId = () => Number(getEnv("ODOO_COWORK_PRODUCT_ID")) || 289;
@@ -19,10 +19,12 @@ const planId = () => Number(getEnv("ODOO_MONTHLY_PLAN_ID")) || 1;
 
 export type CoworkSubscription = { id: number; name: string; since: string | null; nextInvoice: string | null; monthly: number };
 
-/** Running (or paused) subscription with a coworking product, for this contact. */
-export async function coworkSubscriptionOf(odoo: OdooCall, partnerId: number): Promise<CoworkSubscription | null> {
+/** Running (or paused) subscription with a coworking product, for one of these contacts. */
+export async function coworkSubscriptionOf(odoo: OdooCall, partnerIds: number | number[]): Promise<CoworkSubscription | null> {
+  const ids = Array.isArray(partnerIds) ? partnerIds : [partnerIds];
+  if (!ids.length) return null;
   const found = (await odoo("sale.order", "search_read", {
-    domain: [["is_subscription", "=", true], ["subscription_state", "in", ["3_progress", "4_paused"]], ["partner_id", "=", partnerId], ["order_line.product_id.name", "ilike", "cowork"]],
+    domain: [["is_subscription", "=", true], ["subscription_state", "in", ["3_progress", "4_paused"]], ["partner_id", "in", ids], ["order_line.product_id.name", "ilike", "cowork"]],
     fields: ["name", "start_date", "next_invoice_date", "amount_untaxed"],
     order: "start_date desc",
     limit: 1,
@@ -31,10 +33,15 @@ export async function coworkSubscriptionOf(odoo: OdooCall, partnerId: number): P
   return s ? { id: s.id, name: s.name, since: s.start_date || null, nextInvoice: s.next_invoice_date || null, monthly: s.amount_untaxed } : null;
 }
 
-/** The member's own subscription, found by their email. */
+/**
+ * The member's own subscription, found by their email: on any of their contacts with that address
+ * (people often have one on their own and one under their organisation).
+ */
 export async function myCoworkSubscription(odoo: OdooCall, email: string | undefined): Promise<CoworkSubscription | null> {
-  const me = await selfPartner(odoo, email);
-  return me ? await coworkSubscriptionOf(odoo, me.id) : null;
+  const address = email?.trim().toLowerCase();
+  if (!address) return null;
+  const people = (await odoo("res.partner", "search_read", { domain: [["email", "=ilike", likeLiteral(address)], ["is_company", "=", false]], fields: ["id", "email"], limit: 10 })) as { id: number; email: string | false }[];
+  return await coworkSubscriptionOf(odoo, people.filter((p) => typeof p.email === "string" && p.email.trim().toLowerCase() === address).map((p) => p.id));
 }
 
 /**
@@ -45,7 +52,7 @@ export async function subscribeCowork(odoo: OdooCall, p: { guildId: string; user
   if (!p.member.email) return { ok: false, error: "We need your email address for a subscription: add it on your dashboard first.", status: 400 };
   const self = await invoicePartner(odoo, { ...p, to: "self" });
   if (!self.ok) return self;
-  const existing = await coworkSubscriptionOf(odoo, self.partnerId);
+  const existing = (await myCoworkSubscription(odoo, p.member.email)) ?? (await coworkSubscriptionOf(odoo, self.partnerId));
   if (existing) return { ok: false, error: `You already have unlimited coworking (${existing.name}).`, status: 409 };
   const payer = p.to === "self" ? self : await invoicePartner(odoo, p);
   if (!payer.ok) return payer;
