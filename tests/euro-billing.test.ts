@@ -419,8 +419,8 @@ function withSubscriptions() {
     base.calls.push({ model, method, args });
     if (model === "sale.order") {
       if (method === "search_read") {
-        const [, , [, , partnerId]] = args.domain as [unknown, unknown, [string, string, number]];
-        return orders.filter((o) => o.state === "sale" && o.partner_id === partnerId).map((o) => ({ id: o.id, name: o.name, start_date: o.start_date, next_invoice_date: "2030-02-08", amount_untaxed: 100 }));
+        const [, , [, , partnerIds]] = args.domain as [unknown, unknown, [string, string, number[]]];
+        return orders.filter((o) => o.state === "sale" && partnerIds.includes(o.partner_id as number)).map((o) => ({ id: o.id, name: o.name, start_date: o.start_date, next_invoice_date: "2030-02-08", amount_untaxed: 100 }));
       }
       if (method === "create") {
         const v = (args.vals_list as Record<string, unknown>[])[0];
