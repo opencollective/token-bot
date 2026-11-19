@@ -377,3 +377,35 @@ Deno.test("emailUser: not a member, so no member price", async () => {
     expect(a.eur).toMatchObject({ untaxed: 60, total: 72.6 });
   });
 });
+
+// ── Linking Discord and email ───────────────────────────────────────────────
+
+import { linkAccount } from "../src/lib/account-link.ts";
+import { getUserEmail } from "../src/lib/user-emails.ts";
+
+Deno.test("link: the bot remembers the email, the Odoo contact gets the Discord account; none is created", async () => {
+  await withDataDir(async () => {
+    const { odoo, partners, calls } = fakeOdoo();
+    partners[1276] = { id: 1276, name: "Barbara", email: "barbara@donut.example", is_company: false, type: "contact", parent_id: false, active: true };
+    const r = await linkAccount(odoo, { guildId: GUILD, discordId: "555555555555", username: "barb.", email: "Barbara@donut.example" });
+    expect(r).toEqual({ ok: true, partnerId: 1276 });
+    expect(partners[1276]).toMatchObject({ x_discord_id: "555555555555", x_discord_username: "barb." });
+    expect(getUserEmail(GUILD, "555555555555")).toBe("barbara@donut.example");
+    // Nobody in Odoo with that address: the bot still remembers it, nothing created.
+    expect(await linkAccount(odoo, { guildId: GUILD, discordId: "666666666666", username: "x", email: "new@example.org" })).toEqual({ ok: true, partnerId: null });
+    expect(calls.some((c) => c.method === "create")).toBe(false);
+    expect(await linkAccount(odoo, { guildId: GUILD, discordId: "nope", username: "x", email: "a@b.example" })).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+Deno.test("account: what's left to link, for someone on Discord and someone signed in by email", async () => {
+  const { odoo, partners } = fakeOdoo();
+  partners[1276] = { id: 1276, name: "Barbara", email: "barbara@donut.example", is_company: false, vat: false, street: false, zip: false, city: false, country_code: false, type: "contact", parent_id: false, active: true };
+  await withWebsite(odoo, async () => {
+    expect(await (await post("account", {})).json()).toMatchObject({ ok: true, hasEmail: true, discordLinked: true });
+    const asBarbara = () => post("account", { userId: undefined, emailUser: { email: "barbara@donut.example" } });
+    expect(await (await asBarbara()).json()).toMatchObject({ hasEmail: true, discordLinked: false });
+    partners[1276].x_discord_id = "555555555555";
+    expect(await (await asBarbara()).json()).toMatchObject({ discordLinked: true });
+  });
+});

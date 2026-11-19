@@ -27,6 +27,7 @@ import { clip } from "./discord-text.ts";
 import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin, partnerByEmail } from "./email-login.ts";
+import { contactByEmail, linkAccount } from "./account-link.ts";
 import { activeOn, cancelCreditBooking, type Credits, creditLine, creditMark, creditsOf, coversRoom, logOnCompany, myCreditBookings, recordCreditBooking, split, usedHours, weekOf, withCreditLock } from "./room-credits.ts";
 import { CANCELLATION_POLICY, cancelBooking, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
@@ -319,6 +320,13 @@ function needOdoo(c: Ctx): OdooCall | Answer {
   return c.odoo ?? fail("Paying in euros is not available right now: pay with tokens or ask in Discord.", 503);
 }
 const isOdoo = (x: OdooCall | Answer): x is OdooCall => typeof x === "function";
+
+/** What the website still offers to link: an email for someone on Discord, Discord for someone signed in by email. */
+async function account(c: Ctx): Promise<Answer> {
+  if (c.member) return ok({ hasEmail: !!c.email, discordLinked: true });
+  const contact = c.odoo && c.email ? await contactByEmail(c.odoo, c.email).catch(() => null) : null;
+  return ok({ hasEmail: !!c.email, discordLinked: !!contact?.x_discord_id });
+}
 
 async function orgs(c: Ctx): Promise<Answer> {
   const odoo = needOdoo(c);
@@ -700,7 +708,17 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
       return reply(ok({ orgs: {} }));
     }
   }
-  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking"].includes(endpoint)) return reply(fail("Not found", 404));
+  // The website proved both a Discord account and an email address are someone's (lib/account-link.ts).
+  if (endpoint === "link") {
+    try {
+      const r = await linkAccount(deps.odoo(), { guildId: String(body.guildId ?? ""), discordId: String(body.discordId ?? ""), username: String(body.username ?? ""), displayName: typeof body.displayName === "string" ? body.displayName : undefined, email: String(body.email ?? "") });
+      return reply(r.ok ? ok({ partnerId: r.partnerId }) : fail(r.error, r.status));
+    } catch (error) {
+      console.error("[website-api] link failed:", error);
+      return reply(fail("Could not link the accounts right now.", 502));
+    }
+  }
+  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking", "account"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
@@ -709,6 +727,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     if (endpoint === "options") return reply(await options(c));
     if (endpoint === "availability") return reply(await availability(c, body));
     if (endpoint === "orgs") return reply(await orgs(c));
+    if (endpoint === "account") return reply(await account(c));
     if (endpoint === "org") return reply(await org(c, body));
     if (endpoint === "vat") return reply(await vat(body));
     if (endpoint === "mine") return reply(await mine(c, body));
