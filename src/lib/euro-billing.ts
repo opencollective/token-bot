@@ -136,7 +136,7 @@ export async function selfPartner(odoo: OdooCall, email: string | undefined): Pr
   return found.find((p) => s(p.email).trim().toLowerCase() === email.trim().toLowerCase()) ?? null;
 }
 
-async function billingChild(odoo: OdooCall, parentId: number): Promise<Partner | null> {
+export async function billingChild(odoo: OdooCall, parentId: number): Promise<Partner | null> {
   const found = (await odoo("res.partner", "search_read", {
     domain: [["parent_id", "=", parentId], ["type", "=", "invoice"], ["active", "=", true]],
     fields: PARTNER_FIELDS,
@@ -299,8 +299,8 @@ export type Invoice = {
   emailed: boolean;
 };
 
-const saleTax = () => Number(getEnv("ODOO_SALE_TAX_ID")) || 163;
-const salesJournal = () => Number(getEnv("ODOO_SALES_JOURNAL_ID")) || 11;
+export const saleTax = () => Number(getEnv("ODOO_SALE_TAX_ID")) || 163;
+export const salesJournal = () => Number(getEnv("ODOO_SALES_JOURNAL_ID")) || 11;
 
 let incomeAccount: { code: string; id: number } | null = null;
 async function incomeAccountId(odoo: OdooCall): Promise<number> {
@@ -507,18 +507,9 @@ export async function createInvoice(odoo: OdooCall, p: {
   /** What was booked, kept with the invoice in website-invoices.jsonl (for the member's dashboard). */
   booking?: Booked;
 }): Promise<{ ok: true; invoice: Invoice } | { ok: false; error: string; status: number }> {
-  let partnerId: number;
-  if (p.to === "self") {
-    const me = await selfPartner(odoo, p.member.email);
-    if (me) partnerId = me.id;
-    else if (p.member.email) partnerId = ((await odoo("res.partner", "create", { vals_list: [{ name: p.member.name, email: p.member.email, lang: DEFAULT_LANG }] })) as number[])[0];
-    else return { ok: false, error: "We don't have your email address: add an organisation to invoice instead.", status: 400 };
-  } else {
-    const mine = await userOrgIds(p.guildId, p.userId);
-    const me = await selfPartner(odoo, p.member.email);
-    if (!mine.includes(p.to) && p.to !== me?.id && p.to !== companyIdOf(me)) return { ok: false, error: "Choose one of your organisations.", status: 403 };
-    partnerId = p.to;
-  }
+  const target = await invoicePartner(odoo, p);
+  if (!target.ok) return target;
+  const partnerId = target.partnerId;
   const billing = await billingChild(odoo, partnerId);
   const tax = saleTax();
   const account = await incomeAccountId(odoo);
@@ -532,28 +523,48 @@ export async function createInvoice(odoo: OdooCall, p: {
     }],
   })) as number[];
   await odoo("account.move", "action_post", { ids: [moveId] });
+  return { ok: true, invoice: await finishInvoice(odoo, moveId, { guildId: p.guildId, userId: p.userId, partnerId, booking: p.booking }) };
+}
+
+/**
+ * Who an invoice goes to: the member themselves (their partner, created with their email when
+ * Odoo has none), or one of their organisations (added by them, or the company Odoo has them as a
+ * contact of).
+ */
+export async function invoicePartner(odoo: OdooCall, p: { guildId: string; userId: string; member: { name: string; email?: string }; to: number | "self" }): Promise<{ ok: true; partnerId: number } | { ok: false; error: string; status: number }> {
+  if (p.to === "self") {
+    const me = await selfPartner(odoo, p.member.email);
+    if (me) return { ok: true, partnerId: me.id };
+    if (p.member.email) return { ok: true, partnerId: ((await odoo("res.partner", "create", { vals_list: [{ name: p.member.name, email: p.member.email, lang: DEFAULT_LANG }] })) as number[])[0] };
+    return { ok: false, error: "We don't have your email address: add an organisation to invoice instead.", status: 400 };
+  }
+  const mine = await userOrgIds(p.guildId, p.userId);
+  const me = await selfPartner(odoo, p.member.email);
+  if (!mine.includes(p.to) && p.to !== me?.id && p.to !== companyIdOf(me)) return { ok: false, error: "Choose one of your organisations.", status: 403 };
+  return { ok: true, partnerId: p.to };
+}
+
+/** A posted invoice: emailed, kept in website-invoices.jsonl (so the member can pay it by card), as the website shows it. */
+export async function finishInvoice(odoo: OdooCall, moveId: number, p: { guildId: string; userId: string; partnerId: number; booking?: Booked }): Promise<Invoice> {
   const [m] = (await odoo("account.move", "read", {
     ids: [moveId],
     fields: ["name", "amount_untaxed", "amount_tax", "amount_total", "payment_reference", "invoice_date_due", "partner_id"],
   })) as { name: string; amount_untaxed: number; amount_tax: number; amount_total: number; payment_reference: string | false; invoice_date_due: string | false; partner_id: [number, string] }[];
-  const [partner] = (await odoo("res.partner", "read", { ids: [partnerId], fields: ["email"] })) as { email: string | false }[];
+  const [partner] = (await odoo("res.partner", "read", { ids: [p.partnerId], fields: ["email"] })) as { email: string | false }[];
   const emailed = await emailInvoice(odoo, moveId);
   const path = invoicesFile(p.guildId);
   await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
   await Deno.writeTextFile(path, JSON.stringify({ invoiceId: moveId, number: m.name, userId: p.userId, total: m.amount_total, communication: s(m.payment_reference) || m.name, ...(p.booking ? { booking: p.booking } : {}), at: new Date().toISOString() }) + "\n", { append: true });
   return {
-    ok: true,
-    invoice: {
-      id: moveId,
-      number: m.name,
-      untaxed: m.amount_untaxed,
-      vat: m.amount_tax,
-      total: m.amount_total,
-      communication: s(m.payment_reference) || m.name,
-      due: s(m.invoice_date_due) || null,
-      partnerName: m.partner_id?.[1] ?? "",
-      sentTo: s(partner?.email) || null,
-      emailed,
-    },
+    id: moveId,
+    number: m.name,
+    untaxed: m.amount_untaxed,
+    vat: m.amount_tax,
+    total: m.amount_total,
+    communication: s(m.payment_reference) || m.name,
+    due: s(m.invoice_date_due) || null,
+    partnerName: m.partner_id?.[1] ?? "",
+    sentTo: s(partner?.email) || null,
+    emailed,
   };
 }

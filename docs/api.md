@@ -536,3 +536,9 @@ An organisation can have free room hours per week, set on its company in Odoo (t
 
 - `link` `{guildId, discordId, username, displayName?, email}`: the website proved both are the same person's (an email sign-in followed by Discord sign-in, or a 6-digit code sent to the address). The bot saves the email for that Discord user (users.jsonl) and sets `x_discord_id` / `x_discord_username` (tab "Discord") on the Odoo contact with that Discord id, else with that email. No contact is created.
 - `account` (Discord member or `emailUser`): `{hasEmail, discordLinked}`, what the website still offers to link.
+
+## Unlimited coworking (monthly subscription)
+
+- `options.eur.coworkMonthly`: the price (€100 + 21% VAT, the same for everyone).
+- `account.coworkSubscription`: `{name, since, nextInvoice, monthly}` when Odoo has a running subscription with a coworking product for the member's own contact (also ones made by hand), else null.
+- `subscribecowork` `{org: "self" | <organisation id>}`: a subscription in Odoo (product `ODOO_COWORK_PRODUCT_ID` 289, plan `ODOO_MONTHLY_PLAN_ID` 1, journal RCC), confirmed, and its first month invoiced, posted and emailed (`invoice`, payable by card through the website). Odoo invoices the following months. 409 when they already have one.

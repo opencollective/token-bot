@@ -1,0 +1,84 @@
+/**
+ * Unlimited coworking: a monthly subscription in Odoo (sale_subscription), €100 a month + VAT,
+ * like the ones made by hand (S00221): product "Coworking" (ODOO_COWORK_PRODUCT_ID, 289), the
+ * "Monthly" plan (ODOO_MONTHLY_PLAN_ID, 1), 21% services. Odoo invoices it every month and emails
+ * the invoice; the first one is made at once and posted, which moves the next invoice to next month
+ * (checked on Odoo 19), paid by card on the website or by transfer.
+ *
+ * Someone has unlimited coworking when Odoo has a running coworking subscription for their own
+ * contact (any subscription with a coworking product, also the ones made by hand).
+ */
+
+import type { OdooCall } from "./odoo.ts";
+import { getEnv } from "./utils.ts";
+import { billingChild, finishInvoice, type Invoice, invoicePartner, saleTax, salesJournal, selfPartner } from "./euro-billing.ts";
+
+export const COWORK_MONTHLY_EUR = 100;
+const productId = () => Number(getEnv("ODOO_COWORK_PRODUCT_ID")) || 289;
+const planId = () => Number(getEnv("ODOO_MONTHLY_PLAN_ID")) || 1;
+
+export type CoworkSubscription = { id: number; name: string; since: string | null; nextInvoice: string | null; monthly: number };
+
+/** Running (or paused) subscription with a coworking product, for this contact. */
+export async function coworkSubscriptionOf(odoo: OdooCall, partnerId: number): Promise<CoworkSubscription | null> {
+  const found = (await odoo("sale.order", "search_read", {
+    domain: [["is_subscription", "=", true], ["subscription_state", "in", ["3_progress", "4_paused"]], ["partner_id", "=", partnerId], ["order_line.product_id.name", "ilike", "cowork"]],
+    fields: ["name", "start_date", "next_invoice_date", "amount_untaxed"],
+    order: "start_date desc",
+    limit: 1,
+  })) as { id: number; name: string; start_date: string | false; next_invoice_date: string | false; amount_untaxed: number }[];
+  const s = found[0];
+  return s ? { id: s.id, name: s.name, since: s.start_date || null, nextInvoice: s.next_invoice_date || null, monthly: s.amount_untaxed } : null;
+}
+
+/** The member's own subscription, found by their email. */
+export async function myCoworkSubscription(odoo: OdooCall, email: string | undefined): Promise<CoworkSubscription | null> {
+  const me = await selfPartner(odoo, email);
+  return me ? await coworkSubscriptionOf(odoo, me.id) : null;
+}
+
+/**
+ * Start one: for the member's own contact (created with their email when Odoo has none), invoiced
+ * to them or one of their organisations. Confirmed at once, and its first month invoiced.
+ */
+export async function subscribeCowork(odoo: OdooCall, p: { guildId: string; userId: string; member: { name: string; email?: string }; to: number | "self"; today?: string }): Promise<{ ok: true; subscription: CoworkSubscription; invoice: Invoice | null } | { ok: false; error: string; status: number }> {
+  if (!p.member.email) return { ok: false, error: "We need your email address for a subscription: add it on your dashboard first.", status: 400 };
+  const self = await invoicePartner(odoo, { ...p, to: "self" });
+  if (!self.ok) return self;
+  const existing = await coworkSubscriptionOf(odoo, self.partnerId);
+  if (existing) return { ok: false, error: `You already have unlimited coworking (${existing.name}).`, status: 409 };
+  const payer = p.to === "self" ? self : await invoicePartner(odoo, p);
+  if (!payer.ok) return payer;
+  const billing = await billingChild(odoo, payer.partnerId);
+  const today = p.today ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Brussels" });
+  const [orderId] = (await odoo("sale.order", "create", {
+    vals_list: [{
+      partner_id: self.partnerId,
+      partner_invoice_id: billing?.id ?? payer.partnerId,
+      plan_id: planId(),
+      start_date: today,
+      // Invoiced on the rental-coworking-catering journal, like the bookings (Odoo would pick "Memberships").
+      journal_id: salesJournal(),
+      origin: "Website",
+      order_line: [[0, 0, { product_id: productId(), name: "Unlimited coworking (monthly)", product_uom_qty: 1, price_unit: COWORK_MONTHLY_EUR, tax_ids: [[6, 0, [saleTax()]]] }]],
+    }],
+  })) as number[];
+  await odoo("sale.order", "action_confirm", { ids: [orderId] });
+  // The first month, invoiced now (later months: Odoo's subscription invoicing).
+  let invoice: Invoice | null = null;
+  try {
+    const [wizard] = (await odoo("sale.advance.payment.inv", "create", { vals_list: [{ advance_payment_method: "delivered", sale_order_ids: [[6, 0, [orderId]]] }] })) as number[];
+    await odoo("sale.advance.payment.inv", "create_invoices", { ids: [wizard] });
+    const [order] = (await odoo("sale.order", "read", { ids: [orderId], fields: ["invoice_ids"] })) as { invoice_ids: number[] }[];
+    const moveId = Math.max(...(order?.invoice_ids ?? []));
+    if (Number.isFinite(moveId) && moveId > 0) {
+      const [m] = (await odoo("account.move", "read", { ids: [moveId], fields: ["state"] })) as { state: string }[];
+      if (m?.state === "draft") await odoo("account.move", "action_post", { ids: [moveId] });
+      invoice = await finishInvoice(odoo, moveId, { guildId: p.guildId, userId: p.userId, partnerId: payer.partnerId });
+    }
+  } catch (error) {
+    console.error("[cowork-subscription] the first invoice could not be made:", error);
+  }
+  const subscription = (await coworkSubscriptionOf(odoo, self.partnerId)) ?? { id: orderId, name: `S${orderId}`, since: today, nextInvoice: null, monthly: COWORK_MONTHLY_EUR };
+  return { ok: true, subscription, invoice };
+}
