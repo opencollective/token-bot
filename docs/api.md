@@ -531,3 +531,8 @@ An organisation can have free room hours per week, set on its company in Odoo (t
 ## emailUser
 
 `emailUser: {email}` instead of `userId`: the production Odoo partner with that address (signed in on the website with an email code). Euros only (`cowork`, `guestpass`, `book` refused); `options.eurOnly` is true.
+
+## Linking Discord and email
+
+- `link` `{guildId, discordId, username, displayName?, email}`: the website proved both are the same person's (an email sign-in followed by Discord sign-in, or a 6-digit code sent to the address). The bot saves the email for that Discord user (users.jsonl) and sets `x_discord_id` / `x_discord_username` (tab "Discord") on the Odoo contact with that Discord id, else with that email. No contact is created.
+- `account` (Discord member or `emailUser`): `{hasEmail, discordLinked}`, what the website still offers to link.
