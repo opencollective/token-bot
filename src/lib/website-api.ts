@@ -28,6 +28,7 @@ import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin, partnerByEmail } from "./email-login.ts";
 import { contactByEmail, linkAccount } from "./account-link.ts";
+import { COWORK_MONTHLY_EUR, myCoworkSubscription, subscribeCowork } from "./cowork-subscription.ts";
 import { activeOn, cancelCreditBooking, type Credits, creditLine, creditMark, creditsOf, coversRoom, logOnCompany, myCreditBookings, recordCreditBooking, split, usedHours, weekOf, withCreditLock } from "./room-credits.ts";
 import { CANCELLATION_POLICY, cancelBooking, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
@@ -264,6 +265,8 @@ async function options(c: Ctx): Promise<Answer> {
       memberDiscount: memberPrice(c) ? MEMBER_DISCOUNT : 0,
       vatRate: VAT_RATE,
       cowork: Object.fromEntries(SHOP_ITEMS.map((i) => [i.id, quote([coworkLine(i.label, coworkEur(i.id), memberPrice(c), "today")])])),
+      // Unlimited coworking, a monthly subscription: the same price for everyone.
+      coworkMonthly: quote([{ label: "Unlimited coworking (monthly)", quantity: 1, unitPrice: COWORK_MONTHLY_EUR, discount: 0 }]),
     },
   });
 }
@@ -323,9 +326,31 @@ const isOdoo = (x: OdooCall | Answer): x is OdooCall => typeof x === "function";
 
 /** What the website still offers to link: an email for someone on Discord, Discord for someone signed in by email. */
 async function account(c: Ctx): Promise<Answer> {
-  if (c.member) return ok({ hasEmail: !!c.email, discordLinked: true });
+  const sub = c.odoo && c.email ? await myCoworkSubscription(c.odoo, c.email).catch(() => null) : null;
+  const coworkSubscription = sub ? { name: sub.name, since: sub.since, nextInvoice: sub.nextInvoice, monthly: sub.monthly } : null;
+  if (c.member) return ok({ hasEmail: !!c.email, discordLinked: true, coworkSubscription });
   const contact = c.odoo && c.email ? await contactByEmail(c.odoo, c.email).catch(() => null) : null;
-  return ok({ hasEmail: !!c.email, discordLinked: !!contact?.x_discord_id });
+  return ok({ hasEmail: !!c.email, discordLinked: !!contact?.x_discord_id, coworkSubscription });
+}
+
+const subscribing = new Set<string>();
+
+/** Unlimited coworking, €100 a month + VAT: a monthly subscription in Odoo (lib/cowork-subscription.ts). */
+async function subscribeCoworkEndpoint(c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {
+  const odoo = needOdoo(c);
+  if (!isOdoo(odoo)) return odoo;
+  const to = invoiceTo(b);
+  if (!to) return fail("Choose who we invoice.");
+  if (subscribing.has(c.userId)) return fail("Your subscription is being set up, one moment.", 409);
+  subscribing.add(c.userId);
+  let r: Awaited<ReturnType<typeof subscribeCowork>>;
+  try {
+    r = await subscribeCowork(odoo, { guildId: c.guildId, userId: c.userId, member: { name: c.name, email: c.email }, to });
+  } finally {
+    subscribing.delete(c.userId);
+  }
+  if (!r.ok) return fail(r.error, r.status);
+  return { ...ok({ subscription: { name: r.subscription.name, since: r.subscription.since, nextInvoice: r.subscription.nextInvoice, monthly: r.subscription.monthly }, invoice: r.invoice }), charged: true };
 }
 
 async function orgs(c: Ctx): Promise<Answer> {
@@ -718,7 +743,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
       return reply(fail("Could not link the accounts right now.", 502));
     }
   }
-  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking", "account"].includes(endpoint)) return reply(fail("Not found", 404));
+  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking", "account", "subscribecowork"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
@@ -728,6 +753,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     if (endpoint === "availability") return reply(await availability(c, body));
     if (endpoint === "orgs") return reply(await orgs(c));
     if (endpoint === "account") return reply(await account(c));
+    if (endpoint === "subscribecowork") return reply(await subscribeCoworkEndpoint(c, body));
     if (endpoint === "org") return reply(await org(c, body));
     if (endpoint === "vat") return reply(await vat(body));
     if (endpoint === "mine") return reply(await mine(c, body));

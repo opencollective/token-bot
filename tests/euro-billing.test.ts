@@ -409,3 +409,62 @@ Deno.test("account: what's left to link, for someone on Discord and someone sign
     expect(await (await asBarbara()).json()).toMatchObject({ discordLinked: true });
   });
 });
+
+// ── Unlimited coworking (monthly subscription) ─────────────────────────────
+
+function withSubscriptions() {
+  const base = fakeOdoo();
+  const orders: Record<string, unknown>[] = [];
+  const odoo: OdooCall = async (model, method, args = {}) => {
+    base.calls.push({ model, method, args });
+    if (model === "sale.order") {
+      if (method === "search_read") {
+        const [, , [, , partnerId]] = args.domain as [unknown, unknown, [string, string, number]];
+        return orders.filter((o) => o.state === "sale" && o.partner_id === partnerId).map((o) => ({ id: o.id, name: o.name, start_date: o.start_date, next_invoice_date: "2030-02-08", amount_untaxed: 100 }));
+      }
+      if (method === "create") {
+        const v = (args.vals_list as Record<string, unknown>[])[0];
+        const id = 300 + orders.length;
+        orders.push({ ...v, id, name: `S00${id}`, state: "draft" });
+        return [id];
+      }
+      if (method === "action_confirm") {
+        for (const o of orders) if ((args.ids as number[]).includes(o.id as number)) o.state = "sale";
+        return true;
+      }
+      if (method === "read") return [{ invoice_ids: [900] }];
+    }
+    if (model === "sale.advance.payment.inv") return method === "create" ? [1] : true;
+    if (model === "account.move" && method === "read" && (args.fields as string[]).length === 1) return [{ state: "draft" }];
+    return base.odoo(model, method, args);
+  };
+  return { ...base, odoo, orders };
+}
+
+Deno.test("unlimited coworking: a monthly subscription in Odoo, the first month invoiced; only one", async () => {
+  await withDataDir(async () => {
+    const { odoo, calls, orders } = withSubscriptions();
+    const { subscribeCowork, myCoworkSubscription } = await import("../src/lib/cowork-subscription.ts");
+    expect(await myCoworkSubscription(odoo, "xavier@example.org")).toBe(null);
+    const r = await subscribeCowork(odoo, { guildId: GUILD, userId: USER, member: { name: "Xavier", email: "xavier@example.org" }, to: "self", today: "2030-01-08" });
+    expect(r).toMatchObject({ ok: true, subscription: { name: "S00300", since: "2030-01-08" }, invoice: { number: "2026_RCC_0105" } });
+    expect(orders[0]).toMatchObject({ partner_id: 7, partner_invoice_id: 7, plan_id: 1, journal_id: 11, state: "sale" });
+    expect((orders[0].order_line as unknown[][])[0][2]).toMatchObject({ product_id: 289, price_unit: 100, tax_ids: [[6, 0, [163]]] });
+    expect(calls.some((c) => c.model === "account.move" && c.method === "action_post")).toBe(true);
+    expect(await myCoworkSubscription(odoo, "xavier@example.org")).toMatchObject({ name: "S00300" });
+    expect(await subscribeCowork(odoo, { guildId: GUILD, userId: USER, member: { name: "Xavier", email: "xavier@example.org" }, to: "self" })).toMatchObject({ ok: false, status: 409 });
+    expect(await subscribeCowork(odoo, { guildId: GUILD, userId: USER, member: { name: "Xavier" }, to: "self" })).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+Deno.test("unlimited coworking: the website endpoints", async () => {
+  const { odoo } = withSubscriptions();
+  await withWebsite(odoo, async () => {
+    const o = await (await post("options", {})).json();
+    expect(o.eur.coworkMonthly).toMatchObject({ untaxed: 100, vat: 21, total: 121 });
+    expect((await (await post("account", {})).json()).coworkSubscription).toBe(null);
+    const r = await (await post("subscribecowork", { org: "self" })).json();
+    expect(r).toMatchObject({ ok: true, subscription: { name: "S00300" }, invoice: { total: 50.82 } });
+    expect((await (await post("account", {})).json()).coworkSubscription).toMatchObject({ name: "S00300", monthly: 100 });
+  });
+});
