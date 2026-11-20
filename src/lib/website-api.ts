@@ -28,6 +28,7 @@ import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin, partnerByEmail } from "./email-login.ts";
 import { contactByEmail, linkAccount } from "./account-link.ts";
+import { euroHistory } from "./euro-history.ts";
 import { COWORK_MONTHLY_EUR, myCoworkSubscription, subscribeCowork } from "./cowork-subscription.ts";
 import { activeOn, cancelCreditBooking, type Credits, creditLine, creditMark, creditsOf, coversRoom, logOnCompany, myCreditBookings, recordCreditBooking, split, usedHours, weekOf, withCreditLock } from "./room-credits.ts";
 import { CANCELLATION_POLICY, cancelBooking, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
@@ -743,7 +744,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
       return reply(fail("Could not link the accounts right now.", 502));
     }
   }
-  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking", "account", "subscribecowork"].includes(endpoint)) return reply(fail("Not found", 404));
+  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking", "account", "subscribecowork", "history"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
@@ -753,6 +754,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     if (endpoint === "availability") return reply(await availability(c, body));
     if (endpoint === "orgs") return reply(await orgs(c));
     if (endpoint === "account") return reply(await account(c));
+    if (endpoint === "history") return reply(ok({ euros: await euroHistory(c.odoo, { email: c.email, discordId: c.member ? c.userId : undefined, stripe: !c.test }) }));
     if (endpoint === "subscribecowork") return reply(await subscribeCoworkEndpoint(c, body));
     if (endpoint === "org") return reply(await org(c, body));
     if (endpoint === "vat") return reply(await vat(body));
