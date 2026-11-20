@@ -31,7 +31,7 @@ import { contactByEmail, linkAccount } from "./account-link.ts";
 import { euroHistory, personContacts } from "./euro-history.ts";
 import { COWORK_MONTHLY_EUR, COWORK_YEARLY_EUR, myCoworkSubscription, subscribeCowork, switchToYearly, unpaidInvoices } from "./cowork-subscription.ts";
 import { activeOn, cancelCreditBooking, type Credits, creditLine, creditMark, creditsOf, coversRoom, logOnCompany, myCreditBookings, recordCreditBooking, split, usedHours, weekOf, withCreditLock } from "./room-credits.ts";
-import { CANCELLATION_POLICY, cancelBooking, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
+import { CANCELLATION_POLICY, cancelBooking, cardPaidInvoiceIds, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
 
 type Json = Record<string, unknown>;
@@ -339,7 +339,9 @@ async function account(c: Ctx): Promise<Answer> {
 async function unpaid(c: Ctx): Promise<Answer> {
   if (!c.odoo) return ok({ invoices: [] });
   const [ids, sub] = await Promise.all([personContacts(c.odoo, { email: c.email, discordId: c.member ? c.userId : undefined }), c.email ? myCoworkSubscription(c.odoo, c.email).catch(() => null) : Promise.resolve(null)]);
-  return ok({ invoices: await unpaidInvoices(c.odoo, ids, sub) });
+  // Paid by card here and not reconciled in Odoo yet: not shown as unpaid.
+  const card = await cardPaidInvoiceIds(c.guildId);
+  return ok({ invoices: (await unpaidInvoices(c.odoo, ids, sub)).filter((i) => !card.has(i.id)) });
 }
 
 /** A monthly coworking subscription becomes yearly (lib/cowork-subscription.ts switchToYearly). */
@@ -637,7 +639,8 @@ async function paid(c: Ctx, b: Json): Promise<Answer> {
   const invoiceId = Number(b.invoiceId);
   const sessionId = str(b, "sessionId", 200);
   if (!Number.isInteger(invoiceId) || invoiceId <= 0 || !sessionId) return fail("invoiceId and sessionId are required");
-  return (await recordCardPayment(c.guildId, c.userId, invoiceId, sessionId)) ? ok({}) : fail("Not your invoice.", 404);
+  const theirs = async () => !!c.odoo && (await unpaidInvoices(c.odoo, await personContacts(c.odoo, { email: c.email, discordId: c.member ? c.userId : undefined }), null)).some((i) => i.id === invoiceId);
+  return (await recordCardPayment(c.guildId, c.userId, invoiceId, sessionId, theirs)) ? ok({}) : fail("Not your invoice.", 404);
 }
 
 async function cowork(client: Client, c: Ctx, b: Json): Promise<Answer & { charged?: boolean }> {

@@ -334,6 +334,10 @@ export type Booked = { kind: "room"; label: string; start: string; end: string; 
 
 type InvoiceRecord = { invoiceId: number; number: string; userId: string; total: number; communication?: string; booking?: Booked; at: string };
 type CardPaid = { invoiceId: number; userId: string; sessionId: string; at: string };
+/** Invoices paid by card on the website, not reconciled in Odoo yet. */
+export async function cardPaidInvoiceIds(guildId: string): Promise<Set<number>> {
+  return new Set((await readJsonl<CardPaid>(paidFile(guildId))).map((c) => c.invoiceId));
+}
 const paidFile = (guildId: string) => `${getEnv("DATA_DIR") || "/data"}/${guildId}/website-card-payments.jsonl`;
 
 async function readJsonl<T>(path: string): Promise<T[]> {
@@ -487,8 +491,9 @@ export async function cancelBooking(
 }
 
 /** The website saw this invoice paid by card (Stripe Checkout): note it, if it is this member's. */
-export async function recordCardPayment(guildId: string, userId: string, invoiceId: number, sessionId: string): Promise<boolean> {
-  const own = (await readJsonl<InvoiceRecord>(invoicesFile(guildId))).some((r) => r.userId === userId && r.invoiceId === invoiceId);
+export async function recordCardPayment(guildId: string, userId: string, invoiceId: number, sessionId: string, theirs?: () => Promise<boolean>): Promise<boolean> {
+  // One the website made for them, or (theirs) one of their own invoices in Odoo (unpaid invoices on the dashboard).
+  const own = (await readJsonl<InvoiceRecord>(invoicesFile(guildId))).some((r) => r.userId === userId && r.invoiceId === invoiceId) || (!!theirs && (await theirs().catch(() => false)));
   if (!own) return false;
   const path = paidFile(guildId);
   if ((await readJsonl<CardPaid>(path)).some((c) => c.invoiceId === invoiceId)) return true;
