@@ -420,7 +420,7 @@ function withSubscriptions() {
     if (model === "sale.order") {
       if (method === "search_read") {
         const [, , [, , partnerIds]] = args.domain as [unknown, unknown, [string, string, number[]]];
-        return orders.filter((o) => o.state === "sale" && partnerIds.includes(o.partner_id as number)).map((o) => ({ id: o.id, name: o.name, start_date: o.start_date, next_invoice_date: "2030-02-08", amount_untaxed: 100 }));
+        return orders.filter((o) => o.state === "sale" && partnerIds.includes(o.partner_id as number)).map((o) => ({ id: o.id, name: o.name, start_date: o.start_date, next_invoice_date: "2030-02-08", amount_untaxed: ((o.order_line as unknown[][])[0][2] as { price_unit: number }).price_unit, plan_id: o.plan_id === 2 ? [2, "Yearly"] : [1, "Monthly"] }));
       }
       if (method === "create") {
         const v = (args.vals_list as Record<string, unknown>[])[0];
@@ -457,14 +457,28 @@ Deno.test("unlimited coworking: a monthly subscription in Odoo, the first month 
   });
 });
 
+Deno.test("unlimited coworking: a year at once, €1,000 on the Yearly plan", async () => {
+  await withDataDir(async () => {
+    const { odoo, orders } = withSubscriptions();
+    const { subscribeCowork } = await import("../src/lib/cowork-subscription.ts");
+    const r = await subscribeCowork(odoo, { guildId: GUILD, userId: USER, member: { name: "Xavier", email: "xavier@example.org" }, to: "self", period: "year", today: "2030-01-08" });
+    expect(r).toMatchObject({ ok: true, subscription: { period: "year", amount: 1000 } });
+    expect(orders[0]).toMatchObject({ plan_id: 2 });
+    expect((orders[0].order_line as unknown[][])[0][2]).toMatchObject({ price_unit: 1000 });
+  });
+});
+
 Deno.test("unlimited coworking: the website endpoints", async () => {
   const { odoo } = withSubscriptions();
   await withWebsite(odoo, async () => {
     const o = await (await post("options", {})).json();
     expect(o.eur.coworkMonthly).toMatchObject({ untaxed: 100, vat: 21, total: 121 });
+    expect(o.eur.coworkYearly).toMatchObject({ untaxed: 1000, vat: 210, total: 1210 });
     expect((await (await post("account", {})).json()).coworkSubscription).toBe(null);
-    const r = await (await post("subscribecowork", { org: "self" })).json();
+    expect((await post("subscribecowork", { org: "self", pay: "later" })).status).toBe(400);
+    expect((await post("subscribecowork", { org: "self", pay: "card", period: "year" })).status).toBe(400);
+    const r = await (await post("subscribecowork", { org: "self", pay: "card" })).json();
     expect(r).toMatchObject({ ok: true, subscription: { name: "S00300" }, invoice: { total: 50.82 } });
-    expect((await (await post("account", {})).json()).coworkSubscription).toMatchObject({ name: "S00300", monthly: 100 });
+    expect((await (await post("account", {})).json()).coworkSubscription).toMatchObject({ name: "S00300", monthly: 100, period: "month" });
   });
 });
