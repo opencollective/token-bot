@@ -541,7 +541,7 @@ An organisation can have free room hours per week, set on its company in Odoo (t
 
 - `options.eur.coworkMonthly`: the price (€100 + 21% VAT, the same for everyone).
 - `account.coworkSubscription`: `{name, since, nextInvoice, monthly}` when Odoo has a running subscription with a coworking product for the member's own contact (also ones made by hand), else null.
-- `subscribecowork` `{org: "self" | <organisation id>}`: a subscription in Odoo (product `ODOO_COWORK_PRODUCT_ID` 289, plan `ODOO_MONTHLY_PLAN_ID` 1, journal RCC), confirmed, and its first month invoiced, posted and emailed (`invoice`, payable by card through the website). Odoo invoices the following months. 409 when they already have one.
+- `subscribecowork` `{org: "self" | <organisation id>, pay: "card" | "later", period?: "month" | "year"}`: a subscription in Odoo (product `ODOO_COWORK_PRODUCT_ID` 289, journal RCC), confirmed, and its first period invoiced, posted and emailed (`invoice`). Monthly (`ODOO_MONTHLY_PLAN_ID` 1, €100 + VAT) is paid by card through the website (`pay: "card"`); a year (`ODOO_YEARLY_PLAN_ID` 2, €1,000 + VAT, two months free) by bank transfer (`pay: "later"`); anything else is a 400. Odoo invoices the following periods. 409 when they already have one. `options.eur.coworkYearly` quotes the year.
 
 ### history
 

@@ -29,7 +29,7 @@ import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestF
 import { handleLogin, partnerByEmail } from "./email-login.ts";
 import { contactByEmail, linkAccount } from "./account-link.ts";
 import { euroHistory } from "./euro-history.ts";
-import { COWORK_MONTHLY_EUR, myCoworkSubscription, subscribeCowork } from "./cowork-subscription.ts";
+import { COWORK_MONTHLY_EUR, COWORK_YEARLY_EUR, myCoworkSubscription, subscribeCowork } from "./cowork-subscription.ts";
 import { activeOn, cancelCreditBooking, type Credits, creditLine, creditMark, creditsOf, coversRoom, logOnCompany, myCreditBookings, recordCreditBooking, split, usedHours, weekOf, withCreditLock } from "./room-credits.ts";
 import { CANCELLATION_POLICY, cancelBooking, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
@@ -268,6 +268,7 @@ async function options(c: Ctx): Promise<Answer> {
       cowork: Object.fromEntries(SHOP_ITEMS.map((i) => [i.id, quote([coworkLine(i.label, coworkEur(i.id), memberPrice(c), "today")])])),
       // Unlimited coworking, a monthly subscription: the same price for everyone.
       coworkMonthly: quote([{ label: "Unlimited coworking (monthly)", quantity: 1, unitPrice: COWORK_MONTHLY_EUR, discount: 0 }]),
+      coworkYearly: quote([{ label: "Unlimited coworking (yearly, two months free)", quantity: 1, unitPrice: COWORK_YEARLY_EUR, discount: 0 }]),
     },
   });
 }
@@ -328,7 +329,7 @@ const isOdoo = (x: OdooCall | Answer): x is OdooCall => typeof x === "function";
 /** What the website still offers to link: an email for someone on Discord, Discord for someone signed in by email. */
 async function account(c: Ctx): Promise<Answer> {
   const sub = c.odoo && c.email ? await myCoworkSubscription(c.odoo, c.email).catch(() => null) : null;
-  const coworkSubscription = sub ? { name: sub.name, since: sub.since, nextInvoice: sub.nextInvoice, monthly: sub.monthly } : null;
+  const coworkSubscription = sub ? { name: sub.name, since: sub.since, nextInvoice: sub.nextInvoice, monthly: sub.monthly, period: sub.period, amount: sub.amount } : null;
   if (c.member) return ok({ hasEmail: !!c.email, discordLinked: true, coworkSubscription });
   const contact = c.odoo && c.email ? await contactByEmail(c.odoo, c.email).catch(() => null) : null;
   return ok({ hasEmail: !!c.email, discordLinked: !!contact?.x_discord_id, coworkSubscription });
@@ -342,16 +343,20 @@ async function subscribeCoworkEndpoint(c: Ctx, b: Json): Promise<Answer & { char
   if (!isOdoo(odoo)) return odoo;
   const to = invoiceTo(b);
   if (!to) return fail("Choose who we invoice.");
+  // Monthly by card, a year by bank transfer.
+  const period = b.period === "year" ? "year" : "month";
+  if (period === "year" && b.pay === "card") return fail("A year of coworking is paid by bank transfer.");
+  if (period === "month" && b.pay !== "card") return fail("Monthly coworking is paid by card.");
   if (subscribing.has(c.userId)) return fail("Your subscription is being set up, one moment.", 409);
   subscribing.add(c.userId);
   let r: Awaited<ReturnType<typeof subscribeCowork>>;
   try {
-    r = await subscribeCowork(odoo, { guildId: c.guildId, userId: c.userId, member: { name: c.name, email: c.email }, to });
+    r = await subscribeCowork(odoo, { guildId: c.guildId, userId: c.userId, member: { name: c.name, email: c.email }, to, period });
   } finally {
     subscribing.delete(c.userId);
   }
   if (!r.ok) return fail(r.error, r.status);
-  return { ...ok({ subscription: { name: r.subscription.name, since: r.subscription.since, nextInvoice: r.subscription.nextInvoice, monthly: r.subscription.monthly }, invoice: r.invoice }), charged: true };
+  return { ...ok({ subscription: { name: r.subscription.name, since: r.subscription.since, nextInvoice: r.subscription.nextInvoice, monthly: r.subscription.monthly, period: r.subscription.period, amount: r.subscription.amount }, invoice: r.invoice }), charged: true };
 }
 
 async function orgs(c: Ctx): Promise<Answer> {
