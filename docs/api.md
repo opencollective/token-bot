@@ -546,3 +546,8 @@ An organisation can have free room hours per week, set on its company in Odoo (t
 ### history
 
 `POST /api/website/history` (same identity fields as the other endpoints): the person's euro transactions, newest first, at most 50: `{ ok, euros: [{ at, amount, description }] }`. From Odoo, the posted customer invoices and refunds of their own contacts (every person contact with their email, and the one linked to their Discord id) that are paid; from Stripe, the paid subscription invoices (memberships) of the customers with their email. From their side: a payment is negative, a refund positive. Their organisations' invoices aren't included.
+
+### unpaid, switchyearly
+
+- `unpaid`: the person's unpaid customer invoices (their own contacts, posted, not or partly paid), oldest first, at most 20: `{ invoices: [{ id, number, date, dueDate, total, due, communication, label, subscription: {name, period} | null }] }`. `subscription` when the invoice comes from their coworking subscription. The website pays them by card (`payinvoice`) or links to /pay for a transfer.
+- `switchyearly`: their monthly coworking subscription becomes yearly (€1,000 + VAT): its unpaid invoices are credited (credit note, posted: the invoice shows as reversed), it is closed (`set_close`), and a yearly one starts where the unpaid period began (or at its next invoice date), invoiced to the same contact; its invoice is returned. 409 when an invoice of it is partly paid (they write to us) or it's already yearly.

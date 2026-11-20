@@ -28,8 +28,8 @@ import { GoogleCalendarClient } from "./googlecalendar.ts";
 import { isTestEmail, odooConfigured, odooFromEnv, odooTestConfigured, odooTestFromEnv, type OdooCall } from "./odoo.ts";
 import { handleLogin, partnerByEmail } from "./email-login.ts";
 import { contactByEmail, linkAccount } from "./account-link.ts";
-import { euroHistory } from "./euro-history.ts";
-import { COWORK_MONTHLY_EUR, COWORK_YEARLY_EUR, myCoworkSubscription, subscribeCowork } from "./cowork-subscription.ts";
+import { euroHistory, personContacts } from "./euro-history.ts";
+import { COWORK_MONTHLY_EUR, COWORK_YEARLY_EUR, myCoworkSubscription, subscribeCowork, switchToYearly, unpaidInvoices } from "./cowork-subscription.ts";
 import { activeOn, cancelCreditBooking, type Credits, creditLine, creditMark, creditsOf, coversRoom, logOnCompany, myCreditBookings, recordCreditBooking, split, usedHours, weekOf, withCreditLock } from "./room-credits.ts";
 import { CANCELLATION_POLICY, cancelBooking, companyIdOf, coworkLine, createInvoice, type Invoice, listOrgs, lookupVat, MEMBER_DISCOUNT, myBookings, type OrgInput, quote, recordBookingEvent, recordCardPayment, roomLine, saveOrg, selfPartner, VAT_RATE } from "./euro-billing.ts";
 import type { GuildSettings, Product, Token } from "../types.ts";
@@ -333,6 +333,28 @@ async function account(c: Ctx): Promise<Answer> {
   if (c.member) return ok({ hasEmail: !!c.email, discordLinked: true, coworkSubscription });
   const contact = c.odoo && c.email ? await contactByEmail(c.odoo, c.email).catch(() => null) : null;
   return ok({ hasEmail: !!c.email, discordLinked: !!contact?.x_discord_id, coworkSubscription });
+}
+
+/** Their unpaid invoices, to pay from the dashboard (by card through the website, or by transfer). */
+async function unpaid(c: Ctx): Promise<Answer> {
+  if (!c.odoo) return ok({ invoices: [] });
+  const [ids, sub] = await Promise.all([personContacts(c.odoo, { email: c.email, discordId: c.member ? c.userId : undefined }), c.email ? myCoworkSubscription(c.odoo, c.email).catch(() => null) : Promise.resolve(null)]);
+  return ok({ invoices: await unpaidInvoices(c.odoo, ids, sub) });
+}
+
+/** A monthly coworking subscription becomes yearly (lib/cowork-subscription.ts switchToYearly). */
+async function switchYearly(c: Ctx): Promise<Answer> {
+  const odoo = needOdoo(c);
+  if (!isOdoo(odoo)) return odoo;
+  if (subscribing.has(c.userId)) return fail("Your subscription is being changed, one moment.", 409);
+  subscribing.add(c.userId);
+  try {
+    const r = await switchToYearly(odoo, { guildId: c.guildId, userId: c.userId, email: c.email });
+    if (!r.ok) return fail(r.error, r.status);
+    return ok({ subscription: { name: r.subscription.name, since: r.subscription.since, nextInvoice: r.subscription.nextInvoice, period: r.subscription.period, amount: r.subscription.amount }, invoice: r.invoice, credited: r.credited });
+  } finally {
+    subscribing.delete(c.userId);
+  }
 }
 
 const subscribing = new Set<string>();
@@ -749,7 +771,7 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
       return reply(fail("Could not link the accounts right now.", 502));
     }
   }
-  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking", "account", "subscribecowork", "history"].includes(endpoint)) return reply(fail("Not found", 404));
+  if (!["options", "availability", "cowork", "guestpass", "book", "orgs", "org", "vat", "paybook", "paycowork", "mine", "paid", "cancelbooking", "account", "subscribecowork", "history", "unpaid", "switchyearly"].includes(endpoint)) return reply(fail("Not found", 404));
   try {
     const c = await context(client, body);
     if (isAnswer(c)) return reply(c);
@@ -759,6 +781,8 @@ export async function handleWebsiteRequest(req: Request, path: string, client: C
     if (endpoint === "availability") return reply(await availability(c, body));
     if (endpoint === "orgs") return reply(await orgs(c));
     if (endpoint === "account") return reply(await account(c));
+    if (endpoint === "unpaid") return reply(await unpaid(c));
+    if (endpoint === "switchyearly") return reply(await switchYearly(c));
     if (endpoint === "history") return reply(ok({ euros: await euroHistory(c.odoo, { email: c.email, discordId: c.member ? c.userId : undefined, stripe: !c.test }) }));
     if (endpoint === "subscribecowork") return reply(await subscribeCoworkEndpoint(c, body));
     if (endpoint === "org") return reply(await org(c, body));
