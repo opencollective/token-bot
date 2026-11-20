@@ -542,3 +542,7 @@ An organisation can have free room hours per week, set on its company in Odoo (t
 - `options.eur.coworkMonthly`: the price (€100 + 21% VAT, the same for everyone).
 - `account.coworkSubscription`: `{name, since, nextInvoice, monthly}` when Odoo has a running subscription with a coworking product for the member's own contact (also ones made by hand), else null.
 - `subscribecowork` `{org: "self" | <organisation id>}`: a subscription in Odoo (product `ODOO_COWORK_PRODUCT_ID` 289, plan `ODOO_MONTHLY_PLAN_ID` 1, journal RCC), confirmed, and its first month invoiced, posted and emailed (`invoice`, payable by card through the website). Odoo invoices the following months. 409 when they already have one.
+
+### history
+
+`POST /api/website/history` (same identity fields as the other endpoints): the person's euro transactions, newest first, at most 50: `{ ok, euros: [{ at, amount, description }] }`. From Odoo, the posted customer invoices and refunds of their own contacts (every person contact with their email, and the one linked to their Discord id) that are paid; from Stripe, the paid subscription invoices (memberships) of the customers with their email. From their side: a payment is negative, a refund positive. Their organisations' invoices aren't included.
