@@ -65,22 +65,28 @@ export async function subscribeCowork(odoo: OdooCall, p: { guildId: string; user
   if (!payer.ok) return payer;
   const billing = await billingChild(odoo, payer.partnerId);
   const today = p.today ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Brussels" });
-  const period: CoworkPeriod = p.period === "year" ? "year" : "month";
+  const made = await createSubscription(odoo, { guildId: p.guildId, userId: p.userId, partnerId: self.partnerId, invoiceTo: billing?.id ?? payer.partnerId, payerId: payer.partnerId, period: p.period === "year" ? "year" : "month", start: today });
+  return { ok: true, ...made };
+}
+
+/** Create, confirm and invoice (the first period, posted and emailed) a coworking subscription. */
+async function createSubscription(odoo: OdooCall, p: { guildId: string; userId: string; partnerId: number; invoiceTo: number; payerId: number; period: CoworkPeriod; start: string; origin?: string }): Promise<{ subscription: CoworkSubscription; invoice: Invoice | null }> {
+  const { period } = p;
   const price = period === "year" ? COWORK_YEARLY_EUR : COWORK_MONTHLY_EUR;
   const [orderId] = (await odoo("sale.order", "create", {
     vals_list: [{
-      partner_id: self.partnerId,
-      partner_invoice_id: billing?.id ?? payer.partnerId,
+      partner_id: p.partnerId,
+      partner_invoice_id: p.invoiceTo,
       plan_id: planId(period),
-      start_date: today,
+      start_date: p.start,
       // Invoiced on the rental-coworking-catering journal, like the bookings (Odoo would pick "Memberships").
       journal_id: salesJournal(),
-      origin: "Website",
+      origin: p.origin ?? "Website",
       order_line: [[0, 0, { product_id: productId(), name: period === "year" ? "Unlimited coworking (yearly, two months free)" : "Unlimited coworking (monthly)", product_uom_qty: 1, price_unit: price, tax_ids: [[6, 0, [saleTax()]]] }]],
     }],
   })) as number[];
   await odoo("sale.order", "action_confirm", { ids: [orderId] });
-  // The first month (or the year), invoiced now (later months: Odoo's subscription invoicing).
+  // The first month (or the year), invoiced now (later periods: Odoo's subscription invoicing).
   let invoice: Invoice | null = null;
   try {
     const [wizard] = (await odoo("sale.advance.payment.inv", "create", { vals_list: [{ advance_payment_method: "delivered", sale_order_ids: [[6, 0, [orderId]]] }] })) as number[];
@@ -90,11 +96,77 @@ export async function subscribeCowork(odoo: OdooCall, p: { guildId: string; user
     if (Number.isFinite(moveId) && moveId > 0) {
       const [m] = (await odoo("account.move", "read", { ids: [moveId], fields: ["state"] })) as { state: string }[];
       if (m?.state === "draft") await odoo("account.move", "action_post", { ids: [moveId] });
-      invoice = await finishInvoice(odoo, moveId, { guildId: p.guildId, userId: p.userId, partnerId: payer.partnerId });
+      invoice = await finishInvoice(odoo, moveId, { guildId: p.guildId, userId: p.userId, partnerId: p.payerId });
     }
   } catch (error) {
     console.error("[cowork-subscription] the first invoice could not be made:", error);
   }
-  const subscription = (await coworkSubscriptionOf(odoo, self.partnerId)) ?? { id: orderId, name: `S${orderId}`, since: today, nextInvoice: null, monthly: period === "year" ? price / 12 : price, period, amount: price };
-  return { ok: true, subscription, invoice };
+  const subscription = (await coworkSubscriptionOf(odoo, p.partnerId)) ?? { id: orderId, name: `S${orderId}`, since: p.start, nextInvoice: null, monthly: period === "year" ? price / 12 : price, period, amount: price };
+  return { subscription, invoice };
+}
+
+/**
+ * A monthly coworking subscription becomes a yearly one (€1,000 + VAT, two months free): its
+ * unpaid invoices are credited (a credit note, posted, which settles them), it's closed, and a
+ * yearly one starts where the unpaid period began (or at its next invoice), invoiced to the same
+ * contact. A partly paid invoice: we don't guess, they write to us.
+ */
+export async function switchToYearly(odoo: OdooCall, p: { guildId: string; userId: string; email?: string; today?: string }): Promise<{ ok: true; subscription: CoworkSubscription; invoice: Invoice | null; credited: string[] } | { ok: false; error: string; status: number }> {
+  const sub = await myCoworkSubscription(odoo, p.email);
+  if (!sub) return { ok: false, error: "You don't have a coworking subscription.", status: 404 };
+  if (sub.period === "year") return { ok: false, error: `${sub.name} is already yearly.`, status: 409 };
+  const [order] = (await odoo("sale.order", "read", { ids: [sub.id], fields: ["partner_id", "partner_invoice_id", "next_invoice_date"] })) as { partner_id: [number, string]; partner_invoice_id: [number, string] | false; next_invoice_date: string | false }[];
+  if (!order) return { ok: false, error: "We couldn't find your subscription.", status: 404 };
+  const open = (await odoo("account.move", "search_read", {
+    domain: [["invoice_origin", "=", sub.name], ["move_type", "=", "out_invoice"], ["state", "=", "posted"], ["payment_state", "in", ["not_paid", "partial", "in_payment"]]],
+    fields: ["id", "name", "invoice_date", "payment_state"],
+    order: "invoice_date asc",
+  })) as { id: number; name: string; invoice_date: string | false; payment_state: string }[];
+  if (open.some((m) => m.payment_state !== "not_paid")) return { ok: false, error: "Part of an invoice of your subscription is already paid: write to us and we'll switch it for you.", status: 409 };
+  const today = p.today ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Brussels" });
+  const start = open.find((m) => m.invoice_date)?.invoice_date || order.next_invoice_date || today;
+  const credited: string[] = [];
+  for (const m of open) {
+    const [wizard] = (await odoo("account.move.reversal", "create", { vals_list: [{ move_ids: [[6, 0, [m.id]]], reason: "Switched to yearly coworking", journal_id: salesJournal() }] })) as number[];
+    const action = (await odoo("account.move.reversal", "refund_moves", { ids: [wizard] })) as { res_id?: number } | null;
+    const [inv] = (await odoo("account.move", "read", { ids: [m.id], fields: ["reversal_move_ids"] })) as { reversal_move_ids: number[] }[];
+    const refundId = action?.res_id ?? Math.max(...(inv?.reversal_move_ids ?? []));
+    if (Number.isFinite(refundId) && refundId > 0) {
+      const [r] = (await odoo("account.move", "read", { ids: [refundId], fields: ["state"] })) as { state: string }[];
+      if (r?.state === "draft") await odoo("account.move", "action_post", { ids: [refundId] });
+    }
+    credited.push(m.name);
+  }
+  await odoo("sale.order", "set_close", { ids: [sub.id] });
+  const invoiceTo = order.partner_invoice_id ? order.partner_invoice_id[0] : order.partner_id[0];
+  const made = await createSubscription(odoo, { guildId: p.guildId, userId: p.userId, partnerId: order.partner_id[0], invoiceTo, payerId: invoiceTo, period: "year", start, origin: `Website (from ${sub.name})` });
+  return { ok: true, ...made, credited };
+}
+
+/** Their unpaid invoices (their own contacts), with the coworking subscription each comes from, if any. */
+export type UnpaidInvoice = { id: number; number: string; date: string | null; dueDate: string | null; total: number; due: number; communication: string; label: string; subscription: { name: string; period: CoworkPeriod } | null };
+
+export async function unpaidInvoices(odoo: OdooCall, partnerIds: number[], sub: CoworkSubscription | null): Promise<UnpaidInvoice[]> {
+  if (!partnerIds.length) return [];
+  const moves = (await odoo("account.move", "search_read", {
+    domain: [["partner_id", "child_of", partnerIds], ["move_type", "=", "out_invoice"], ["state", "=", "posted"], ["payment_state", "in", ["not_paid", "partial"]]],
+    fields: ["id", "name", "invoice_date", "invoice_date_due", "amount_total", "amount_residual", "payment_reference", "invoice_origin"],
+    order: "invoice_date asc, id asc",
+    limit: 20,
+  })) as { id: number; name: string; invoice_date: string | false; invoice_date_due: string | false; amount_total: number; amount_residual: number; payment_reference: string | false; invoice_origin: string | false }[];
+  if (!moves.length) return [];
+  const lines = (await odoo("account.move.line", "search_read", { domain: [["move_id", "in", moves.map((m) => m.id)], ["display_type", "=", "product"]], fields: ["move_id", "name"], order: "id asc" })) as { move_id: [number, string] | false; name: string | false }[];
+  const label = new Map<number, string>();
+  for (const l of lines) if (l.move_id && !label.has(l.move_id[0]) && typeof l.name === "string" && l.name.trim()) label.set(l.move_id[0], l.name.split("\n")[0].trim().slice(0, 140));
+  return moves.map((m) => ({
+    id: m.id,
+    number: m.name,
+    date: m.invoice_date || null,
+    dueDate: m.invoice_date_due || null,
+    total: m.amount_total,
+    due: m.amount_residual,
+    communication: (typeof m.payment_reference === "string" && m.payment_reference) || m.name,
+    label: label.get(m.id) || "Invoice",
+    subscription: sub && m.invoice_origin === sub.name ? { name: sub.name, period: sub.period } : null,
+  }));
 }
